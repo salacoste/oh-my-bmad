@@ -167,10 +167,30 @@ describe('Installer Constants', () => {
     });
   });
 
-  describe('Commands directory removed (#582)', () => {
-    it('should NOT have a commands/ directory in the package root', () => {
-      const commandsDir = join(getPackageDir(), 'commands');
-      expect(existsSync(commandsDir)).toBe(false);
+  describe('Claude Code plugin command wrappers', () => {
+    it('should ship package-root commands/*.md wrappers through plugin.json', () => {
+      const packageDir = getPackageDir();
+      const commandsDir = join(packageDir, 'commands');
+      const pluginJson = JSON.parse(
+        readFileSync(join(packageDir, '.claude-plugin', 'plugin.json'), 'utf-8')
+      ) as { commands?: unknown };
+
+      expect(pluginJson.commands).toBe('./commands/');
+      expect(existsSync(commandsDir)).toBe(true);
+
+      const files = readdirSync(commandsDir).filter(f => f.endsWith('.md'));
+      expect(files.length).toBeGreaterThan(0);
+
+      for (const file of files) {
+        const content = readFileSync(join(commandsDir, file), 'utf-8');
+        if (file === 'compact.md') {
+          expect(content, 'compact.md should avoid unsupported Skill compact invocation').not.toContain('Skill("compact")');
+          expect(content, 'compact.md should provide a manual native /compact handoff').toContain('bare Claude Code command');
+        } else {
+          expect(content, `${file} should dispatch to a bundled skill`).toContain('SKILL.md');
+        }
+        expect(content, `${file} should pass through user arguments`).toContain('$ARGUMENTS');
+      }
     });
   });
 
@@ -179,14 +199,7 @@ describe('Installer Constants', () => {
       const packageDir = getPackageDir();
       const commandsDir = join(packageDir, 'commands');
 
-      // commands/ directory should not exist at all
-      if (!existsSync(commandsDir)) {
-        // This is the expected state - no commands directory
-        expect(true).toBe(true);
-        return;
-      }
-
-      // If commands/ somehow gets re-added, ensure no self-referential stubs
+      // commands/ now intentionally contains Claude Code plugin wrappers.
       const files = readdirSync(commandsDir).filter(f => f.endsWith('.md'));
       const selfReferentialStubs: string[] = [];
 
@@ -454,7 +467,7 @@ describe('Installer Constants', () => {
     });
 
     it('should have read-only agents not include Edit/Write tools', () => {
-      const readOnlyAgents = ['architect.md', 'critic.md', 'analyst.md'];
+      const readOnlyAgents = ['architect.md', 'critic.md', 'analyst.md', 'verifier.md'];
 
       for (const agent of readOnlyAgents) {
         const content = AGENT_DEFINITIONS[agent];
@@ -641,7 +654,7 @@ describe('Installer Constants', () => {
       const libFiles = readdirSync(templatesLibDir);
 
       // Required lib files that must be present
-      const requiredFiles = ['stdin.mjs', 'atomic-write.mjs', 'config-dir.mjs'];
+      const requiredFiles = ['stdin.mjs', 'atomic-write.mjs', 'config-dir.mjs', 'state-root.mjs', 'model-routing-override-message.mjs'];
       for (const file of requiredFiles) {
         expect(libFiles).toContain(file);
       }

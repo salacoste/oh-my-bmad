@@ -47,6 +47,21 @@ export const STAGE_ORDER: readonly PipelineStageId[] = [
 /** Execution backend for the execution stage */
 export type ExecutionBackend = "team" | "solo";
 
+/** CLI-backed worker types supported by the tmux team runtime. */
+export type AutopilotTeamAgentType =
+  | "claude"
+  | "codex"
+  | "gemini"
+  | "grok"
+  | "cursor"
+  | "antigravity";
+
+/** Team execution options for autopilot execution=team. */
+export interface AutopilotTeamConfig {
+  /** Preferred CLI worker types for executor-style implementation tasks. */
+  agentTypes?: AutopilotTeamAgentType[];
+}
+
 /** Verification engine configuration */
 export interface VerificationConfig {
   /** Engine to use for verification (currently only 'ralph') */
@@ -80,6 +95,8 @@ export interface PipelineConfig {
   verification: VerificationConfig | false;
   /** Whether to run the QA stage (build/lint/test cycling) */
   qa: boolean;
+  /** Team execution options, only used when execution is 'team'. */
+  team?: AutopilotTeamConfig;
 }
 
 /** Default pipeline configuration (matches current autopilot behavior) */

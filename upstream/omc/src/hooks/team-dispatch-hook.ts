@@ -18,6 +18,7 @@ import { existsSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { createSwallowedErrorLogger } from '../lib/swallowed-error.js';
 import { tmuxExecAsync } from '../cli/tmux-utils.js';
+import { getOmcRoot } from '../lib/worktree-paths.js';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -328,6 +329,14 @@ function paneIsBootstrapping(captured: string): boolean {
   );
 }
 
+function paneLineLooksLikeIdlePrompt(line: string): boolean {
+  // Claude Code can render its idle input prompt inside a box/left gutter
+  // (for example "│ ❯"). Treat that as ready while still requiring the prompt
+  // glyph to be at the visual start of the line, not embedded in arbitrary
+  // output text.
+  return /^\s*(?:[│┃║▌▐▏▕╎┆┊]\s*)?[›>❯]\s*/u.test(line);
+}
+
 function paneLooksReady(captured: string): boolean {
   const content = safeString(captured).trimEnd();
   if (content === '') return false;
@@ -337,22 +346,8 @@ function paneLooksReady(captured: string): boolean {
     .filter((line) => line.trim() !== '');
   if (paneIsBootstrapping(content)) return false;
   const lastLine = lines.length > 0 ? lines[lines.length - 1]! : '';
-  if (/^\s*[›>❯]\s*/u.test(lastLine)) return true;
-  const hasCodexPromptLine = lines.some((line) => /^\s*›\s*/u.test(line));
-  const hasClaudePromptLine = lines.some((line) => /^\s*❯\s*/u.test(line));
-  if (hasCodexPromptLine || hasClaudePromptLine) return true;
-  return false;
-}
-
-function resolveWorkerCliForRequest(request: DispatchRequest, config: TeamConfig): string {
-  const workers = Array.isArray(config.workers) ? config.workers : [];
-  const idx = Number.isFinite(request.worker_index) ? Number(request.worker_index) : null;
-  if (idx !== null) {
-    const worker = workers.find((c) => Number(c.index) === idx);
-    const workerCli = safeString(worker?.worker_cli).trim().toLowerCase();
-    if (workerCli === 'claude') return 'claude';
-  }
-  return 'codex';
+  if (paneLineLooksLikeIdlePrompt(lastLine)) return true;
+  return lines.some(paneLineLooksLikeIdlePrompt);
 }
 
 async function runProcess(cmd: string, args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string }> {
@@ -375,7 +370,12 @@ async function defaultInjector(request: DispatchRequest, config: TeamConfig, _cw
     }
   } catch { /* best effort */ }
 
-  const submitKeyPresses = resolveWorkerCliForRequest(request, config) === 'claude' ? 1 : 2;
+  // Claude Code v2.1.x sometimes swallows a single Enter during TUI state
+  // transitions (input-handler bind race) — same root cause documented at
+  // runtime-v2.ts:788-793 for the startup path. Send 2 Enters here too so
+  // the dispatch path does not stall with the trigger text typed but never
+  // submitted.
+  const submitKeyPresses = 2;
   const attemptCountAtStart = Number.isFinite(request.attempt_count) ? Math.max(0, Math.floor(request.attempt_count)) : 0;
 
   let preCaptureHasTrigger = false;
@@ -548,8 +548,9 @@ export async function drainPendingTeamDispatch(options: {
   injector?: Injector;
 } = { cwd: '' }): Promise<DrainResult> {
   const { cwd } = options;
-  const stateDir = options.stateDir ?? join(cwd, '.omc', 'state');
-  const logsDir = options.logsDir ?? join(cwd, '.omc', 'logs');
+  const omcRoot = getOmcRoot(cwd);
+  const stateDir = options.stateDir ?? join(omcRoot, 'state');
+  const logsDir = options.logsDir ?? join(omcRoot, 'logs');
   const maxPerTick = options.maxPerTick ?? 5;
   const injector = options.injector ?? defaultInjector;
 
@@ -654,17 +655,6 @@ export async function drainPendingTeamDispatch(options: {
         }
 
         const result = await injector(request, config, resolve(cwd));
-        if (issueKey && issueCooldownMs > 0) {
-          issueCooldownByIssue[issueKey] = Date.now();
-          mutated = true;
-        }
-        if (triggerKey && triggerCooldownMs > 0) {
-          triggerCooldownByKey[triggerKey] = {
-            at: Date.now(),
-            last_request_id: safeString(request.request_id).trim(),
-          };
-          mutated = true;
-        }
         const nowIso = new Date().toISOString();
         request.attempt_count = Number.isFinite(request.attempt_count) ? Math.max(0, request.attempt_count + 1) : 1;
         request.updated_at = nowIso;
@@ -705,6 +695,19 @@ export async function drainPendingTeamDispatch(options: {
           request.status = 'notified';
           request.notified_at = nowIso;
           request.last_reason = result.reason;
+          // Only stamp issue/trigger cooldowns once a dispatch is actually
+          // delivered. Stamping on failure (or before an unconfirmed retry)
+          // would gate legitimate re-dispatch for the cooldown window and
+          // strand the worker — the dispatch gap from #3224.
+          if (issueKey && issueCooldownMs > 0) {
+            issueCooldownByIssue[issueKey] = Date.now();
+          }
+          if (triggerKey && triggerCooldownMs > 0) {
+            triggerCooldownByKey[triggerKey] = {
+              at: Date.now(),
+              last_request_id: safeString(request.request_id).trim(),
+            };
+          }
           if (request.kind === 'mailbox' && request.message_id) {
             await updateMailboxNotified(stateDir, teamName, request.to_worker, request.message_id).catch(logMailboxSyncFailure);
           }

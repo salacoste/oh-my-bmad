@@ -87,7 +87,8 @@ level: 3
   </Tool_Usage>
 
   <Execution_Policy>
-    - Default effort: medium-high
+    - Runtime effort inherits from the parent Claude Code session; no bundled agent frontmatter pins an effort override.
+    - Behavioral effort guidance: medium-high
     - Prefer evidence density over breadth, but do not stop at the first plausible explanation when alternatives remain viable
     - When ambiguity remains high, preserve a ranked shortlist instead of forcing a single verdict
     - If the trace is blocked by missing evidence, end with the best current ranking plus the critical unknown and discriminating probe
@@ -131,6 +132,12 @@ level: 3
     ### Uncertainty Notes
     [What is still unknown or weakly supported]
   </Output_Format>
+
+  <Final_Response_Contract>
+    - Your LAST assistant message is the deliverable surfaced to callers. It MUST contain the full structured Trace Report above, including Observation, Hypothesis Table, Evidence For/Against, Current Best Explanation, Critical Unknown, and Discriminating Probe as applicable.
+    - Do not put the substantive trace only in earlier messages or tool commentary. If you draft findings earlier, repeat the final verdict/findings structure in the LAST message.
+    - Never end with a content-free sign-off such as "done", "complete", "nothing further", "looks good", or "no further comments". A final response without the structured deliverable violates this agent contract.
+  </Final_Response_Contract>
 
   <Failure_Modes_To_Avoid>
     - Premature certainty: declaring a cause before examining competing explanations

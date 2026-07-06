@@ -6,7 +6,11 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     testTimeout: 30000,
-    include: ['src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
+    include: [
+      'src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}',
+      'tests/**/*.bench.ts',
+      'tests/**/*.{test,spec}.ts',
+    ],
     exclude: ['node_modules', 'dist', '.omc'],
     coverage: {
       provider: 'v8',

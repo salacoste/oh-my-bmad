@@ -10,6 +10,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { getClaudeConfigDir } from '../utils/config-dir.js';
+import { getOmcRoot } from '../lib/worktree-paths.js';
 import type { McpWorkerMember, ConfigProbeResult } from './types.js';
 import { sanitizeName } from './tmux-session.js';
 import { atomicWriteJson, validateResolvedPath } from './fs-utils.js';
@@ -24,13 +25,13 @@ function configPath(teamName: string): string {
 }
 
 function shadowRegistryPath(workingDirectory: string): string {
-  const result = join(workingDirectory, '.omc', 'state', 'team-mcp-workers.json');
-  validateResolvedPath(result, join(workingDirectory, '.omc', 'state'));
+  const result = join(getOmcRoot(workingDirectory), 'state', 'team-mcp-workers.json');
+  validateResolvedPath(result, join(getOmcRoot(workingDirectory), 'state'));
   return result;
 }
 
 function probeResultPath(workingDirectory: string): string {
-  return join(workingDirectory, '.omc', 'state', 'config-probe-result.json');
+  return join(getOmcRoot(workingDirectory), 'state', 'config-probe-result.json');
 }
 
 // --- Probe result cache ---

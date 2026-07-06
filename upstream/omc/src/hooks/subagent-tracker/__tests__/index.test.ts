@@ -8,6 +8,7 @@ import {
   getStaleAgents,
   getTrackingStats,
   processSubagentStart,
+  processSubagentStop,
   readTrackingState,
   writeTrackingState,
   recordToolUsageWithTiming,
@@ -609,7 +610,7 @@ describe("subagent-tracker", () => {
       expect(dashboard).toContain("executor");
       expect(dashboard).toContain("Implement the dispatch changes");
 
-      const missionBoard = readMissionBoardState(testDir);
+      const missionBoard = readMissionBoardState(testDir, "session-123");
       const sessionMission = missionBoard?.missions.find((mission) =>
         mission.id.startsWith("session:session-123:"),
       );
@@ -627,6 +628,270 @@ describe("subagent-tracker", () => {
       expect(
         persistedState.agents.filter((agent) => agent.status === "running"),
       ).toHaveLength(1);
+    });
+
+    it("routes mission-state writes to the hook session id (not getProcessSessionId/PID fallback)", () => {
+      // Regression: subagent-tracker previously omitted the sessionId arg when
+      // calling recordMissionAgentStart/Stop, so the writer fell back to
+      // getProcessSessionId() (pid-{PID}-{ts}). With /team spawning N subagent
+      // processes, the team's missions ended up scattered across N pid-* dirs
+      // instead of consolidated under the parent session UUID.
+      const startInput = {
+        session_id: "parent-uuid-xyz",
+        transcript_path: join(testDir, "transcript.jsonl"),
+        cwd: testDir,
+        permission_mode: "default",
+        hook_event_name: "SubagentStart" as const,
+        agent_id: "worker-mission-routing",
+        agent_type: "oh-my-claudecode:executor",
+        prompt: "regression check",
+        model: "claude-sonnet-4-6",
+      };
+
+      processSubagentStart(startInput);
+      flushPendingWrites();
+
+      // Mission must live under the hook's session id, not under any pid-* fallback.
+      const fromParent = readMissionBoardState(testDir, "parent-uuid-xyz");
+      expect(
+        fromParent?.missions.some((mission) =>
+          mission.id.startsWith("session:parent-uuid-xyz:"),
+        ),
+      ).toBe(true);
+
+      // Sanity: explicitly assert no pid-* session dir got created for this run.
+      const sessionsDir = join(testDir, ".omc", "state", "sessions");
+      const entries = require("fs").readdirSync(sessionsDir) as string[];
+      expect(entries.filter((name) => name.startsWith("pid-"))).toHaveLength(0);
+      expect(entries).toContain("parent-uuid-xyz");
+    });
+
+  });
+
+  describe("processSubagentStop", () => {
+    it("updates tracking state without injecting additional context into the stopping subagent", () => {
+      const startInput = {
+        session_id: "session-stop-output",
+        transcript_path: join(testDir, "transcript.jsonl"),
+        cwd: testDir,
+        permission_mode: "default",
+        hook_event_name: "SubagentStart" as const,
+        agent_id: "worker-stop-output",
+        agent_type: "oh-my-claudecode:executor",
+        prompt: "Return a detailed final report",
+        model: "claude-sonnet-4-6",
+      };
+
+      processSubagentStart(startInput);
+      flushPendingWrites();
+
+      const output = processSubagentStop({
+        session_id: "session-stop-output",
+        transcript_path: join(testDir, "transcript.jsonl"),
+        cwd: testDir,
+        permission_mode: "default",
+        hook_event_name: "SubagentStop" as const,
+        agent_id: "worker-stop-output",
+        agent_type: "oh-my-claudecode:executor",
+        output: "Detailed final report with implementation evidence.",
+      });
+      flushPendingWrites();
+
+      expect(output.continue).toBe(true);
+      expect(output.suppressOutput).toBe(true);
+      expect(output.hookSpecificOutput).toBeUndefined();
+
+      const state = readTrackingState(testDir, "session-stop-output");
+      const agent = state.agents.find((item) => item.agent_id === "worker-stop-output");
+      expect(agent?.status).toBe("completed");
+      expect(agent?.output_summary).toBe("Detailed final report with implementation evidence.");
+      expect(state.total_completed).toBe(1);
+    });
+
+    it("suppresses output without undefined context when stop payload lacks agent fields", () => {
+      const output = processSubagentStop({
+        session_id: "session-stop-missing-fields",
+        transcript_path: join(testDir, "transcript.jsonl"),
+        cwd: testDir,
+        permission_mode: "default",
+        hook_event_name: "SubagentStop" as const,
+        output: "Final report should remain the terminal subagent message.",
+      });
+      flushPendingWrites();
+
+      expect(output).toEqual({ continue: true, suppressOutput: true });
+      expect(JSON.stringify(output)).not.toContain("undefined");
+
+      const state = readTrackingState(testDir, "session-stop-missing-fields");
+      expect(state.agents).toHaveLength(0);
+      expect(state.total_completed).toBe(0);
+      expect(state.total_failed).toBe(0);
+    });
+
+    it("closes the sole running agent when a fork stop arrives with an unmatched agent_id", () => {
+      // #3252: native fork stop events can carry an agent_id never registered
+      // by SubagentStart. With exactly one running agent, reconcile it instead
+      // of leaving it "running" forever.
+      processSubagentStart({
+        session_id: "session-unmatched-single",
+        transcript_path: join(testDir, "transcript.jsonl"),
+        cwd: testDir,
+        permission_mode: "default",
+        hook_event_name: "SubagentStart" as const,
+        agent_id: "registered-agent",
+        agent_type: "oh-my-claudecode:executor",
+        prompt: "do work",
+      });
+      flushPendingWrites();
+
+      processSubagentStop({
+        session_id: "session-unmatched-single",
+        transcript_path: join(testDir, "transcript.jsonl"),
+        cwd: testDir,
+        permission_mode: "default",
+        hook_event_name: "SubagentStop" as const,
+        agent_id: "native-fork-agent-id",
+        output: "fork done",
+      });
+      flushPendingWrites();
+
+      const state = readTrackingState(testDir, "session-unmatched-single");
+      expect(getStaleAgents(state)).toHaveLength(0);
+      expect(state.agents.filter((a) => a.status === "running")).toHaveLength(0);
+      const reconciled = state.agents.find((a) => a.agent_id === "registered-agent");
+      expect(reconciled?.status).toBe("completed");
+      expect(reconciled?.output_summary).toBe("fork done");
+      // No synthetic entry created for the unknown id when a fallback match exists.
+      expect(state.agents.some((a) => a.agent_id === "native-fork-agent-id")).toBe(false);
+      expect(state.total_completed).toBe(1);
+    });
+
+    it("reconciles an unmatched fork stop by agent_type when one type matches", () => {
+      for (const [id, type] of [
+        ["exec-1", "oh-my-claudecode:executor"],
+        ["explore-1", "oh-my-claudecode:explorer"],
+      ] as const) {
+        processSubagentStart({
+          session_id: "session-unmatched-bytype",
+          transcript_path: join(testDir, "transcript.jsonl"),
+          cwd: testDir,
+          permission_mode: "default",
+          hook_event_name: "SubagentStart" as const,
+          agent_id: id,
+          agent_type: type,
+          prompt: "do work",
+        });
+      }
+      flushPendingWrites();
+
+      processSubagentStop({
+        session_id: "session-unmatched-bytype",
+        transcript_path: join(testDir, "transcript.jsonl"),
+        cwd: testDir,
+        permission_mode: "default",
+        hook_event_name: "SubagentStop" as const,
+        agent_id: "native-fork-id",
+        agent_type: "oh-my-claudecode:explorer",
+        output: "explorer done",
+      });
+      flushPendingWrites();
+
+      const state = readTrackingState(testDir, "session-unmatched-bytype");
+      const explorer = state.agents.find((a) => a.agent_id === "explore-1");
+      const executor = state.agents.find((a) => a.agent_id === "exec-1");
+      expect(explorer?.status).toBe("completed");
+      expect(executor?.status).toBe("running");
+      expect(state.agents.some((a) => a.agent_id === "native-fork-id")).toBe(false);
+      expect(state.total_completed).toBe(1);
+    });
+
+    it("reaps stale running agents and records a synthetic stop when reconciliation is ambiguous", () => {
+      // Two stale running agents of the same type make fallback ambiguous; the
+      // unmatched stop must reap the stale entries (so they cannot leak forever)
+      // and record the stop as a synthetic closed entry.
+      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const seedState: SubagentTrackingState = {
+        agents: [
+          {
+            agent_id: "stale-1",
+            agent_type: "oh-my-claudecode:executor",
+            started_at: tenMinutesAgo,
+            parent_mode: "ultrawork",
+            status: "running",
+          },
+          {
+            agent_id: "stale-2",
+            agent_type: "oh-my-claudecode:executor",
+            started_at: tenMinutesAgo,
+            parent_mode: "ultrawork",
+            status: "running",
+          },
+        ],
+        total_spawned: 2,
+        total_completed: 0,
+        total_failed: 0,
+        last_updated: new Date().toISOString(),
+      };
+      writeTrackingState(testDir, seedState, "session-unmatched-ambiguous");
+      flushPendingWrites();
+
+      processSubagentStop({
+        session_id: "session-unmatched-ambiguous",
+        transcript_path: join(testDir, "transcript.jsonl"),
+        cwd: testDir,
+        permission_mode: "default",
+        hook_event_name: "SubagentStop" as const,
+        agent_id: "native-fork-id",
+        output: "fork done",
+      });
+      flushPendingWrites();
+
+      const state = readTrackingState(testDir, "session-unmatched-ambiguous");
+      // No running entries linger forever.
+      expect(getStaleAgents(state)).toHaveLength(0);
+      expect(state.agents.filter((a) => a.status === "running")).toHaveLength(0);
+      expect(state.agents.find((a) => a.agent_id === "stale-1")?.status).toBe("failed");
+      expect(state.agents.find((a) => a.agent_id === "stale-2")?.status).toBe("failed");
+      const synthetic = state.agents.find((a) => a.agent_id === "native-fork-id");
+      expect(synthetic?.status).toBe("completed");
+      expect(state.total_failed).toBe(2);
+      expect(state.total_completed).toBe(1);
+    });
+
+    it("does not corrupt fresh running agents from a different concurrent stop", () => {
+      // Fresh (non-stale) running peers are ambiguous targets, so an unmatched
+      // stop must not close them; it only records a synthetic stop.
+      for (const id of ["fresh-1", "fresh-2"]) {
+        processSubagentStart({
+          session_id: "session-unmatched-fresh",
+          transcript_path: join(testDir, "transcript.jsonl"),
+          cwd: testDir,
+          permission_mode: "default",
+          hook_event_name: "SubagentStart" as const,
+          agent_id: id,
+          agent_type: "oh-my-claudecode:executor",
+          prompt: "do work",
+        });
+      }
+      flushPendingWrites();
+
+      processSubagentStop({
+        session_id: "session-unmatched-fresh",
+        transcript_path: join(testDir, "transcript.jsonl"),
+        cwd: testDir,
+        permission_mode: "default",
+        hook_event_name: "SubagentStop" as const,
+        agent_id: "native-fork-id",
+        output: "fork done",
+      });
+      flushPendingWrites();
+
+      const state = readTrackingState(testDir, "session-unmatched-fresh");
+      expect(state.agents.find((a) => a.agent_id === "fresh-1")?.status).toBe("running");
+      expect(state.agents.find((a) => a.agent_id === "fresh-2")?.status).toBe("running");
+      expect(state.agents.find((a) => a.agent_id === "native-fork-id")?.status).toBe("completed");
+      expect(state.total_completed).toBe(1);
+      expect(state.total_failed).toBe(0);
     });
   });
 

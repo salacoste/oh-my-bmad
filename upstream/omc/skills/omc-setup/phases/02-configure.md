@@ -2,6 +2,21 @@
 
 **Skip condition**: If resuming and `lastCompletedStep >= 4`, skip this entire phase.
 
+## Step 2.0: Check Ralph Ruby Dependency
+
+Ralph workflows require Ruby. On fresh Ubuntu installations, missing Ruby can cause Ralph to fail later with an opaque Claude Code abort. Check for Ruby during setup and show a product-facing remediation hint without blocking the rest of setup:
+
+```bash
+if command -v ruby >/dev/null 2>&1; then
+  echo "Ruby detected for Ralph workflows: $(ruby --version 2>/dev/null | head -1)"
+else
+  echo "WARNING: Ruby was not found on PATH. Ralph workflows require Ruby."
+  echo "Install it, then restart Claude Code before using Ralph."
+  echo "Ubuntu/Debian: sudo apt update && sudo apt install ruby-full"
+  echo "macOS: brew install ruby"
+fi
+```
+
 ## Step 2.1: Setup HUD Statusline
 
 **Note**: If resuming and `lastCompletedStep >= 3`, skip to Step 2.2.
@@ -20,13 +35,15 @@ This will:
 After HUD setup completes, save progress:
 ```bash
 CONFIG_TYPE=$(jq -r '.configType // "unknown"' ".omc/state/setup-state.json" 2>/dev/null || echo "unknown")
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup-progress.sh" save 3 "$CONFIG_TYPE"
+bash "${OMC_SETUP_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/setup-progress.sh" save 3 "$CONFIG_TYPE"
 ```
 
-## Step 2.2: Clear Stale Plugin Cache
+## Step 2.2: Repair Stale Plugin Cache References
+
+After a marketplace update, Claude Code may still have old OMC cache paths in the running session or plugin registry. Repair those references before any cache cleanup so setup does not repeatedly emit stale plugin directory errors.
 
 ```bash
-node -e "const p=require('path'),f=require('fs'),h=require('os').homedir(),d=process.env.CLAUDE_CONFIG_DIR||p.join(h,'.claude'),b=p.join(d,'plugins','cache','omc','oh-my-claudecode');try{const v=f.readdirSync(b).filter(x=>/^\d/.test(x)).sort((a,c)=>a.localeCompare(c,void 0,{numeric:true}));if(v.length<=1){console.log('Cache is clean');process.exit()}v.slice(0,-1).forEach(x=>{f.rmSync(p.join(b,x),{recursive:true,force:true})});console.log('Cleared',v.length-1,'stale cache version(s)')}catch{console.log('No cache directory found (normal for new installs)')}"
+node "${OMC_SETUP_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/repair-plugin-cache.mjs"
 ```
 
 ## Step 2.3: Check for Updates
@@ -83,6 +100,12 @@ Store the preference in `~/.claude/.omc-config.json`:
 CONFIG_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.omc-config.json"
 mkdir -p "$(dirname "$CONFIG_FILE")"
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq is required to update $CONFIG_FILE safely."
+  echo "Install jq and rerun setup. Existing config was not modified."
+  exit 1
+fi
+
 if [ -f "$CONFIG_FILE" ]; then
   EXISTING=$(cat "$CONFIG_FILE")
 else
@@ -90,7 +113,15 @@ else
 fi
 
 # Set defaultExecutionMode (replace USER_CHOICE with "ultrawork" or "")
-echo "$EXISTING" | jq --arg mode "USER_CHOICE" '. + {defaultExecutionMode: $mode, configuredAt: (now | todate)}' > "$CONFIG_FILE"
+TEMP_FILE=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")
+trap 'rm -f "$TEMP_FILE"' EXIT
+if printf '%s\n' "$EXISTING" | jq --arg mode "USER_CHOICE" '. + {defaultExecutionMode: $mode, configuredAt: (now | todate)}' > "$TEMP_FILE"; then
+  mv "$TEMP_FILE" "$CONFIG_FILE"
+else
+  echo "ERROR: Failed to update $CONFIG_FILE. Existing config was not modified."
+  exit 1
+fi
+trap - EXIT
 echo "Default execution mode set to: USER_CHOICE"
 ```
 
@@ -180,7 +211,7 @@ If beads or beads-rust is detected, use AskUserQuestion:
 **Question:** "Which task management tool should I use for tracking work?"
 
 **Options:**
-1. **Built-in Tasks (default)** - Use Claude Code's native TaskCreate/TodoWrite. Tasks are session-only.
+1. **Built-in Tasks (default)** - Use Claude Code's native TodoWrite or available task-list surface. Tasks are session-only.
 2. **Beads (bd)** - Git-backed persistent tasks. Survives across sessions. [Only if detected]
 3. **Beads-Rust (br)** - Lightweight Rust port of beads. [Only if detected]
 
@@ -192,6 +223,12 @@ Store the preference:
 CONFIG_FILE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.omc-config.json"
 mkdir -p "$(dirname "$CONFIG_FILE")"
 
+if ! command -v jq >/dev/null 2>&1; then
+  echo "ERROR: jq is required to update $CONFIG_FILE safely."
+  echo "Install jq and rerun setup. Existing config was not modified."
+  exit 1
+fi
+
 if [ -f "$CONFIG_FILE" ]; then
   EXISTING=$(cat "$CONFIG_FILE")
 else
@@ -199,7 +236,15 @@ else
 fi
 
 # USER_CHOICE is "builtin", "beads", or "beads-rust" based on user selection
-echo "$EXISTING" | jq --arg tool "USER_CHOICE" '. + {taskTool: $tool, taskToolConfig: {injectInstructions: true, useMcp: false}}' > "$CONFIG_FILE"
+TEMP_FILE=$(mktemp "${CONFIG_FILE}.tmp.XXXXXX")
+trap 'rm -f "$TEMP_FILE"' EXIT
+if printf '%s\n' "$EXISTING" | jq --arg tool "USER_CHOICE" '. + {taskTool: $tool, taskToolConfig: {injectInstructions: true, useMcp: false}}' > "$TEMP_FILE"; then
+  mv "$TEMP_FILE" "$CONFIG_FILE"
+else
+  echo "ERROR: Failed to update $CONFIG_FILE. Existing config was not modified."
+  exit 1
+fi
+trap - EXIT
 echo "Task tool set to: USER_CHOICE"
 ```
 
@@ -209,5 +254,5 @@ echo "Task tool set to: USER_CHOICE"
 
 ```bash
 CONFIG_TYPE=$(jq -r '.configType // "unknown"' ".omc/state/setup-state.json" 2>/dev/null || echo "unknown")
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup-progress.sh" save 4 "$CONFIG_TYPE"
+bash "${OMC_SETUP_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/setup-progress.sh" save 4 "$CONFIG_TYPE"
 ```

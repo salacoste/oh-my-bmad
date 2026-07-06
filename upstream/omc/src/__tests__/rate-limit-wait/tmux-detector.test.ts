@@ -142,6 +142,218 @@ describe('tmux-detector', () => {
       expect(result.isBlocked).toBe(true);
       expect(result.confidence).toBeGreaterThanOrEqual(0.6);
     });
+
+    it('should detect OMC HUD rate-limit pane without Claude branding', () => {
+      const content = `
+        ● You've hit your session limit · resets 12pm (Asia/Tokyo)
+        ─────────────────────────────────────────────
+        ❯
+        ─────────────────────────────────────────────
+          [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+          ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(true);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(true);
+      expect(result.rateLimitType).toBe('unknown');
+      expect(result.confidence).toBeGreaterThanOrEqual(0.6);
+    });
+
+    it('should not treat cat output of a full blocked HUD transcript as a live blocked pane', () => {
+      const content = `
+        $ cat copied-hud.txt
+        ● You've hit your session limit · resets 12pm (Asia/Tokyo)
+        ─────────────────────────────────────────────
+        ❯
+        ─────────────────────────────────────────────
+          [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+          ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not treat labeled saved terminal output of a full blocked HUD transcript as live', () => {
+      const content = `
+        copied from saved terminal output:
+        ● You've hit your session limit · resets 12pm (Asia/Tokyo)
+        ─────────────────────────────────────────────
+        ❯
+        ─────────────────────────────────────────────
+          [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+          ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not treat copied footer, border, and mode with API rate-limit text as live', () => {
+      const content = `
+        copied from saved terminal output:
+        Error: rate limit exceeded
+        ─────────────────────────────────────────────
+        ❯
+        ─────────────────────────────────────────────
+          [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+          ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not treat copied HUD snippets plus rate-limit text as OMC pane evidence', () => {
+      const content = `
+        $ cat notes.txt
+        copied from another pane:
+        [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+        unrelated API response: Error: rate limit exceeded
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not treat copied full HUD block followed by rate-limit output as OMC pane evidence', () => {
+      const content = `
+        $ cat copied-hud.txt
+        [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+        ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+        unrelated API response: Error: rate limit exceeded
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not treat copied full HUD block without shell prompt as OMC pane evidence', () => {
+      const content = `
+        copied from saved terminal output:
+        unrelated API response: Error: rate limit exceeded
+        [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+        ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not treat copied HUD chrome without shell prompt as OMC pane evidence', () => {
+      const content = `
+        copied from saved terminal output:
+        unrelated API response: Error: rate limit exceeded
+        ─────────────────────────────────────────────
+        ❯
+        ─────────────────────────────────────────────
+        [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not treat copied HUD chrome from cat output as OMC pane evidence', () => {
+      const content = `
+        $ cat copied-hud.txt
+        unrelated API response: Error: rate limit exceeded
+        ─────────────────────────────────────────────
+        ❯
+        ─────────────────────────────────────────────
+        [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not treat search output containing HUD markers as OMC pane evidence', () => {
+      const content = `
+        $ rg "OMC#|shift\\+tab|rate limit" src
+        src/__tests__/rate-limit-wait/tmux-detector.test.ts
+        *152cz|          [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+        *153lu|          ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+        *154aa|          Error: rate limit exceeded
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not treat test output containing shift-tab HUD help as OMC pane evidence', () => {
+      const content = `
+        FAIL src/team/__tests__/tmux-session.test.ts
+        AssertionError: expected output to contain "⏵⏵ auto mode on (shift+tab to cycle)"
+        stderr | api-client.test.ts > retries after rate limit exceeded
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not flag plain shell output without Claude or OMC evidence', () => {
+      const content = `
+        $ npm run build
+        Build completed successfully.
+        $ git status
+        On branch dev
+        nothing to commit, working tree clean
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(false);
+      expect(result.isBlocked).toBe(false);
+    });
+
+    it('should not treat model labels alone as Claude or OMC evidence', () => {
+      const content = `
+        $ echo "Model: Opus 4.8"
+        Model: Opus 4.8
+        Error: rate limit exceeded
+      `;
+
+      const result = analyzePaneContent(content);
+
+      expect(result.hasClaudeCode).toBe(false);
+      expect(result.hasRateLimitMessage).toBe(true);
+      expect(result.isBlocked).toBe(false);
+    });
   });
 
   describe('isTmuxAvailable', () => {
@@ -529,6 +741,22 @@ describe('tmux-detector', () => {
 
       // capturePaneContent used, getNewPaneTail must NOT be called
       expect(getNewPaneTail).not.toHaveBeenCalled();
+      expect(blocked).toHaveLength(0);
+    });
+
+    it('does not report non-Claude panes with copied HUD and rate-limit output', () => {
+      vi.mocked(tmuxSpawn).mockReturnValue(tmuxAvailableReturn);
+      vi.mocked(tmuxExec)
+        .mockReturnValueOnce('main:0.0 %0 1 dev shell\n')
+        .mockReturnValueOnce(`
+          $ cat copied-hud.txt
+          [OMC#4.15.1L] | Model: Opus 4.8 | 5h:100% wk:14% | thinking | session:80m | ctx:14%
+          ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+          unrelated API response: Error: rate limit exceeded
+        `);
+
+      const blocked = scanForBlockedPanes(15);
+
       expect(blocked).toHaveLength(0);
     });
   });

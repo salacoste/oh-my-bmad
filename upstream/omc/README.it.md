@@ -111,7 +111,7 @@ Se riscontri problemi dopo l'aggiornamento, svuota la vecchia cache del plugin:
 
 ### Modalità di orchestrazione
 
-Strategie multiple per diversi casi d'uso — dall'orchestrazione basata su Team al refactoring efficiente in termini di token. [Scopri di più →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Strategie multiple per diversi casi d'uso — dall'orchestrazione basata su Team al refactoring efficiente in termini di token. [Scopri di più →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Modalità                        | Descrizione                                                                             | Utilizzo                                                                                 |
 | ------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
@@ -158,7 +158,7 @@ Avvolgi l'handler in server.py:42 con try/except ClientDisconnectedError...
 ```
 
 **Gestione competenze:** `/skill list | add | remove | edit | search`
-**Auto-apprendimento:** `/learner` estrae pattern riutilizzabili con criteri di qualità rigorosi
+**Auto-apprendimento:** `/skillify` estrae pattern riutilizzabili con criteri di qualità rigorosi
 **Auto-iniezione:** Le competenze corrispondenti si caricano automaticamente nel contesto — nessuna chiamata manuale necessaria
 
 [Lista completa delle funzionalità →](docs/REFERENCE.md)
@@ -279,7 +279,7 @@ Inoltra gli eventi di sessione di Claude Code a un gateway [OpenClaw](https://op
 | `OPENCLAW_REPLY_TARGET` | ID del canale |
 | `OPENCLAW_REPLY_THREAD` | ID del thread |
 
-Vedi `scripts/openclaw-gateway-demo.mjs` per un gateway di riferimento che inoltra i payload OpenClaw a Discord tramite ClawdBot.
+Vedi `scripts/openclaw-gateway-demo.mjs` per un gateway di riferimento che inoltra i payload OpenClaw a un endpoint di automazione HTTPS personalizzato.
 
 ---
 

@@ -74,6 +74,7 @@ function configFromManifest(manifest: TeamManifestV2): TeamConfig {
     leader_cwd: manifest.leader_cwd,
     team_state_root: manifest.team_state_root,
     workspace_mode: manifest.workspace_mode,
+    worktree_mode: manifest.worktree_mode,
     leader_pane_id: manifest.leader_pane_id,
     hud_pane_id: manifest.hud_pane_id,
     resize_hook_name: manifest.resize_hook_name,
@@ -166,6 +167,7 @@ export async function readMonitorSnapshot(
     return {
       taskStatusById: parsed.taskStatusById ?? {},
       workerAliveByName: parsed.workerAliveByName ?? {},
+      workerLivenessByName: parsed.workerLivenessByName ?? {},
       workerStateByName: parsed.workerStateByName ?? {},
       workerTurnCountByName: parsed.workerTurnCountByName ?? {},
       workerTaskIdByName: parsed.workerTaskIdByName ?? {},
@@ -349,7 +351,19 @@ export async function getTeamSummary(
       nonReportingWorkers.push(worker.name);
     }
 
-    workerSummaries.push({ name: worker.name, alive, lastTurnAt, turnsWithoutProgress });
+    workerSummaries.push({
+      name: worker.name,
+      alive,
+      lastTurnAt,
+      turnsWithoutProgress,
+      working_dir: worker.working_dir,
+      worktree_repo_root: worker.worktree_repo_root,
+      worktree_path: worker.worktree_path,
+      worktree_branch: worker.worktree_branch,
+      worktree_detached: worker.worktree_detached,
+      worktree_created: worker.worktree_created,
+      team_state_root: worker.team_state_root,
+    });
   }
 
   const perf: TeamSummaryPerformance = {
@@ -363,6 +377,9 @@ export async function getTeamSummary(
   return {
     teamName: config.name,
     workerCount: config.worker_count,
+    team_state_root: config.team_state_root,
+    workspace_mode: config.workspace_mode,
+    worktree_mode: config.worktree_mode,
     tasks: counts,
     workers: workerSummaries,
     nonReportingWorkers,
@@ -389,6 +406,7 @@ export async function saveTeamConfig(config: TeamConfig, cwd: string): Promise<v
       leader_cwd: config.leader_cwd,
       team_state_root: config.team_state_root,
       workspace_mode: config.workspace_mode,
+      worktree_mode: config.worktree_mode,
       leader_pane_id: config.leader_pane_id,
       hud_pane_id: config.hud_pane_id,
       resize_hook_name: config.resize_hook_name,
@@ -478,7 +496,8 @@ export function diffSnapshots(
   // Worker state transitions
   for (const [workerName, currentAlive] of Object.entries(current.workerAliveByName)) {
     const prevAlive = prev.workerAliveByName[workerName];
-    if (prevAlive === true && !currentAlive) {
+    const currentLiveness = current.workerLivenessByName?.[workerName] ?? (currentAlive ? 'alive' : 'dead');
+    if (prevAlive === true && currentLiveness === 'dead') {
       events.push({
         type: 'worker_stopped',
         worker: workerName,

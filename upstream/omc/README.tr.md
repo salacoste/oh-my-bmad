@@ -111,7 +111,7 @@ Güncellemeden sonra sorun yaşarsanız, eski plugin önbelleğini temizleyin:
 
 ### Orkestrasyon Modları
 
-Farklı kullanım senaryoları için birden fazla strateji — Team destekli orkestrasyondan token-verimli yeniden düzenlemeye. [Daha fazla bilgi →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Farklı kullanım senaryoları için birden fazla strateji — Team destekli orkestrasyondan token-verimli yeniden düzenlemeye. [Daha fazla bilgi →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Mod                           | Nedir                                                                                  | Kullanım Alanı                                                    |
 | ----------------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
@@ -167,7 +167,7 @@ server.py:42'deki handler'ı try/except ClientDisconnectedError ile sarın...
 ```
 
 **Beceri yönetimi:** `/skill list | add | remove | edit | search`
-**Otomatik öğrenme:** `/learner` katı kalite standartlarıyla yeniden kullanılabilir kalıplar çıkarır
+**Otomatik öğrenme:** `/skillify` katı kalite standartlarıyla yeniden kullanılabilir kalıplar çıkarır
 **Otomatik enjeksiyon:** Eşleşen beceriler otomatik olarak bağlama yüklenir — manuel çağrı gerekmez
 
 [Tam özellik listesi →](docs/REFERENCE.md)
@@ -288,7 +288,7 @@ Claude Code oturum olaylarını bir [OpenClaw](https://openclaw.ai/) ağ geçidi
 | `OPENCLAW_REPLY_TARGET` | Kanal ID'si |
 | `OPENCLAW_REPLY_THREAD` | Thread ID'si |
 
-OpenClaw yüklerini ClawdBot aracılığıyla Discord'a ileten bir referans gateway için `scripts/openclaw-gateway-demo.mjs` dosyasına bakın.
+OpenClaw yüklerini özel bir HTTPS otomasyon uç noktasına ileten bir referans gateway için `scripts/openclaw-gateway-demo.mjs` dosyasına bakın.
 
 ---
 

@@ -71,7 +71,8 @@ level: 3
   </Tool_Usage>
 
   <Execution_Policy>
-    - Default effort: medium (systematic investigation).
+    - Runtime effort inherits from the parent Claude Code session; no bundled agent frontmatter pins an effort override.
+    - Behavioral effort guidance: medium (systematic investigation).
     - Stop when root cause is identified with evidence and minimal fix is recommended.
     - For build errors: stop when build command exits 0 and no new errors exist.
     - Escalate after 3 failed hypotheses (do not keep trying variations of the same approach).
@@ -106,6 +107,12 @@ level: 3
     - Build command: [command] -> exit code 0
     - No new errors introduced: [confirmed]
   </Output_Format>
+
+  <Final_Response_Contract>
+    - Your LAST assistant message is the deliverable surfaced to callers. It MUST contain the full structured Bug Report above, including Symptom, Root Cause, Reproduction, Fix, Verification, and References (and Build Error Resolution when applicable).
+    - Do not put the substantive diagnosis only in earlier messages or tool commentary. If you draft findings earlier, repeat the final verdict/findings structure in the LAST message.
+    - Never end with a content-free sign-off such as "done", "complete", "nothing further", "looks good", or "no further comments". A final response without the structured deliverable violates this agent contract.
+  </Final_Response_Contract>
 
   <Failure_Modes_To_Avoid>
     - Symptom fixing: Adding null checks everywhere instead of asking "why is it null?" Find the root cause.

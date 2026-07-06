@@ -15,7 +15,7 @@
 
 *Đừng học Claude Code. Cứ dùng OMC.*
 
-[Bắt đầu nhanh](#bắt-đầu-nhanh) • [Tài liệu](https://yeachan-heo.github.io/oh-my-claudecode-website) • [Tham chiếu CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference) • [Quy trình](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows) • [Hướng dẫn di chuyển](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
+[Bắt đầu nhanh](#bắt-đầu-nhanh) • [Tài liệu](https://yeachan-heo.github.io/oh-my-claudecode-website) • [Tham chiếu CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference) • [Quy trình](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows) • [Hướng dẫn di chuyển](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
 
 ---
 
@@ -146,7 +146,7 @@ Nếu gặp sự cố sau khi cập nhật, hãy xóa cache plugin cũ:
 ## Tính năng
 
 ### Các chế độ điều phối
-Nhiều chiến lược cho nhiều tình huống — từ điều phối dựa trên Team đến refactor tiết kiệm token. [Tìm hiểu thêm →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Nhiều chiến lược cho nhiều tình huống — từ điều phối dựa trên Team đến refactor tiết kiệm token. [Tìm hiểu thêm →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Mode | Nó là gì | Dùng cho |
 |------|------------|---------|
@@ -203,7 +203,7 @@ Bọc handler tại server.py:42 trong try/except ClientDisconnectedError...
 ```
 
 **Quản lý kỹ năng:** `/skill list | add | remove | edit | search`
-**Tự động học:** `/learner` trích xuất các mẫu tái sử dụng với tiêu chuẩn chất lượng nghiêm ngặt
+**Tự động học:** `/skillify` trích xuất các mẫu tái sử dụng với tiêu chuẩn chất lượng nghiêm ngặt
 **Tự động tiêm:** Các kỹ năng phù hợp được tải vào ngữ cảnh tự động — không cần gọi thủ công
 
 [Danh sách tính năng đầy đủ →](docs/REFERENCE.md)
@@ -326,17 +326,17 @@ Chuyển tiếp các sự kiện phiên Claude Code đến gateway [OpenClaw](ht
 | `OPENCLAW_REPLY_TARGET` | ID kênh |
 | `OPENCLAW_REPLY_THREAD` | ID thread |
 
-Xem `scripts/openclaw-gateway-demo.mjs` để tham khảo gateway chuyển tiếp payload OpenClaw đến Discord qua ClawdBot.
+Xem `scripts/openclaw-gateway-demo.mjs` để tham khảo gateway chuyển tiếp payload OpenClaw đến endpoint tự động hóa HTTPS tùy chỉnh.
 
 ---
 
 ## Tài liệu
 
 - **[Tham chiếu đầy đủ](docs/REFERENCE.md)** - Tài liệu đầy đủ về tính năng
-- **[Tham chiếu CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference)** - Tất cả lệnh, cờ và công cụ `omc`
-- **[Hướng dẫn thông báo](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#notifications)** - Thiết lập Discord, Telegram, Slack và webhook
-- **[Quy trình khuyến nghị](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows)** - Chuỗi skill đã qua thực chiến cho các tác vụ phổ biến
-- **[Ghi chú phát hành](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#release-notes)** - Có gì mới trong mỗi phiên bản
+- **[Tham chiếu CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference)** - Tất cả lệnh, cờ và công cụ `omc`
+- **[Hướng dẫn thông báo](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#notifications)** - Thiết lập Discord, Telegram, Slack và webhook
+- **[Quy trình khuyến nghị](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows)** - Chuỗi skill đã qua thực chiến cho các tác vụ phổ biến
+- **[Ghi chú phát hành](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#release-notes)** - Có gì mới trong mỗi phiên bản
 - **[Website](https://yeachan-heo.github.io/oh-my-claudecode-website)** - Hướng dẫn tương tác và ví dụ
 - **[Hướng dẫn di chuyển](docs/MIGRATION.md)** - Nâng cấp từ v2.x
 - **[Kiến trúc](docs/ARCHITECTURE.md)** - Cách nó hoạt động phía sau

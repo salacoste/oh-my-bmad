@@ -5,7 +5,7 @@
  * Minimal continuation enforcer for all OMC modes.
  * Stripped down for reliability — no optional imports, no PRD, no notepad pruning.
  *
- * Supported modes: ralph, autopilot, ultrapilot, swarm, ultrawork, ultraqa, pipeline, team
+ * Supported modes: ralph, ultragoal, autopilot, ultrapilot, swarm, ultrawork, ultraqa, pipeline, team
  */
 
 import {
@@ -21,6 +21,7 @@ import {
   readSync,
   closeSync,
 } from "fs";
+import { spawn } from "child_process";
 import { join, dirname, resolve, normalize } from "path";
 import { homedir } from "os";
 import { fileURLToPath, pathToFileURL } from "url";
@@ -95,6 +96,65 @@ function writeJsonFile(path, data) {
     const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
     writeFileSync(tmp, JSON.stringify(data, null, 2));
     renameSync(tmp, path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getIdleCooldownSeconds() {
+  const configPath = join(homedir(), ".omc", "config.json");
+  const config = readJsonFile(configPath);
+  const val = config?.notificationCooldown?.sessionIdleSeconds;
+  return typeof val === "number" ? val : 60;
+}
+
+function shouldSendIdleNotification(stateDir) {
+  const cooldownSecs = getIdleCooldownSeconds();
+  const cooldownPath = join(stateDir, "idle-notif-cooldown.json");
+  const data = readJsonFile(cooldownPath);
+
+  if (cooldownSecs === 0) return true;
+
+  if (data?.lastSentAt) {
+    const elapsed = (Date.now() - new Date(data.lastSentAt).getTime()) / 1000;
+    if (Number.isFinite(elapsed) && elapsed < cooldownSecs) return false;
+  }
+  return true;
+}
+
+function recordIdleNotificationSent(stateDir) {
+  const cooldownPath = join(stateDir, "idle-notif-cooldown.json");
+  writeJsonFile(cooldownPath, { lastSentAt: new Date().toISOString() });
+}
+
+function dispatchIdleNotificationInBackground(sessionId, directory) {
+  if (process.env.OMC_NOTIFY === "0") return false;
+
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  if (!pluginRoot) return false;
+
+  const notificationsModuleUrl = pathToFileURL(join(pluginRoot, "dist", "notifications", "index.js")).href;
+  const payload = {
+    sessionId,
+    projectPath: directory,
+    profileName: process.env.OMC_NOTIFY_PROFILE,
+  };
+  const childSource = `import(${JSON.stringify(notificationsModuleUrl)})\n` +
+    `  .then(({ notify }) => notify("session-idle", ${JSON.stringify(payload)}))\n` +
+    `  .catch(() => {});`;
+
+  try {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", childSource], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: {
+        ...process.env,
+        OMC_HOOK_BACKGROUND_CHILD: "1",
+      },
+    });
+    child.unref();
     return true;
   } catch {
     return false;
@@ -182,6 +242,12 @@ Do NOT skip this step. Do NOT move on without fixing the error.
  * from causing the stop hook to malfunction in new sessions.
  */
 const STALE_STATE_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+const PENDING_ASYNC_STATE_STALE_MS = 24 * 60 * 60 * 1000;
+// A delegated subagent counts as pending owned async work while its tracking
+// entry stays "running". Bound by 30 min so an orphaned entry (subagent killed
+// without SubagentStop) eventually releases the gate; over-suppression is the
+// benign direction (the agent stops cleanly instead of being nagged mid-work).
+const RUNNING_SUBAGENT_STALE_MS = 30 * 60 * 1000;
 const CANCEL_SIGNAL_TTL_MS = 30_000;
 const TEAM_TERMINAL_PHASES = new Set([
   "completed",
@@ -192,6 +258,17 @@ const TEAM_TERMINAL_PHASES = new Set([
   "aborted",
   "terminated",
   "done",
+]);
+const ULTRAGOAL_TERMINAL_PHASES = new Set([
+  "complete",
+  "completed",
+  "done",
+  "all-done",
+  "all_done",
+  "failed",
+  "cancelled",
+  "canceled",
+  "aborted",
 ]);
 const TEAM_ACTIVE_PHASES = new Set([
   "team-plan",
@@ -227,6 +304,83 @@ function isStaleState(state) {
 
   const age = Date.now() - mostRecent;
   return age > STALE_STATE_THRESHOLD_MS;
+}
+
+
+function parseTimestamp(value) {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function isFreshTimestamp(value, ttlMs = PENDING_ASYNC_STATE_STALE_MS) {
+  const parsed = parseTimestamp(value);
+  return parsed !== null && Date.now() - parsed <= ttlMs;
+}
+
+function hasPendingBackgroundTask(stateDir, sessionId) {
+  const safeSessionId = sanitizeSessionId(sessionId);
+  const hudPath = safeSessionId
+    ? join(stateDir, "sessions", safeSessionId, "hud-state.json")
+    : join(stateDir, "hud-state.json");
+  const hudState = readJsonFile(hudPath);
+  return Boolean(hudState?.backgroundTasks?.some((task) => {
+    if (task?.status !== "running") return false;
+    return isFreshTimestamp(task.startedAt ?? task.startTime);
+  }));
+}
+
+function readPendingWakeupStates(stateDir, sessionId) {
+  const safeSessionId = sanitizeSessionId(sessionId);
+  const dirs = safeSessionId ? [join(stateDir, "sessions", safeSessionId), stateDir] : [stateDir];
+  const fileNames = ["scheduled-wakeup-state.json", "schedule-wakeup-state.json", "wakeup-state.json"];
+  const states = [];
+  for (const dir of dirs) {
+    for (const fileName of fileNames) {
+      const state = readJsonFile(join(dir, fileName));
+      if (state && typeof state === "object") states.push(state);
+    }
+  }
+  return states;
+}
+
+function hasPendingScheduledWakeup(stateDir, sessionId) {
+  const now = Date.now();
+  return readPendingWakeupStates(stateDir, sessionId).some((state) => {
+    const status = typeof state.status === "string" ? state.status.toLowerCase() : "";
+    if (["completed", "complete", "cancelled", "canceled", "failed", "expired"].includes(status)) {
+      return false;
+    }
+    const dueAt = parseTimestamp(
+      state.due_at ?? state.wakeup_at ?? state.scheduled_for ?? state.deadline_at ?? state.expires_at,
+    );
+    if (dueAt !== null) return dueAt > now;
+    if (state.active === true || state.pending === true) {
+      return isFreshTimestamp(state.created_at ?? state.updated_at ?? state.started_at);
+    }
+    return false;
+  });
+}
+
+function hasRunningSubagent(stateDir) {
+  // subagent-tracking.json is per-directory (not session-scoped), written by the
+  // wired SubagentStart/SubagentStop hooks. A "running" entry means a delegated
+  // agent is still working, so persistent modes must not inject a "stalled"
+  // reinforcement while we wait for it (mirrors the background-task gate).
+  const tracking = readJsonFile(join(stateDir, "subagent-tracking.json"));
+  const agents = Array.isArray(tracking?.agents) ? tracking.agents : [];
+  return agents.some((agent) => {
+    if (agent?.status !== "running") return false;
+    return isFreshTimestamp(agent.started_at, RUNNING_SUBAGENT_STALE_MS);
+  });
+}
+
+function hasPendingOwnedAsyncWork(stateDir, sessionId) {
+  return (
+    hasPendingBackgroundTask(stateDir, sessionId) ||
+    hasRunningSubagent(stateDir) ||
+    hasPendingScheduledWakeup(stateDir, sessionId)
+  );
 }
 
 function normalizeTeamPhase(state) {
@@ -268,6 +422,49 @@ function isAwaitingConfirmation(state) {
   }
 
   return Date.now() - setAtMs < AWAITING_CONFIRMATION_TTL_MS;
+}
+
+function getAutopilotPhase(state) {
+  const rawPhase = state?.phase ?? state?.current_phase ?? "unspecified";
+  return typeof rawPhase === "string" && rawPhase.trim()
+    ? rawPhase.trim().toLowerCase()
+    : "unspecified";
+}
+
+function isAutopilotRoutingEchoPrompt(promptText) {
+  return /^\[MAGIC KEYWORDS?(?: DETECTED)?:\s*AUTOPILOT\s*\]\s*$/i.test(promptText) ||
+    /^\/(?:oh-my-claudecode:|omc:)?autopilot(?:\s+execute)?\s*$/i.test(promptText);
+}
+
+function isOrphanedAutopilotRoutingEchoState(state) {
+  if (!state || typeof state !== "object") return false;
+
+  const phase = getAutopilotPhase(state);
+  if (phase && phase !== "unspecified") return false;
+
+  const promptText = [
+    state.originalIdea,
+    state.original_idea,
+    state.original_prompt,
+    state.prompt,
+    state.task_description,
+  ]
+    .filter((value) => typeof value === "string")
+    .join("\n")
+    .trim();
+
+  return isAutopilotRoutingEchoPrompt(promptText);
+}
+
+function clearLoadedStateFile(loaded) {
+  const statePath = loaded?.path;
+  if (!statePath || !existsSync(statePath)) return;
+
+  try {
+    unlinkSync(statePath);
+  } catch {
+    // Best effort: failing to clean an orphan should not re-arm stop blocking.
+  }
 }
 
 /**
@@ -370,6 +567,81 @@ function readStateFileWithSession(stateDir, globalStateDir, filename, sessionId)
   return readStateFile(stateDir, globalStateDir, filename);
 }
 
+const WORKFLOW_SLOT_TOMBSTONE_TTL_MS = 24 * 60 * 60 * 1000;
+
+function isWorkflowSlotTombstonedForMode(stateDir, mode, sessionId) {
+  const safeSessionId = sanitizeSessionId(sessionId);
+  const ledgerPath = safeSessionId
+    ? join(stateDir, "sessions", safeSessionId, "skill-active-state.json")
+    : join(stateDir, "skill-active-state.json");
+  const ledger = readJsonFile(ledgerPath);
+  const slot = ledger?.active_skills?.[mode];
+  if (!slot || typeof slot !== "object") return false;
+  if (typeof slot.completed_at !== "string" || !slot.completed_at) return false;
+  const completedAt = new Date(slot.completed_at).getTime();
+  if (!Number.isFinite(completedAt)) return true;
+  return Date.now() - completedAt < WORKFLOW_SLOT_TOMBSTONE_TTL_MS;
+}
+
+function isAuthoritativeModeActive(stateDir, mode, loaded, sessionId) {
+  const state = loaded?.state;
+  if (!state?.active) return false;
+  if (isWorkflowSlotTombstonedForMode(stateDir, mode, sessionId)) return false;
+  const safeSessionId = sanitizeSessionId(sessionId);
+  if (safeSessionId && state.session_id && state.session_id !== safeSessionId) return false;
+  return true;
+}
+
+function normalizePhaseValue(value) {
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim().toLowerCase()
+    : "";
+}
+
+function isUltragoalTerminalState(state, omcRoot) {
+  if (!state || typeof state !== "object") return false;
+  if (state.active === false) return true;
+  if (typeof state.completed_at === "string" && state.completed_at.length > 0) return true;
+  if (state.all_done === true || state.done === true) return true;
+
+  const phase = normalizePhaseValue(state.current_phase ?? state.phase ?? state.status);
+  if (phase && ULTRAGOAL_TERMINAL_PHASES.has(phase)) return true;
+
+  const plan = readJsonFile(join(omcRoot, "ultragoal", "goals.json"));
+  if (!plan || typeof plan !== "object") return false;
+  if (plan.aggregateCompletion?.status === "complete") return true;
+  if (!Array.isArray(plan.goals) || plan.goals.length === 0) return false;
+  return plan.goals.every((goal) => {
+    const status = normalizePhaseValue(goal?.status);
+    return status === "complete" || status === "review_blocked";
+  });
+}
+
+function getUltragoalObjective(state, omcRoot) {
+  const candidates = [
+    state?.claude_goal_objective,
+    state?.claudeGoalObjective,
+    state?.codex_objective,
+    state?.codexObjective,
+    state?.goal_objective,
+    state?.goalObjective,
+    state?.objective,
+    state?.prompt,
+    state?.original_prompt,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  const plan = readJsonFile(join(omcRoot, "ultragoal", "goals.json"));
+  if (typeof plan?.claudeObjective === "string" && plan.claudeObjective.trim()) return plan.claudeObjective.trim();
+  if (typeof plan?.aggregateCompletion?.objective === "string" && plan.aggregateCompletion.objective.trim()) {
+    return plan.aggregateCompletion.objective.trim();
+  }
+  const activeGoal = Array.isArray(plan?.goals) ? plan.goals.find((goal) => goal?.status === "in_progress") : null;
+  if (typeof activeGoal?.objective === "string" && activeGoal.objective.trim()) return activeGoal.objective.trim();
+  return "";
+}
+
 function isSessionCancelInProgress(stateDir, sessionId) {
   const isActiveSignal = (signalPath) => {
     const signal = readJsonFile(signalPath);
@@ -446,7 +718,7 @@ function countIncompleteTasks(sessionId) {
   return count;
 }
 
-function countIncompleteTodos(sessionId, projectDir) {
+async function countIncompleteTodos(sessionId, projectDir) {
   let count = 0;
 
   // Session-specific todos only (no global scan)
@@ -476,8 +748,9 @@ function countIncompleteTodos(sessionId, projectDir) {
   }
 
   // Project-local todos only
+  const omcRoot = await resolveOmcStateRoot(projectDir);
   for (const path of [
-    join(projectDir, ".omc", "todos.json"),
+    join(omcRoot, "todos.json"),
     join(projectDir, ".claude", "todos.json"),
   ]) {
     try {
@@ -496,6 +769,45 @@ function countIncompleteTodos(sessionId, projectDir) {
   }
 
   return count;
+}
+
+
+const ULTRAWORK_OBJECTIVE_MAX_CHARS = 140;
+
+function firstStringValue(source, keys) {
+  if (!source || typeof source !== "object") return "";
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function formatConciseObjective(value, maxChars = ULTRAWORK_OBJECTIVE_MAX_CHARS) {
+  if (typeof value !== "string") return "";
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (!compact) return "";
+  const chars = [...compact];
+  if (chars.length <= maxChars) return compact;
+  return `${chars.slice(0, maxChars).join("").trimEnd()}…`;
+}
+
+function getLiveUltraworkObjective(state) {
+  const objective = firstStringValue(state, [
+    "current_objective",
+    "currentObjective",
+    "objective_summary",
+    "objectiveSummary",
+    "task_summary",
+    "taskSummary",
+    "current_task",
+    "currentTask",
+    "active_task",
+    "activeTask",
+  ]);
+  return formatConciseObjective(objective);
 }
 
 /**
@@ -656,6 +968,14 @@ async function main() {
       data = JSON.parse(input);
     } catch {}
 
+    // Claude Code sets stop_hook_active when a Stop hook is already running.
+    // Never emit another decision:block in that re-entrant path: doing so trips
+    // Claude Code's safety override for repeatedly blocked Stop hooks.
+    if (data.stop_hook_active === true) {
+      console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+      return;
+    }
+
     const directory = data.cwd || data.directory || process.cwd();
     const sessionIdRaw = data.sessionId || data.session_id || data.sessionid || "";
     const sessionId = sanitizeSessionId(sessionIdRaw);
@@ -695,11 +1015,22 @@ async function main() {
       return;
     }
 
+    if (hasPendingOwnedAsyncWork(stateDir, sessionId)) {
+      console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+      return;
+    }
+
     // Read all mode states (session-scoped when sessionId provided)
     const ralph = readStateFileWithSession(
       stateDir,
       globalStateDir,
       "ralph-state.json",
+      sessionId,
+    );
+    const ultragoal = readStateFileWithSession(
+      stateDir,
+      globalStateDir,
+      "ultragoal-state.json",
       sessionId,
     );
     const autopilot = readStateFileWithSession(
@@ -756,13 +1087,13 @@ async function main() {
 
     // Count incomplete items (session-specific + project-local only)
     const taskCount = countIncompleteTasks(sessionId);
-    const todoCount = countIncompleteTodos(sessionId, directory);
+    const todoCount = await countIncompleteTodos(sessionId, directory);
     const totalIncomplete = taskCount + todoCount;
 
     // Priority 1: Ralph Loop (explicit persistence mode)
     // Skip if state is stale (older than 2 hours) - prevents blocking new sessions
     if (
-      ralph.state?.active && !isAwaitingConfirmation(ralph.state) &&
+      isAuthoritativeModeActive(stateDir, "ralph", ralph, sessionId) && !isAwaitingConfirmation(ralph.state) &&
       !isStaleState(ralph.state) &&
       isStateForCurrentProject(ralph.state, directory, ralph.isGlobal)
     ) {
@@ -839,7 +1170,54 @@ async function main() {
       }
     }
 
+    // Priority 1.5: Ultragoal durable goal execution
+    if (
+      isAuthoritativeModeActive(stateDir, "ultragoal", ultragoal, sessionId) && !isAwaitingConfirmation(ultragoal.state) &&
+      !isStaleState(ultragoal.state) &&
+      isStateForCurrentProject(ultragoal.state, directory, ultragoal.isGlobal)
+    ) {
+      const sessionMatches = hasValidSessionId
+        ? ultragoal.state.session_id === sessionId
+        : !ultragoal.state.session_id || ultragoal.state.session_id === sessionId;
+      if (sessionMatches && !isUltragoalTerminalState(ultragoal.state, omcRoot)) {
+        const newCount = (ultragoal.state.reinforcement_count || 0) + 1;
+        const maxReinforcements = ultragoal.state.max_reinforcements || 50;
+
+        if (newCount > maxReinforcements) {
+          console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+          return;
+        }
+
+        const toolError = readLastToolError(stateDir);
+        const errorGuidance = getToolErrorRetryGuidance(toolError);
+
+        ultragoal.state.reinforcement_count = newCount;
+        ultragoal.state.last_checked_at = new Date().toISOString();
+        if (!shouldWriteStateBack(ultragoal.path)) {
+          console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+          return;
+        }
+        writeJsonFile(ultragoal.path, ultragoal.state);
+
+        let reason = `[ULTRAGOAL #${newCount}/${maxReinforcements}] Ultragoal mode is active. Continue the durable goal workflow, keep the matching Claude /goal active, and checkpoint .omc/ultragoal/ledger.jsonl before stopping. When all ultragoal stories are complete and the final quality gate passes, run /oh-my-claudecode:cancel to cleanly exit.`;
+        const objective = getUltragoalObjective(ultragoal.state, omcRoot);
+        if (objective) reason += `\nClaude /goal objective: ${objective}`;
+        if (errorGuidance) {
+          reason = errorGuidance + reason;
+        }
+
+        console.log(JSON.stringify({ decision: "block", reason }));
+        return;
+      }
+    }
+
     // Priority 2: Autopilot (high-level orchestration)
+    if (isOrphanedAutopilotRoutingEchoState(autopilot.state)) {
+      clearLoadedStateFile(autopilot);
+      console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+      return;
+    }
+
     if (
       autopilot.state?.active && !isAwaitingConfirmation(autopilot.state) &&
       !isStaleState(autopilot.state) &&
@@ -849,7 +1227,7 @@ async function main() {
         ? autopilot.state.session_id === sessionId
         : !autopilot.state.session_id || autopilot.state.session_id === sessionId;
       if (sessionMatches) {
-        const phase = autopilot.state.phase || "unspecified";
+        const phase = getAutopilotPhase(autopilot.state);
         if (phase !== "complete") {
           const newCount = (autopilot.state.reinforcement_count || 0) + 1;
           if (newCount <= 20) {
@@ -1102,7 +1480,7 @@ async function main() {
     // If state has session_id, it must match. If no session_id (legacy), allow.
     // Project isolation: only block if state belongs to this project
     if (
-      ultrawork.state?.active && !isAwaitingConfirmation(ultrawork.state) &&
+      isAuthoritativeModeActive(stateDir, "ultrawork", ultrawork, sessionId) && !isAwaitingConfirmation(ultrawork.state) &&
       !isStaleState(ultrawork.state) &&
       (hasValidSessionId
         ? ultrawork.state.session_id === sessionId
@@ -1129,17 +1507,18 @@ async function main() {
 
       if (totalIncomplete > 0) {
         const itemType = taskCount > 0 ? "Tasks" : "todos";
-        reason += ` ${totalIncomplete} incomplete ${itemType} remain. Continue working.`;
+        reason += ` ${totalIncomplete} incomplete ${itemType} remain. Continue working. When all work is complete, run /oh-my-claudecode:cancel to cleanly exit ultrawork mode and clean up state files.`;
       } else if (newCount >= 3) {
-        // Only suggest cancel after minimum iterations (guard against no-tasks-created scenario)
+        // Reinforce clean-exit guidance once no tracked work remains.
         reason += ` If all work is complete, run /oh-my-claudecode:cancel to cleanly exit ultrawork mode and clean up state files. If cancel fails, retry with /oh-my-claudecode:cancel --force. Otherwise, continue working.`;
       } else {
-        // Early iterations with no tasks yet - just tell LLM to continue
-        reason += ` Continue working - create Tasks to track your progress.`;
+        // Early iterations with no tasks yet still need an immediately visible exit path.
+        reason += ` No incomplete tasks detected. If all work is complete, run /oh-my-claudecode:cancel to cleanly exit ultrawork mode and clean up state files. Otherwise, continue working - create Tasks to track your progress.`;
       }
 
-      if (ultrawork.state.original_prompt) {
-        reason += `\nTask: ${ultrawork.state.original_prompt}`;
+      const currentObjective = getLiveUltraworkObjective(ultrawork.state);
+      if (currentObjective) {
+        reason += `\nCurrent objective: ${currentObjective}`;
       }
 
       if (errorGuidance) {
@@ -1151,6 +1530,11 @@ async function main() {
     }
 
     // No blocking needed
+    if (sessionId && shouldSendIdleNotification(stateDir)) {
+      if (dispatchIdleNotificationInBackground(sessionId, directory)) {
+        recordIdleNotificationSent(stateDir);
+      }
+    }
     console.log(JSON.stringify({ continue: true, suppressOutput: true }));
   } catch (error) {
     // On any error, allow stop rather than blocking forever

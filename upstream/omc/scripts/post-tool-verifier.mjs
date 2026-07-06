@@ -14,6 +14,8 @@ import { basename, join, dirname, resolve } from 'path';
 import { homedir, tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { getClaudeConfigDir } from './lib/config-dir.mjs';
+import { encodeProjectPath } from './lib/encode-project-path.mjs';
+import { resolveOmcStateRoot } from './lib/state-root.mjs';
 import { readStdin } from './lib/stdin.mjs';
 
 const AGENT_OUTPUT_ANALYSIS_LIMIT = parseInt(process.env.OMC_AGENT_OUTPUT_ANALYSIS_LIMIT || '12000', 10);
@@ -30,6 +32,67 @@ function getQuietLevel() {
   const parsed = Number.parseInt(process.env.OMC_QUIET || '0', 10);
   if (Number.isNaN(parsed)) return 0;
   return Math.max(0, parsed);
+}
+
+/**
+ * Resolve the .omc root directory for a given starting directory.
+ *
+ * Resolution order (mirrors src/lib/worktree-paths.ts getOmcRoot):
+ *   1) OMC_STATE_DIR env — log a warning and fall through (full project-id
+ *      derivation lives in the TS layer; .mjs scripts use resolveOmcStateRoot
+ *      for the async TS-backed path when they need OMC_STATE_DIR honoring).
+ *   2) Walk up from startDir looking for a .omc-workspace marker file.
+ *      The first directory containing that file is the workspace anchor.
+ *   3) git rev-parse --show-toplevel from startDir.
+ *   4) Fallback to startDir itself.
+ *
+ * @param {string} startDir - Directory to resolve from (usually cwd from hook payload)
+ * @returns {string} Absolute path to the .omc root directory
+ */
+function resolveOmcRoot(startDir) {
+  const dir = startDir || process.cwd();
+
+  // 1) OMC_STATE_DIR: full project-id derivation is TS-only; warn and fall through.
+  if (process.env.OMC_STATE_DIR) {
+    process.stderr.write(
+      '[omc] OMC_STATE_DIR is set; resolveOmcRoot() falling through to workspace-marker ' +
+      'resolution. Use resolveOmcStateRoot() for full OMC_STATE_DIR support.\n'
+    );
+  }
+
+  // 2) Walk up looking for .omc-workspace marker
+  try {
+    let cursor = resolve(dir);
+    const home = (() => { try { return resolve(homedir()); } catch { return null; } })();
+    while (true) {
+      if (existsSync(join(cursor, '.omc-workspace'))) {
+        return join(cursor, '.omc');
+      }
+      const parent = dirname(cursor);
+      if (parent === cursor) break;
+      if (home && cursor === home) break;
+      cursor = parent;
+    }
+  } catch {
+    // walk failed — continue to git fallback
+  }
+
+  // 3) git rev-parse --show-toplevel
+  try {
+    const top = execSync('git rev-parse --show-toplevel', {
+      cwd: dir,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5000,
+      windowsHide: true,
+    }).trim();
+    if (top) return join(top, '.omc');
+  } catch {
+    // not in a git repo — fall through
+  }
+
+  // 4) Fallback to startDir
+  return join(dir, '.omc');
 }
 
 function clampPercent(percent, fallback) {
@@ -322,6 +385,7 @@ function resolveTranscriptPath(transcriptPath, cwd) {
       cwd: effectiveCwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     }).trim();
 
     const mainRepoRoot = dirname(resolve(effectiveCwd, gitCommonDir));
@@ -329,6 +393,7 @@ function resolveTranscriptPath(transcriptPath, cwd) {
       cwd: effectiveCwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     }).trim();
 
     if (mainRepoRoot !== worktreeTop) {
@@ -336,7 +401,7 @@ function resolveTranscriptPath(transcriptPath, cwd) {
       if (sessionFile) {
         const projectsDir = join(getClaudeConfigDir(), 'projects');
         if (existsSync(projectsDir)) {
-          const encodedMain = mainRepoRoot.replace(/[/\\]/g, '-');
+          const encodedMain = encodeProjectPath(mainRepoRoot);
           const resolvedPath = join(projectsDir, encodedMain, sessionFile);
           if (existsSync(resolvedPath)) return resolvedPath;
         }
@@ -538,7 +603,7 @@ function isConsensusPlanningSkillInvocation(skillName, toolInput) {
 }
 
 function getSkillActiveStatePaths(directory, sessionId) {
-  const stateDir = join(directory, '.omc', 'state');
+  const stateDir = join(resolveOmcRoot(directory), 'state');
   const safeSessionId = sessionId && SESSION_ID_ALLOWLIST.test(sessionId) ? sessionId : '';
   return [
     safeSessionId ? join(stateDir, 'sessions', safeSessionId, 'skill-active-state.json') : null,
@@ -570,7 +635,7 @@ function clearSkillActiveState(directory, sessionId) {
 }
 
 function getRalplanStatePaths(directory, sessionId) {
-  const stateDir = join(directory, '.omc', 'state');
+  const stateDir = join(resolveOmcRoot(directory), 'state');
   const safeSessionId = sessionId && SESSION_ID_ALLOWLIST.test(sessionId) ? sessionId : '';
   return [
     safeSessionId ? join(stateDir, 'sessions', safeSessionId, 'ralplan-state.json') : null,
@@ -703,11 +768,177 @@ export function detectWriteFailure(output) {
   return errorPatterns.some(pattern => pattern.test(cleaned));
 }
 
-// Get agent completion summary from tracking state
-function getAgentCompletionSummary(directory, quietLevel = QUIET_LEVEL) {
-  const trackingFile = join(directory, '.omc', 'state', 'subagent-tracking.json');
-  try {
-    if (existsSync(trackingFile)) {
+// Detect Claude Code's deterministic write/edit success markers so docs or
+// serialized tool output containing diagnostic prose do not override success.
+export function isClaudeCodeWriteSuccess(output) {
+  if (!output) return false;
+
+  const cleaned = stripClaudeTempCwdErrors(output);
+  const successPatterns = [
+    /(^|\n)The file has been updated successfully\.?(\n|$)/i,
+    /(^|\n)The file .+ has been updated successfully\.?(\n|$)/i,
+    /(^|\n)File (?:created|written|updated) successfully(?:\s+at:\s*.+)?\.?(\n|$)/i,
+    /(^|\n).*file state is current in your context\b.*(\n|$)/i,
+  ];
+
+  return successPatterns.some(pattern => pattern.test(cleaned));
+}
+
+function extractTextFromKnownToolResponseField(value, depth = 0) {
+  if (typeof value === 'string') return [value];
+  if (!value || depth > 4) return [];
+
+  if (Array.isArray(value)) {
+    return value.flatMap(item => extractTextFromKnownToolResponseField(item, depth + 1));
+  }
+
+  if (typeof value !== 'object') return [];
+
+  const textFields = ['text', 'message', 'result', 'output', 'stdout'];
+  const texts = [];
+  for (const field of textFields) {
+    if (typeof value[field] === 'string') {
+      texts.push(value[field]);
+    }
+  }
+
+  if (
+    'content' in value &&
+    value.content &&
+    (Array.isArray(value.content) || typeof value.content === 'object')
+  ) {
+    texts.push(...extractTextFromKnownToolResponseField(value.content, depth + 1));
+  }
+
+  return texts;
+}
+
+function isStructuredEnvelopePayloadField(fieldName) {
+  return new Set([
+    'content',
+    'oldstring',
+    'newstring',
+    'originalfile',
+    'structuredpatch',
+    'patch',
+    'diff',
+    'lines',
+    'line',
+  ]).has(fieldName.toLowerCase());
+}
+
+function isStructuredEnvelopeStatusTextField(fieldName) {
+  return new Set(['message', 'output', 'stdout', 'stderr', 'text', 'result'])
+    .has(fieldName.toLowerCase());
+}
+
+function hasExplicitStructuredFailureIndicator(value, depth = 0, fieldName = '') {
+  if (!value || typeof value === 'string' || depth > 4) return false;
+  if (fieldName && isStructuredEnvelopePayloadField(fieldName)) return false;
+
+  if (Array.isArray(value)) {
+    return value.some(item => hasExplicitStructuredFailureIndicator(item, depth + 1, fieldName));
+  }
+
+  if (typeof value !== 'object') return false;
+
+  for (const [key, fieldValue] of Object.entries(value)) {
+    const normalizedKey = key.toLowerCase();
+    if (
+      typeof fieldValue === 'string' &&
+      isStructuredEnvelopeStatusTextField(key) &&
+      detectWriteFailure(fieldValue)
+    ) {
+      return true;
+    }
+
+    if (
+      (normalizedKey.includes('error') || normalizedKey.includes('fail')) &&
+      fieldValue !== false &&
+      fieldValue !== 0 &&
+      fieldValue !== null &&
+      fieldValue !== undefined &&
+      !(typeof fieldValue === 'string' && fieldValue.trim() === '') &&
+      !(Array.isArray(fieldValue) && fieldValue.length === 0)
+    ) {
+      return true;
+    }
+
+    if (hasExplicitStructuredFailureIndicator(fieldValue, depth + 1, key)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasEditEnvelopeSuccess(value, depth = 0) {
+  if (!value || typeof value === 'string' || depth > 4) return false;
+
+  if (Array.isArray(value)) {
+    return value.some(item => hasEditEnvelopeSuccess(item, depth + 1));
+  }
+
+  if (typeof value !== 'object') return false;
+
+  if (hasExplicitStructuredFailureIndicator(value, depth)) return false;
+
+  if (typeof value.filePath === 'string' && Array.isArray(value.structuredPatch)) {
+    return true;
+  }
+
+  return Object.values(value).some(item => hasEditEnvelopeSuccess(item, depth + 1));
+}
+
+function hasWriteEnvelopeSuccess(value, depth = 0) {
+  if (!value || typeof value === 'string' || depth > 4) return false;
+
+  if (Array.isArray(value)) {
+    return value.some(item => hasWriteEnvelopeSuccess(item, depth + 1));
+  }
+
+  if (typeof value !== 'object') return false;
+
+  if (hasExplicitStructuredFailureIndicator(value, depth)) return false;
+
+  if (
+    typeof value.filePath === 'string' &&
+    (value.type === 'create' || value.type === 'update')
+  ) {
+    return true;
+  }
+
+  return Object.values(value).some(item => hasWriteEnvelopeSuccess(item, depth + 1));
+}
+
+function hasStructuredWriteSuccess(rawResponse, toolName = '') {
+  if (!rawResponse || typeof rawResponse === 'string') return false;
+  if (toolName === 'Edit' && hasEditEnvelopeSuccess(rawResponse)) return true;
+  if (toolName === 'Write' && hasWriteEnvelopeSuccess(rawResponse)) return true;
+  return extractTextFromKnownToolResponseField(rawResponse).some(isClaudeCodeWriteSuccess);
+}
+
+function hasStructuredWriteFailure(rawResponse) {
+  if (!rawResponse || typeof rawResponse === 'string') return false;
+  return hasExplicitStructuredFailureIndicator(rawResponse);
+}
+
+// Get agent completion summary from tracking state.
+// Checks session-scoped path first (Wave A migration), falls back to legacy path.
+// sessionId is extracted from the hook payload; when absent only the legacy path is tried.
+function getAgentCompletionSummary(directory, quietLevel = QUIET_LEVEL, sessionId = '') {
+  const stateDir = join(resolveOmcRoot(directory), 'state');
+  const safeSessionId = sessionId && SESSION_ID_ALLOWLIST.test(sessionId) ? sessionId : '';
+
+  // Build candidate paths: session-scoped first, then legacy fallback
+  const candidates = [
+    safeSessionId ? join(stateDir, 'sessions', safeSessionId, 'subagent-tracking-state.json') : null,
+    join(stateDir, 'subagent-tracking.json'),
+  ].filter(Boolean);
+
+  for (const trackingFile of candidates) {
+    try {
+      if (!existsSync(trackingFile)) continue;
       const data = JSON.parse(readFileSync(trackingFile, 'utf-8'));
       const agents = data.agents || [];
       const running = agents.filter(a => a.status === 'running');
@@ -724,14 +955,19 @@ function getAgentCompletionSummary(directory, quietLevel = QUIET_LEVEL) {
       if (failed > 0) parts.push(`Failed: ${failed}`);
 
       return parts.join(' | ');
-    }
-  } catch {}
+    } catch {}
+  }
   return '';
 }
 
 // Generate contextual message
 function generateMessage(toolName, toolOutput, sessionId, toolCount, directory, options = {}) {
-  const { wasTruncated = false, rawLength = 0 } = options;
+  const {
+    wasTruncated = false,
+    rawLength = 0,
+    structuredWriteSuccess = false,
+    structuredWriteFailure = false,
+  } = options;
   let message = '';
 
   switch (toolName) {
@@ -751,7 +987,7 @@ function generateMessage(toolName, toolOutput, sessionId, toolCount, directory, 
     case 'Task':
     case 'TaskCreate':
     case 'TaskUpdate': {
-      const agentSummary = getAgentCompletionSummary(directory, QUIET_LEVEL);
+      const agentSummary = getAgentCompletionSummary(directory, QUIET_LEVEL, sessionId);
       if (detectWriteFailure(toolOutput)) {
         message = 'Task delegation failed. Verify agent name and parameters.';
       } else if (QUIET_LEVEL < 2 && detectBackgroundOperation(toolOutput)) {
@@ -782,7 +1018,7 @@ function generateMessage(toolName, toolOutput, sessionId, toolCount, directory, 
     }
 
     case 'Edit':
-      if (detectWriteFailure(toolOutput)) {
+      if (structuredWriteFailure || (!structuredWriteSuccess && !isClaudeCodeWriteSuccess(toolOutput) && detectWriteFailure(toolOutput))) {
         message = 'Edit operation failed. Verify file exists and content matches exactly.';
       } else if (QUIET_LEVEL === 0) {
         message = 'Code modified. Verify changes work as expected before marking complete.';
@@ -790,7 +1026,7 @@ function generateMessage(toolName, toolOutput, sessionId, toolCount, directory, 
       break;
 
     case 'Write':
-      if (detectWriteFailure(toolOutput)) {
+      if (structuredWriteFailure || (!structuredWriteSuccess && !isClaudeCodeWriteSuccess(toolOutput) && detectWriteFailure(toolOutput))) {
         message = 'Write operation failed. Check file permissions and directory existence.';
       } else if (QUIET_LEVEL === 0) {
         message = 'File written. Test the changes to ensure they work correctly.';
@@ -847,6 +1083,10 @@ async function main() {
 
     const toolName = data.tool_name || data.toolName || '';
     const rawResponse = data.tool_response || data.toolOutput || '';
+    const structuredWriteSuccess =
+      (toolName === 'Write' || toolName === 'Edit') && hasStructuredWriteSuccess(rawResponse, toolName);
+    const structuredWriteFailure =
+      (toolName === 'Write' || toolName === 'Edit') && hasStructuredWriteFailure(rawResponse);
     const toolOutput = typeof rawResponse === 'string' ? rawResponse : JSON.stringify(rawResponse);
     const { clipped: clippedToolOutput, wasTruncated } = clipToolOutputForAnalysis(toolName, toolOutput);
     const sessionId = data.session_id || data.sessionId || 'unknown';
@@ -892,6 +1132,8 @@ async function main() {
       generateMessage(toolName, clippedToolOutput, sessionId, toolCount, directory, {
         wasTruncated,
         rawLength: toolOutput.length,
+        structuredWriteSuccess,
+        structuredWriteFailure,
       }),
       maybeBuildPreemptiveCompactionMessage(toolName, data, directory),
     );

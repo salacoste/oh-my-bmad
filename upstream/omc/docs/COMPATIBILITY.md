@@ -168,7 +168,7 @@ The `plugin.json` defines the plugin's metadata and tools:
 
 ### Skill and Agent Discovery
 
-**Skills** are discovered from `SKILL.md` files in the skills directory. OMC's canonical project-local write target remains `.omc/skills/`, and it now also reads project-local compatibility skills from `.agents/skills/`. Each skill directory must contain a SKILL.md with frontmatter:
+**Skills** are discovered from `SKILL.md` files in supported skills directories. OMC's canonical project-local write target remains `.omc/skills/`, and it also reads Claude Code project skills from `.claude/skills/` plus project-local compatibility skills from `.agents/skills/`. Each skill directory must contain a SKILL.md with frontmatter:
 
 ```markdown
 ---
@@ -180,7 +180,7 @@ tags: tag1, tag2
 Skill documentation here...
 ```
 
-**Agents** are discovered from `.md` files in the agents directory with similar frontmatter structure.
+**Agents** are discovered from `.md` files in the agents directory with similar frontmatter structure. Supported runtime fields depend on Claude Code; OMC's bundled agent files currently rely on `name`, `description`, `model`, optional tool restrictions, and prompt body guidance. They do not currently ship an `effort:` frontmatter override, so effort inherits from the parent Claude Code session unless a custom agent explicitly adds one.
 
 ## MCP Server Discovery
 

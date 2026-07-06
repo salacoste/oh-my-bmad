@@ -15,7 +15,7 @@
 
 *Claude Code を学ぶ必要はありません。OMC を使うだけ。*
 
-[はじめる](#クイックスタート) • [ドキュメント](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI リファレンス](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference) • [ワークフロー](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows) • [移行ガイド](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
+[はじめる](#クイックスタート) • [ドキュメント](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI リファレンス](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference) • [ワークフロー](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows) • [移行ガイド](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
 
 ---
 
@@ -146,7 +146,7 @@ Codex + Gemini を一つのコマンドで使うには **`/ccg`** スキルを�
 ## 機能
 
 ### 実行モード
-用途に応じた複数の戦略 - 完全自律ビルドからトークン効率の良いリファクタリングまで。[詳しくはこちら →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+用途に応じた複数の戦略 - 完全自律ビルドからトークン効率の良いリファクタリングまで。[詳しくはこちら →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | モード | 特徴 | 用途 |
 |------|---------|------|
@@ -203,7 +203,7 @@ server.py:42 のハンドラーを try/except ClientDisconnectedError で囲ん�
 ```
 
 **スキル管理：** `/skill list | add | remove | edit | search`
-**自動学習：** `/learner` が厳格な品質基準で再利用可能なパターンを抽出します
+**自動学習：** `/skillify` が厳格な品質基準で再利用可能なパターンを抽出します
 **自動注入：** マッチするスキルが自動的にコンテキストに読み込まれます — 手動呼び出し不要
 
 [全機能リスト →](docs/REFERENCE.md)
@@ -328,17 +328,17 @@ Claude Code セッションイベントを [OpenClaw](https://openclaw.ai/) ゲ�
 | `OPENCLAW_REPLY_TARGET` | チャンネル ID |
 | `OPENCLAW_REPLY_THREAD` | スレッド ID |
 
-OpenClaw ペイロードを ClawdBot 経由で Discord にリレーするリファレンスゲートウェイについては `scripts/openclaw-gateway-demo.mjs` を参照してください。
+OpenClaw ペイロードをカスタム HTTPS 自動化エンドポイントへリレーするリファレンスゲートウェイについては `scripts/openclaw-gateway-demo.mjs` を参照してください。
 
 ---
 
 ## ドキュメント
 
 - **[完全リファレンス](docs/REFERENCE.md)** - 全機能の詳細ドキュメント
-- **[CLI リファレンス](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference)** - すべての `omc` コマンド、フラグ、ツール
-- **[通知ガイド](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#notifications)** - Discord、Telegram、Slack、webhook のセットアップ
-- **[推奨ワークフロー](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows)** - 一般的なタスクのための実績あるスキルチェーン
-- **[リリースノート](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#release-notes)** - 各バージョンの新機能
+- **[CLI リファレンス](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference)** - すべての `omc` コマンド、フラグ、ツール
+- **[通知ガイド](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#notifications)** - Discord、Telegram、Slack、webhook のセットアップ
+- **[推奨ワークフロー](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows)** - 一般的なタスクのための実績あるスキルチェーン
+- **[リリースノート](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#release-notes)** - 各バージョンの新機能
 - **[ウェブサイト](https://yeachan-heo.github.io/oh-my-claudecode-website)** - インタラクティブガイドと例
 - **[移行ガイド](docs/MIGRATION.md)** - v2.x からのアップグレード
 - **[アーキテクチャ](docs/ARCHITECTURE.md)** - 内部の仕組み

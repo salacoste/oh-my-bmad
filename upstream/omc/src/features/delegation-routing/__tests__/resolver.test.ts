@@ -24,7 +24,8 @@ describe('resolveDelegation', () => {
     });
     expect(result.provider).toBe('claude');
     expect(result.tool).toBe('Task');
-    expect(result.agentOrModel).toBe('gemini-3-flash');
+    expect(result.agentOrModel).toBe('explore');
+    expect(result.reason).toContain('ignored external model "gemini-3-flash"');
     expect(consoleWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining('deprecated')
     );
@@ -118,14 +119,46 @@ describe('resolveDelegation', () => {
     });
     expect(result.provider).toBe('claude');
     expect(result.tool).toBe('Task');
-    expect(result.agentOrModel).toBe('gemini-2.5-pro');
+    expect(result.agentOrModel).toBe('explore');
     expect(result.reason).toContain('Configured routing');
     expect(result.reason).toContain('deprecated');
+    expect(result.reason).toContain('ignored external model "gemini-2.5-pro"');
     expect(result.fallbackChain).toEqual(['claude:explore', 'codex:gpt-5']);
     expect(consoleWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining('deprecated')
     );
   });
+
+  it.each(['gemini', 'codex'] as const)(
+    'should expose deprecated %s compatibility normalization with fallback evidence',
+    (provider) => {
+      const result = resolveDelegation({
+        agentRole: 'executor',
+        config: {
+          enabled: true,
+          roles: {
+            executor: {
+              provider,
+              tool: 'Task',
+              agentType: 'executor',
+              fallback: ['claude:executor', 'codex:gpt-5.3-codex'],
+            },
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        provider: 'claude',
+        tool: 'Task',
+        agentOrModel: 'executor',
+        fallbackChain: ['claude:executor', 'codex:gpt-5.3-codex'],
+      });
+      expect(result.reason).toContain(`deprecated provider "${provider}"`);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('deprecated')
+      );
+    },
+  );
 
   // Test 14: defaultProvider set to gemini falls back to claude (deprecated)
   it('should fall back to claude when deprecated gemini defaultProvider is configured', () => {

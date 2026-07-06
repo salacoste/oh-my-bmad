@@ -11,18 +11,21 @@
  *   1. .omc/deliverables.json (project-specific overrides)
  *   2. ${CLAUDE_PLUGIN_ROOT}/templates/deliverables.json (OMC defaults)
  *
- * This hook is ADVISORY (non-blocking). It returns additionalContext warnings
- * when deliverables are missing, but never prevents the agent from stopping.
+ * This hook is ADVISORY (non-blocking) and never prevents the agent from
+ * stopping. Because it runs on SubagentStop, it does NOT emit
+ * hookSpecificOutput.additionalContext: that context would be reinjected into
+ * the finishing subagent (the regression fixed in #3209 / #3233). It always
+ * suppresses its own output.
  *
  * Hook output:
- *   - { continue: true, hookSpecificOutput: { additionalContext: "warning" } }
- *     when deliverables are missing
- *   - { continue: true, suppressOutput: true } when all checks pass or on error
+ *   - { continue: true, suppressOutput: true } in all cases (deliverables
+ *     missing, all checks pass, or on error)
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join, normalize, isAbsolute, resolve } from 'node:path';
 import { readStdin } from './lib/stdin.mjs';
+import { resolveOmcStateRoot } from './lib/state-root.mjs';
 
 /**
  * Sanitize a file path to prevent directory traversal attacks.
@@ -39,9 +42,10 @@ function sanitizePath(filePath) {
 /**
  * Load deliverable requirements from project config or OMC defaults.
  */
-function loadDeliverableConfig(directory) {
+function loadDeliverableConfig(directory, omcRoot) {
+  const _omcRoot = omcRoot;
   // Priority 1: Project-specific overrides
-  const projectConfig = join(directory, '.omc', 'deliverables.json');
+  const projectConfig = join(_omcRoot, 'deliverables.json');
   if (existsSync(projectConfig)) {
     try {
       return JSON.parse(readFileSync(projectConfig, 'utf-8'));
@@ -65,10 +69,11 @@ function loadDeliverableConfig(directory) {
 /**
  * Determine the current team stage from OMC state.
  */
-function detectStage(directory, sessionId) {
+function detectStage(directory, sessionId, omcRoot) {
+  const _omcRoot = omcRoot;
   // Try session-scoped state first
   if (sessionId) {
-    const sessionState = join(directory, '.omc', 'state', 'sessions', sessionId, 'team-state.json');
+    const sessionState = join(_omcRoot, 'state', 'sessions', sessionId, 'team-state.json');
     if (existsSync(sessionState)) {
       try {
         const data = JSON.parse(readFileSync(sessionState, 'utf-8'));
@@ -78,7 +83,7 @@ function detectStage(directory, sessionId) {
   }
 
   // Fallback to legacy state
-  const legacyState = join(directory, '.omc', 'state', 'team-state.json');
+  const legacyState = join(_omcRoot, 'state', 'team-state.json');
   if (existsSync(legacyState)) {
     try {
       const data = JSON.parse(readFileSync(legacyState, 'utf-8'));
@@ -147,9 +152,10 @@ async function main() {
 
     const directory = data.cwd || data.directory || process.cwd();
     const sessionId = data.session_id || data.sessionId || '';
+    const omcRoot = await resolveOmcStateRoot(directory);
 
     // Load deliverable config
-    const config = loadDeliverableConfig(directory);
+    const config = loadDeliverableConfig(directory, omcRoot);
     if (!config) {
       // No config found — nothing to verify
       console.log(JSON.stringify({ continue: true, suppressOutput: true }));
@@ -157,7 +163,7 @@ async function main() {
     }
 
     // Detect current stage
-    const stage = detectStage(directory, sessionId);
+    const stage = detectStage(directory, sessionId, omcRoot);
     if (!stage) {
       // No team stage detected — skip verification
       console.log(JSON.stringify({ continue: true, suppressOutput: true }));
@@ -212,19 +218,12 @@ async function main() {
       return;
     }
 
-    // Build advisory warning
-    const warnings = issues.map(i => `  - ${i.path}: ${i.reason}`).join('\n');
-    const message = `[OMC] Deliverable verification for stage "${stage}":\n` +
-      `${issues.length} issue(s) found:\n${warnings}\n` +
-      `These deliverables may be expected by the next stage.`;
-
-    console.log(JSON.stringify({
-      continue: true,
-      hookSpecificOutput: {
-        hookEventName: 'SubagentStop',
-        additionalContext: message,
-      },
-    }));
+    // Deliverables are missing or incomplete. Do NOT emit
+    // hookSpecificOutput.additionalContext here: this hook runs on
+    // SubagentStop, and additionalContext would be reinjected into the
+    // finishing subagent's context (the regression fixed in #3209 for
+    // subagent-tracker). Suppress output and let the agent stop instead.
+    console.log(JSON.stringify({ continue: true, suppressOutput: true }));
   } catch {
     // On any error, allow the agent to stop (never block on hook failure)
     console.log(JSON.stringify({ continue: true, suppressOutput: true }));

@@ -9,6 +9,7 @@ import {
   getOmcRoot,
 } from '../../lib/worktree-paths.js';
 import { getClaudeConfigDir } from '../../utils/config-dir.js';
+import { encodeProjectPath } from '../../utils/encode-project-path.js';
 import type {
   SessionHistoryMatch,
   SessionHistorySearchOptions,
@@ -64,10 +65,6 @@ function parseSinceSpec(since?: string): number | undefined {
 
   const parsed = Date.parse(trimmed);
   return Number.isNaN(parsed) ? undefined : parsed;
-}
-
-function encodeProjectPath(projectPath: string): string {
-  return projectPath.replace(/[/\\.]/g, '-');
 }
 
 function getMainRepoRoot(projectRoot: string): string | null {
@@ -141,13 +138,15 @@ function uniqueSortedTargets(targets: SearchTarget[]): SearchTarget[] {
     });
 }
 
-function buildCurrentProjectTargets(projectRoot: string): SearchTarget[] {
+function buildCurrentProjectTargets(projectRoot: string, transcriptProjectRoots: string[] = [projectRoot]): SearchTarget[] {
   const claudeDir = getClaudeConfigDir();
-  const projectRoots = new Set<string>([projectRoot]);
-  const mainRepoRoot = getMainRepoRoot(projectRoot);
-  if (mainRepoRoot) projectRoots.add(mainRepoRoot);
-  const claudeWorktreeParent = getClaudeWorktreeParent(projectRoot);
-  if (claudeWorktreeParent) projectRoots.add(claudeWorktreeParent);
+  const projectRoots = new Set<string>(transcriptProjectRoots);
+  for (const root of transcriptProjectRoots) {
+    const mainRepoRoot = getMainRepoRoot(root);
+    if (mainRepoRoot) projectRoots.add(mainRepoRoot);
+    const claudeWorktreeParent = getClaudeWorktreeParent(root);
+    if (claudeWorktreeParent) projectRoots.add(claudeWorktreeParent);
+  }
 
   const targets: SearchTarget[] = [];
 
@@ -201,9 +200,9 @@ function isWithinProject(projectPath: string | undefined, projectRoots: string[]
     return false;
   }
 
-  const normalizedProjectPath = normalize(resolve(projectPath));
+  const normalizedProjectPath = normalize(resolve(projectPath)).replace(/\\/g, '/');
   return projectRoots.some((root) => {
-    const normalizedRoot = normalize(resolve(root));
+    const normalizedRoot = normalize(resolve(root)).replace(/\\/g, '/');
     return normalizedProjectPath === normalizedRoot || normalizedProjectPath.startsWith(`${normalizedRoot}/`);
   });
 }
@@ -514,15 +513,18 @@ export async function searchSessionHistory(
   const currentProjectRoot = resolveToWorktreeRoot(workingDirectory);
   const scopeMode = buildScopeMode(rawOptions.project);
   const projectFilter = scopeMode === 'project' ? rawOptions.project : undefined;
+  const literalWorkingDirectory = rawOptions.workingDirectory ? resolve(rawOptions.workingDirectory) : workingDirectory;
 
-  const currentProjectRoots = [currentProjectRoot]
+  const currentProjectRoots = [currentProjectRoot, literalWorkingDirectory]
     .concat(getMainRepoRoot(currentProjectRoot) ?? [])
     .concat(getClaudeWorktreeParent(currentProjectRoot) ?? [])
     .filter((value, index, arr): value is string => Boolean(value) && arr.indexOf(value) === index);
 
+  const transcriptProjectRoots = currentProjectRoots.filter((root) => isWithinProject(root, [currentProjectRoot]));
+
   const targets = scopeMode === 'all'
     ? buildAllProjectTargets()
-    : buildCurrentProjectTargets(currentProjectRoot);
+    : buildCurrentProjectTargets(currentProjectRoot, transcriptProjectRoots);
 
   const allMatches: SessionHistoryMatch[] = [];
   for (const target of targets) {
@@ -560,7 +562,7 @@ export async function searchSessionHistory(
   };
 }
 
-export { parseSinceSpec };
+export { encodeProjectPath, isWithinProject as __testingIsWithinProject, parseSinceSpec };
 export type {
   SessionHistoryMatch,
   SessionHistorySearchOptions,

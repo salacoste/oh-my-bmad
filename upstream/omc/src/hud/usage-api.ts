@@ -69,6 +69,12 @@ interface OAuthCredentials {
   refreshToken?: string;
   /** Where the credentials were read from, needed for write-back */
   source?: 'keychain' | 'file';
+  /** Keychain account name used when reading (null = service-only lookup) */
+  keychainAccount?: string | null;
+  /** Subscription type from OAuth credentials (e.g. 'enterprise') */
+  subscriptionType?: string;
+  /** Rate limit tier from OAuth credentials (e.g. 'default_claude_zero') */
+  rateLimitTier?: string;
 }
 
 interface UsageApiResponse {
@@ -83,7 +89,32 @@ interface UsageApiResponse {
     spent_usd?: number;
     limit_usd?: number;
     resets_at?: string;
+    // Enterprise-specific fields
+    is_enabled?: boolean;
+    used_credits?: number;
+    monthly_limit?: number | null;
+    currency?: string;
+    // ISO 4217 minor-unit exponent for `used_credits`/`monthly_limit`
+    // (EUR=2, JPY=0, BHD=3). When present we no longer have to guess the scale.
+    decimal_places?: number;
   };
+}
+
+interface ParseUsageResponseOptions {
+  /** Subscription type from OAuth credentials (for distinguishing Max/Pro overage from Enterprise billing) */
+  subscriptionType?: string | null;
+  /** Rate limit tier from OAuth credentials; claude_zero tiers behave like Enterprise billing */
+  rateLimitTier?: string | null;
+}
+
+function isEnterpriseUsageContext(options?: ParseUsageResponseOptions): boolean {
+  if (!options) return true;
+
+  const subscriptionType = options.subscriptionType?.toLowerCase() ?? null;
+  const rateLimitTier = options.rateLimitTier ?? null;
+  if (subscriptionType == null && rateLimitTier == null) return true;
+
+  return subscriptionType === 'enterprise' || /claude_zero/i.test(rateLimitTier ?? '');
 }
 
 interface ZaiQuotaResponse {
@@ -440,6 +471,9 @@ function readKeychainCredential(serviceName: string, account?: string): OAuthCre
       expiresAt: creds.expiresAt,
       refreshToken: creds.refreshToken,
       source: 'keychain' as const,
+      keychainAccount: account ?? null,
+      subscriptionType: creds.subscriptionType,
+      rateLimitTier: creds.rateLimitTier,
     };
   } catch {
     return null;
@@ -502,6 +536,8 @@ function readFileCredentials(): OAuthCredentials | null {
         expiresAt: creds.expiresAt,
         refreshToken: creds.refreshToken,
         source: 'file' as const,
+        subscriptionType: creds.subscriptionType,
+        rateLimitTier: creds.rateLimitTier,
       };
     }
   } catch {
@@ -521,6 +557,22 @@ function getCredentials(): OAuthCredentials | null {
 
   // Fall back to file
   return readFileCredentials();
+}
+
+/**
+ * Get subscription info from OAuth credentials.
+ * Returns subscriptionType and rateLimitTier (null when unavailable; never throws).
+ */
+export function getSubscriptionInfo(): { subscriptionType: string | null; rateLimitTier: string | null } {
+  try {
+    const creds = getCredentials();
+    return {
+      subscriptionType: creds?.subscriptionType ?? null,
+      rateLimitTier: creds?.rateLimitTier ?? null,
+    };
+  } catch {
+    return { subscriptionType: null, rateLimitTier: null };
+  }
 }
 
 /**
@@ -720,11 +772,75 @@ function fetchUsageFromZai(): Promise<FetchResult<ZaiQuotaResponse>> {
 }
 
 /**
- * Persist refreshed credentials back to the file-based credential store.
- * Keychain write-back is not supported (read-only for HUD).
- * Updates only the claudeAiOauth fields, preserving other data.
+ * Persist refreshed credentials back to the Keychain.
+ * Reads the existing Keychain entry, merges the updated fields, and writes it back.
+ */
+function writeKeychainCredentials(creds: OAuthCredentials): void {
+  if (process.platform !== 'darwin') return;
+  try {
+    const serviceName = getKeychainServiceName();
+    const account = creds.keychainAccount ?? undefined;
+
+    // Read the existing Keychain entry to preserve any extra fields
+    const readArgs = account
+      ? ['find-generic-password', '-s', serviceName, '-a', account, '-w']
+      : ['find-generic-password', '-s', serviceName, '-w'];
+
+    let existing: Record<string, unknown> = {};
+    try {
+      const raw = execFileSync('/usr/bin/security', readArgs, {
+        encoding: 'utf-8',
+        timeout: 2000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+      if (raw) existing = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      // If we can't read it, we'll write a fresh entry
+    }
+
+    // Merge into the correct structure
+    if (existing.claudeAiOauth && typeof existing.claudeAiOauth === 'object') {
+      const inner = existing.claudeAiOauth as Record<string, unknown>;
+      inner.accessToken = creds.accessToken;
+      if (creds.expiresAt != null) inner.expiresAt = creds.expiresAt;
+      if (creds.refreshToken) inner.refreshToken = creds.refreshToken;
+    } else {
+      // Flat structure or empty
+      (existing as Record<string, unknown>).accessToken = creds.accessToken;
+      if (creds.expiresAt != null) (existing as Record<string, unknown>).expiresAt = creds.expiresAt;
+      if (creds.refreshToken) (existing as Record<string, unknown>).refreshToken = creds.refreshToken;
+    }
+
+    const newJson = JSON.stringify(existing);
+    const writeArgs = account
+      ? ['add-generic-password', '-s', serviceName, '-a', account, '-w', newJson, '-U']
+      : ['add-generic-password', '-s', serviceName, '-w', newJson, '-U'];
+
+    execFileSync('/usr/bin/security', writeArgs, {
+      encoding: 'utf-8',
+      timeout: 2000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch {
+    // Silent failure - Keychain write-back is best-effort
+    if (process.env.OMC_DEBUG) {
+      console.error('[usage-api] Failed to write back refreshed credentials to Keychain');
+    }
+  }
+}
+
+/**
+ * Persist refreshed credentials back to the credential store.
+ * When the credentials originated from Keychain, writes back to Keychain.
+ * When they originated from file, updates ~/.claude/.credentials.json.
+ * Updates only the OAuth token fields, preserving other data.
  */
 function writeBackCredentials(creds: OAuthCredentials): void {
+  if (creds.source === 'keychain') {
+    writeKeychainCredentials(creds);
+    return;
+  }
+
   try {
     const credPath = join(getClaudeConfigDir(), '.credentials.json');
     if (!existsSync(credPath)) return;
@@ -785,14 +901,62 @@ function clamp(v: number | undefined): number {
 }
 
 /**
+ * Resolve the minor-unit exponent for `used_credits`/`monthly_limit`.
+ *
+ * The API annotates the currency's minor-unit exponent in `decimal_places`
+ * (EUR=2, JPY=0, BHD=3 per ISO 4217), so we no longer have to guess the scale.
+ * USD is implicitly 2-digit when the field is absent (long-standing behaviour).
+ * Returns null when the scale is unknown (non-USD currency without
+ * decimal_places), so callers skip the field rather than show a wrong figure.
+ *
+ * The exponent (not just the divisor) is carried through to the renderer so it
+ * can format with the right number of decimals — ¥50,000 not ¥50,000.00.
+ */
+function minorUnitDecimals(currency: string, decimalPlaces?: number): number | null {
+  // ISO 4217 minor-unit exponents are 0–4. Reject anything outside that range
+  // (malformed/changed payload) so a bogus value can't reach toFixed(), which
+  // throws a RangeError outside 0–100 — skip the field instead of crashing.
+  if (decimalPlaces != null && Number.isInteger(decimalPlaces) && decimalPlaces >= 0 && decimalPlaces <= 4) {
+    return decimalPlaces;
+  }
+  if (currency === 'USD') return 2;
+  return null;
+}
+
+/**
  * Parse API response into RateLimits
  */
-export function parseUsageResponse(response: UsageApiResponse): RateLimits | null {
+export function parseUsageResponse(response: UsageApiResponse, options?: ParseUsageResponseOptions): RateLimits | null {
   const fiveHour = response.five_hour?.utilization;
   const sevenDay = response.seven_day?.utilization;
+  const sonnetSevenDay = response.seven_day_sonnet?.utilization;
+  const opusSevenDay = response.seven_day_opus?.utilization;
+  const extra = response.extra_usage;
+  const usedCredits = extra?.used_credits;
+  const extraCurrency = (extra?.currency ?? 'USD').toUpperCase();
+  const minorDecimals = minorUnitDecimals(extraCurrency, extra?.decimal_places);
+  const minorDivisor = minorDecimals == null ? null : 10 ** minorDecimals;
+  const isEnterpriseContext = isEnterpriseUsageContext(options);
+  // Enterprise credits are usable once we know the minor-unit scale: USD, or any
+  // currency the API annotated with decimal_places (minorDivisor != null). The
+  // enterprise renderer is currency-aware (enterpriseCurrency).
+  const hasUsableEnterprise = isEnterpriseContext && usedCredits != null && minorDivisor != null;
+  const hasUsableUsdExtraUsage = extra?.limit_usd != null && extra.limit_usd > 0;
+  // The Max/Pro overage renderer (limits.ts) hard-codes "$", so credit-shaped
+  // overage stays USD-only until that renderer learns about currency.
+  const hasUsableCreditExtraUsage = !isEnterpriseContext && usedCredits != null && extraCurrency === 'USD' && extra?.monthly_limit != null && extra.monthly_limit > 0;
+  const hasUsableExtraUsage = hasUsableUsdExtraUsage || hasUsableCreditExtraUsage;
 
-  // Need at least one valid value
-  if (fiveHour == null && sevenDay == null) return null;
+  // Need at least one valid value. Model-specific weekly buckets are valid usage data
+  // even when generic subscription/window metadata is absent or nullish.
+  if (
+    fiveHour == null &&
+    sevenDay == null &&
+    sonnetSevenDay == null &&
+    opusSevenDay == null &&
+    !hasUsableEnterprise &&
+    !hasUsableExtraUsage
+  ) return null;
 
   // Parse ISO 8601 date strings to Date objects
   const parseDate = (dateStr: string | undefined): Date | null => {
@@ -807,15 +971,17 @@ export function parseUsageResponse(response: UsageApiResponse): RateLimits | nul
 
   // Per-model quotas are at the top level (flat structure)
   // e.g., response.seven_day_sonnet, response.seven_day_opus
-  const sonnetSevenDay = response.seven_day_sonnet?.utilization;
   const sonnetResetsAt = response.seven_day_sonnet?.resets_at;
 
   const result: RateLimits = {
     fiveHourPercent: clamp(fiveHour),
-    weeklyPercent: clamp(sevenDay),
     fiveHourResetsAt: parseDate(response.five_hour?.resets_at),
-    weeklyResetsAt: parseDate(response.seven_day?.resets_at),
   };
+
+  if (sevenDay != null) {
+    result.weeklyPercent = clamp(sevenDay);
+    result.weeklyResetsAt = parseDate(response.seven_day?.resets_at);
+  }
 
   // Add Sonnet-specific quota if available from API
   if (sonnetSevenDay != null) {
@@ -824,7 +990,6 @@ export function parseUsageResponse(response: UsageApiResponse): RateLimits | nul
   }
 
   // Add Opus-specific quota if available from API
-  const opusSevenDay = response.seven_day_opus?.utilization;
   const opusResetsAt = response.seven_day_opus?.resets_at;
   if (opusSevenDay != null) {
     result.opusWeeklyPercent = clamp(opusSevenDay);
@@ -832,16 +997,45 @@ export function parseUsageResponse(response: UsageApiResponse): RateLimits | nul
   }
 
   // Add extra (metered) usage if available (Pro subscribers with extra usage allocation)
-  const extra = response.extra_usage;
-  if (extra != null && extra.limit_usd != null && extra.limit_usd > 0) {
-    const spentUsd = extra.spent_usd ?? 0;
-    result.extraUsageSpentUsd = spentUsd;
-    result.extraUsageLimitUsd = extra.limit_usd;
-    // Use API-provided utilization when available; fall back to spent/limit ratio
-    result.extraUsagePercent = extra.utilization != null
-      ? clamp(extra.utilization)
-      : clamp((spentUsd / extra.limit_usd) * 100);
-    result.extraUsageResetsAt = parseDate(extra.resets_at);
+  if (extra != null) {
+    // Enterprise path: used_credits (minor units) is present instead of spent_usd/limit_usd.
+    // The scale comes from minorUnitDivisor — USD (implicitly 2-digit) or any currency
+    // the API annotated with decimal_places (EUR=2, JPY=0, BHD=3 per ISO 4217). When the
+    // scale is unknown (non-USD with no decimal_places) minorDivisor is null and we skip
+    // the enterprise fields — the renderer then returns null rather than show a wrong figure.
+    const currency = extraCurrency;
+    if (extra.used_credits != null && minorDivisor != null && isEnterpriseContext) {
+      result.enterpriseSpentUsd = extra.used_credits / minorDivisor;
+      result.enterpriseLimitUsd = extra.monthly_limit == null ? null : extra.monthly_limit / minorDivisor;
+      result.enterpriseCurrency = currency;
+      if (minorDecimals != null) result.enterpriseDecimalPlaces = minorDecimals;
+      // Only compute utilization when there is a positive cap
+      if (extra.monthly_limit != null && extra.monthly_limit > 0) {
+        result.enterpriseUtilization = clamp((extra.used_credits / extra.monthly_limit) * 100);
+      }
+      // resets_at not provided in enterprise response — leave enterpriseResetsAt unset
+    } else if (extra.used_credits != null && currency === 'USD' && !isEnterpriseContext && extra.monthly_limit != null && extra.monthly_limit > 0) {
+      // Max/Pro organization overage path: the API can use the enterprise-shaped
+      // used_credits/monthly_limit fields even though the account should still render
+      // normal token-window limits. Treat those minor-unit values as extra usage.
+      const spentUsd = extra.used_credits / 100;
+      result.extraUsageSpentUsd = spentUsd;
+      result.extraUsageLimitUsd = extra.monthly_limit / 100;
+      result.extraUsagePercent = extra.utilization != null
+        ? clamp(extra.utilization)
+        : clamp((extra.used_credits / extra.monthly_limit) * 100);
+      result.extraUsageResetsAt = parseDate(extra.resets_at);
+    } else if (extra.limit_usd != null && extra.limit_usd > 0) {
+      // Pro metered path
+      const spentUsd = extra.spent_usd ?? 0;
+      result.extraUsageSpentUsd = spentUsd;
+      result.extraUsageLimitUsd = extra.limit_usd;
+      // Use API-provided utilization when available; fall back to spent/limit ratio
+      result.extraUsagePercent = extra.utilization != null
+        ? clamp(extra.utilization)
+        : clamp((spentUsd / extra.limit_usd) * 100);
+      result.extraUsageResetsAt = parseDate(extra.resets_at);
+    }
   }
 
   return result;
@@ -1181,10 +1375,15 @@ export async function getUsage(): Promise<UsageResult> {
         }
 
         const accessToken = creds.accessToken;
+        const subscriptionType = creds.subscriptionType;
+        const rateLimitTier = creds.rateLimitTier;
         return fetchAndCacheUsage({
           source: 'anthropic',
           fetchFn: () => fetchUsageFromApi(accessToken),
-          parseFn: parseUsageResponse,
+          parseFn: (data) => parseUsageResponse(data, {
+            subscriptionType,
+            rateLimitTier,
+          }),
           cache,
           pollIntervalMs,
         });

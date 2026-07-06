@@ -30,7 +30,7 @@ Set `GLOBAL_INSTALL_STYLE=overwrite` or `preserve` based on the user's choice. I
 **MANDATORY**: Always run this command. Do NOT skip. Do NOT use the Write tool. Let the setup script choose the safest canonical source (bundled `docs/CLAUDE.md` first, GitHub fallback only if needed).
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup-claude-md.sh" <CONFIG_TARGET> [GLOBAL_INSTALL_STYLE]
+bash "${OMC_SETUP_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/setup-claude-md.sh" <CONFIG_TARGET> [GLOBAL_INSTALL_STYLE]
 ```
 
 Replace `<CONFIG_TARGET>` with `local` or `global`. For local installs, omit the optional style argument. For global installs, pass `overwrite` or `preserve` when you know the user's choice; otherwise let the script default to `overwrite`.
@@ -42,7 +42,7 @@ partially reconstruct CLAUDE.md.
 After running the script, verify the target file contains both markers. If marker validation
 fails, stop and report the failure instead of writing CLAUDE.md manually.
 
-For `local` installs inside a git repository, the script also seeds `.git/info/exclude` with an OMC block that ignores local `.omc/*` artifacts by default while preserving `.omc/skills/` for version-controlled project skills.
+For `local` installs inside a git repository, the script also seeds `.git/info/exclude` with an OMC block that re-includes `.omc/`, ignores local `.omc/*` artifacts by default, and preserves `.omc/skills/` for project skills you intend to commit.
 
 **FALLBACK** if curl fails:
 Tell user to manually download from:
@@ -58,7 +58,7 @@ If `CONFIG_TARGET` is `local`:
 ```
 OMC Project Configuration Complete
 - CLAUDE.md: Updated with latest configuration from GitHub at ./.claude/CLAUDE.md
-- Git excludes: Added local `.omc/*` ignore rules to `.git/info/exclude` (keeps `.omc/skills/` trackable)
+- Git excludes: Added local `.omc/*` ignore rules to `.git/info/exclude` (keeps `.omc/skills/` trackable for committed project skills)
 - Backup: Previous CLAUDE.md backed up (if existed)
 - Scope: PROJECT - applies only to this project
 - Hooks: Provided by plugin (no manual installation needed)
@@ -85,13 +85,13 @@ Note: Hooks are now managed by the plugin system automatically. No manual hook i
 ## Save Progress
 
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup-progress.sh" save 2 <CONFIG_TARGET>
+bash "${OMC_SETUP_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/setup-progress.sh" save 2 <CONFIG_TARGET>
 ```
 
 ## Early Exit for Flag Mode
 
 If `--local` or `--global` flag was used, clear state and **STOP HERE**:
 ```bash
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/setup-progress.sh" clear
+bash "${OMC_SETUP_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT}}/scripts/setup-progress.sh" clear
 ```
 Do not continue to Phase 2 or other phases.

@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderMissionBoard } from '../../hud/elements/mission-board.js';
 import { render } from '../../hud/render.js';
 import { DEFAULT_HUD_CONFIG, type HudConfig, type HudRenderContext } from '../../hud/types.js';
 import type { MissionBoardState } from '../../hud/mission-board.js';
+
+// Force non-local so the OMC banner omits the "L" local-build suffix under test.
+vi.mock('../../lib/version.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/version.js')>()),
+  isRuntimePackageLocal: () => false,
+}));
 
 function createMissionState(): MissionBoardState {
   return {

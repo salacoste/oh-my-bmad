@@ -9,13 +9,13 @@
 import { existsSync, readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import {
+  getGitTopLevel,
   getOmcRoot,
   resolveStatePath,
   resolveSessionStatePath,
   ensureSessionStateDir,
   ensureOmcDir,
   listSessionIds,
-  getWorktreeRoot,
 } from './worktree-paths.js';
 import { atomicWriteJsonSync } from './atomic-write.js';
 
@@ -52,7 +52,7 @@ export function canClearStateForSession(
 
 function resolveStateRoot(directory?: string): string {
   const baseDir = directory || process.cwd();
-  return getWorktreeRoot(baseDir) || baseDir;
+  return getGitTopLevel(baseDir) || baseDir;
 }
 
 /**
@@ -76,6 +76,31 @@ function getLegacyStateCandidates(mode: string, directory?: string): string[] {
     resolveStatePath(mode, baseDir),
     join(getOmcRoot(baseDir), `${normalizedName}.json`),
   ];
+}
+
+function getRuntimeArtifactCandidates(mode: string, directory?: string, sessionId?: string): string[] {
+  const baseDir = resolveStateRoot(directory);
+  const stateRoot = join(getOmcRoot(baseDir), 'state');
+  const artifactNames = [
+    `${mode}-stop-breaker.json`,
+    `${mode}-last-steer-at`,
+    `${mode}-continue-steer.lock`,
+  ];
+  const candidateDirs = new Set<string>([stateRoot]);
+
+  if (sessionId) {
+    candidateDirs.add(join(stateRoot, 'sessions', sessionId));
+  } else {
+    for (const sid of listSessionIds(baseDir)) {
+      candidateDirs.add(join(stateRoot, 'sessions', sid));
+    }
+  }
+
+  return [...candidateDirs].flatMap((dir) => artifactNames.map((name) => join(dir, name)));
+}
+
+function hasSessionEndSummary(baseDir: string, sessionId: string): boolean {
+  return existsSync(join(getOmcRoot(baseDir), 'sessions', `${sessionId}.json`));
 }
 
 /**
@@ -118,6 +143,50 @@ export function findSessionOwnedStateFiles(
   return [...matches];
 }
 
+/**
+ * Find active session-scoped state files that are safe to treat as orphaned.
+ *
+ * A fresh `/cancel` invocation may run in a new Claude session id while the
+ * state files that keep the Stop hook alive still live under the completed
+ * session's directory.  We intentionally require durable completion evidence
+ * (`.omc/sessions/{sessionId}.json`) before returning a sibling session's file
+ * so active parallel sessions are not cleared just because their ids differ
+ * from the caller's fresh cancel session.
+ */
+export function findCompletedSessionStateFiles(
+  mode: string,
+  directory?: string,
+  requesterSessionId?: string,
+): string[] {
+  const matches = new Set<string>();
+  const baseDir = resolveStateRoot(directory);
+
+  for (const sid of listSessionIds(baseDir)) {
+    if (requesterSessionId && sid === requesterSessionId) {
+      continue;
+    }
+    if (!hasSessionEndSummary(baseDir, sid)) {
+      continue;
+    }
+
+    const candidatePath = resolveSessionStatePath(mode, sid, baseDir);
+    if (!existsSync(candidatePath)) {
+      continue;
+    }
+
+    try {
+      const raw = JSON.parse(readFileSync(candidatePath, 'utf-8')) as Record<string, unknown>;
+      if (raw.active === true) {
+        matches.add(candidatePath);
+      }
+    } catch {
+      // Ignore unreadable files and keep scanning.
+    }
+  }
+
+  return [...matches];
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -145,9 +214,20 @@ export function writeModeState(
       ensureOmcDir('state', baseDir);
     }
     const filePath = resolveFile(mode, directory, sessionId);
+    // owner_pid is written at the top level (not only inside _meta) so external
+    // hook scripts can perform process-liveness checks without parsing _meta.
+    // Existing state shapes carry session_id at top level; owner_pid follows
+    // the same convention. Readers that don't know the field ignore it.
+    const ownerPid = typeof process.pid === 'number' ? process.pid : undefined;
     const envelope = {
       ...state,
-      _meta: { written_at: new Date().toISOString(), mode, ...(sessionId ? { sessionId } : {}) },
+      ...(ownerPid !== undefined && (state.owner_pid === undefined) ? { owner_pid: ownerPid } : {}),
+      _meta: {
+        written_at: new Date().toISOString(),
+        mode,
+        ...(sessionId ? { sessionId } : {}),
+        ...(ownerPid !== undefined ? { ownerPid } : {}),
+      },
     };
     atomicWriteJsonSync(filePath, envelope);
     return true;
@@ -221,6 +301,9 @@ export function clearModeStateFile(
 
   if (sessionId) {
     unlinkIfPresent(resolveFile(mode, directory, sessionId));
+    for (const artifactPath of getRuntimeArtifactCandidates(mode, baseDir, sessionId)) {
+      unlinkIfPresent(artifactPath);
+    }
   } else {
     for (const legacyPath of getLegacyStateCandidates(mode, baseDir)) {
       unlinkIfPresent(legacyPath);
@@ -228,6 +311,9 @@ export function clearModeStateFile(
 
     for (const sid of listSessionIds(baseDir)) {
       unlinkIfPresent(resolveSessionStatePath(mode, sid, baseDir));
+    }
+    for (const artifactPath of getRuntimeArtifactCandidates(mode, baseDir)) {
+      unlinkIfPresent(artifactPath);
     }
   }
 

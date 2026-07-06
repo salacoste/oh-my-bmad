@@ -15,7 +15,7 @@
 
 *无需学习 Claude Code，直接使用 OMC。*
 
-[快速开始](#快速开始) • [文档](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI 参考](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference) • [工作流](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows) • [迁移指南](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
+[快速开始](#快速开始) • [文档](https://yeachan-heo.github.io/oh-my-claudecode-website) • [CLI 参考](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference) • [工作流](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows) • [迁移指南](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
 
 ---
 
@@ -146,7 +146,7 @@ Team 按阶段化流水线运行：
 ## 功能特性
 
 ### 执行模式
-针对不同场景的多种策略 - 从全自动构建到 token 高效重构。[了解更多 →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+针对不同场景的多种策略 - 从全自动构建到 token 高效重构。[了解更多 →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | 模式 | 特点 | 适用场景 |
 |------|---------|---------|
@@ -203,7 +203,7 @@ source: extracted
 ```
 
 **技能管理：** `/skill list | add | remove | edit | search`
-**自动学习：** `/learner` 以严格的质量标准提取可复用模式
+**自动学习：** `/skillify` 以严格的质量标准提取可复用模式
 **自动注入：** 匹配的技能自动加载到上下文中 — 无需手动调用
 
 [完整功能列表 →](docs/REFERENCE.md)
@@ -328,17 +328,17 @@ omc config-stop-callback discord --clear-tags
 | `OPENCLAW_REPLY_TARGET` | 频道 ID |
 | `OPENCLAW_REPLY_THREAD` | 线程 ID |
 
-参见 `scripts/openclaw-gateway-demo.mjs`，这是一个通过 ClawdBot 将 OpenClaw 有效载荷转发到 Discord 的参考网关。
+参见 `scripts/openclaw-gateway-demo.mjs`，这是一个将 OpenClaw 有效载荷转发到自定义 HTTPS 自动化端点的参考网关。
 
 ---
 
 ## 文档
 
 - **[完整参考](docs/REFERENCE.md)** - 完整功能文档
-- **[CLI 参考](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference)** - 所有 `omc` 命令、标志和工具
-- **[通知指南](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#notifications)** - Discord、Telegram、Slack 和 webhook 设置
-- **[推荐工作流](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows)** - 常见任务的经过实战检验的技能链
-- **[发布说明](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#release-notes)** - 每个版本的新内容
+- **[CLI 参考](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference)** - 所有 `omc` 命令、标志和工具
+- **[通知指南](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#notifications)** - Discord、Telegram、Slack 和 webhook 设置
+- **[推荐工作流](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows)** - 常见任务的经过实战检验的技能链
+- **[发布说明](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#release-notes)** - 每个版本的新内容
 - **[网站](https://yeachan-heo.github.io/oh-my-claudecode-website)** - 交互式指南和示例
 - **[迁移指南](docs/MIGRATION.md)** - 从 v2.x 升级
 - **[架构](docs/ARCHITECTURE.md)** - 底层工作原理

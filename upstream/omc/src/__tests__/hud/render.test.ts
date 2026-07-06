@@ -4,6 +4,12 @@ import { render } from '../../hud/render.js';
 import { DEFAULT_HUD_CONFIG, PRESET_CONFIGS, type HudRenderContext, type HudConfig } from '../../hud/types.js';
 import { stringWidth } from '../../utils/string-width.js';
 
+// Force non-local so the OMC banner omits the "L" local-build suffix under test.
+vi.mock('../../lib/version.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/version.js')>()),
+  isRuntimePackageLocal: () => false,
+}));
+
 // Mock git elements
 vi.mock('../../hud/elements/git.js', () => ({
   renderGitRepo: vi.fn(() => 'repo:my-repo'),
@@ -821,9 +827,117 @@ describe('optional HUD line defaults', () => {
         cwd: true,
         gitRepo: false,
         gitBranch: false,
+        model: false,
       },
     };
 
     await expect(render(context, config)).resolves.toBe('~/workspace/project');
+  });
+});
+
+describe('HUD model display', () => {
+  const createModelContext = (modelName: string | null, modelId: string | null = null): HudRenderContext => ({
+    contextPercent: 0,
+    modelName,
+    modelId,
+    ralph: null,
+    ultrawork: null,
+    prd: null,
+    autopilot: null,
+    activeAgents: [],
+    todos: [],
+    backgroundTasks: [],
+    cwd: '/home/user/project',
+    lastSkill: null,
+    rateLimitsResult: null,
+    customBuckets: null,
+    pendingPermission: null,
+    thinkingState: null,
+    sessionHealth: null,
+    omcVersion: '4.14.0',
+    updateAvailable: null,
+    toolCallCount: 0,
+    agentCallCount: 0,
+    skillCallCount: 0,
+    promptTime: null,
+    apiKeySource: null,
+    profileName: null,
+    sessionSummary: null,
+  });
+
+  const modelConfig: HudConfig = {
+    ...DEFAULT_HUD_CONFIG,
+    elements: {
+      ...DEFAULT_HUD_CONFIG.elements,
+      model: true,
+      omcLabel: true,
+      rateLimits: false,
+      permissionStatus: false,
+      thinking: false,
+      promptTime: false,
+      sessionHealth: false,
+      ralph: false,
+      autopilot: false,
+      prdStory: false,
+      activeSkills: false,
+      lastSkill: false,
+      contextBar: false,
+      agents: false,
+      backgroundTasks: false,
+      todos: false,
+      showCallCounts: false,
+      gitBranch: false,
+      gitStatus: false,
+      profile: false,
+    },
+    layout: {
+      line1: [],
+      main: ['omcLabel', 'model'],
+      detail: [],
+    },
+  };
+
+  it('renders the Claude model when statusline stdin provides reliable metadata', async () => {
+    const output = await render(createModelContext('Claude Sonnet 4.5'), modelConfig);
+
+    expect(output.split('\n')).toHaveLength(1);
+    expect(output).toContain('[OMC#4.14.0]');
+    expect(output).toContain('Model: Sonnet 4.5');
+  });
+
+  it('renders full format from raw model id when display name is also available', async () => {
+    const output = await render(createModelContext(
+      'Claude Sonnet 4.5',
+      'claude-sonnet-4-5-20250929',
+    ), {
+      ...modelConfig,
+      elements: {
+        ...modelConfig.elements,
+        modelFormat: 'full',
+      },
+    });
+
+    expect(output).toContain('Model: claude-sonnet-4-5-20250929');
+    expect(output).not.toContain('Claude Sonnet 4.5');
+  });
+
+  it('renders configured model label through HUD labels', async () => {
+    const output = await render(createModelContext('Claude Sonnet 4.5'), {
+      ...modelConfig,
+      labels: {
+        ...DEFAULT_HUD_CONFIG.labels!,
+        model: '模型',
+      },
+    });
+
+    expect(output).toContain('模型: Sonnet 4.5');
+    expect(output).not.toContain('Model: Sonnet 4.5');
+  });
+
+  it('omits the model segment when model metadata is unavailable', async () => {
+    const output = await render(createModelContext(null), modelConfig);
+
+    expect(output).toBe('\u001b[1m[OMC#4.14.0]\u001b[0m');
+    expect(output).not.toContain('Unknown');
   });
 });

@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from 'fs';
 import { homedir } from 'os';
-import { basename, join } from 'path';
+import { basename, dirname, join } from 'path';
 import { resolvePluginDirArg } from '../lib/plugin-dir.js';
 import { stripRetiredTeamMcpServers } from '../installer/mcp-registry.js';
 import { getClaudeConfigDir } from '../utils/config-dir.js';
@@ -28,9 +28,11 @@ import {
   isNativeWindowsShell,
   wrapWithLoginShell,
   isClaudeAvailable,
+  isTmuxAvailable,
   quoteShellArg,
   tmuxExec,
 } from './tmux-utils.js';
+import { configureTmuxClipboardForCurrentSession, configureTmuxClipboardForSession } from './tmux-clipboard.js';
 import { OMC_PLUGIN_ROOT_ENV } from '../lib/env-vars.js';
 import { OMC_CONFIG_FILE_REL } from '../lib/paths.js';
 
@@ -52,7 +54,11 @@ function hasOmcMarkers(path: string): boolean {
   return content.includes('<!-- OMC:START -->') && content.includes('<!-- OMC:END -->');
 }
 
-function ensureMirroredPath(sourcePath: string, targetPath: string): void {
+function ensureMirroredPath(
+  sourcePath: string,
+  targetPath: string,
+  options: { allowCopyFallback?: boolean } = {},
+): void {
   if (!existsSync(sourcePath)) return;
 
   try {
@@ -73,6 +79,10 @@ function ensureMirroredPath(sourcePath: string, targetPath: string): void {
 
     symlinkSync(sourcePath, targetPath, 'file');
   } catch {
+    if (options.allowCopyFallback === false) {
+      return;
+    }
+
     const sourceStat = lstatSync(sourcePath);
     if (sourceStat.isDirectory()) {
       cpSync(sourcePath, targetPath, { recursive: true });
@@ -82,6 +92,31 @@ function ensureMirroredPath(sourcePath: string, targetPath: string): void {
   }
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readJsonObject(path: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as unknown;
+    return isJsonObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function refreshRuntimeClaudeJsonMcpServers(baseConfigDir: string, runtimeClaudeJsonPath: string): void {
+  const sourceClaudeJsonPath = join(dirname(baseConfigDir), '.claude.json');
+  const sourceClaudeJson = readJsonObject(sourceClaudeJsonPath);
+  if (!sourceClaudeJson || !isJsonObject(sourceClaudeJson.mcpServers)) {
+    return;
+  }
+
+  const runtimeClaudeJson = readJsonObject(runtimeClaudeJsonPath) ?? {};
+  runtimeClaudeJson.mcpServers = sourceClaudeJson.mcpServers;
+  writeFileSync(runtimeClaudeJsonPath, JSON.stringify(runtimeClaudeJson, null, 2));
+}
+
 export function prepareOmcLaunchConfigDir(baseConfigDir = getClaudeConfigDir()): string {
   const companionPath = join(baseConfigDir, 'CLAUDE-omc.md');
   if (!hasOmcMarkers(companionPath)) {
@@ -89,8 +124,17 @@ export function prepareOmcLaunchConfigDir(baseConfigDir = getClaudeConfigDir()):
   }
 
   const runtimeConfigDir = join(baseConfigDir, OMC_RUNTIME_DIRNAME);
+  const runtimeClaudeJsonPath = join(runtimeConfigDir, '.claude.json');
+  const preservedClaudeJson = existsSync(runtimeClaudeJsonPath)
+    ? readFileSync(runtimeClaudeJsonPath)
+    : null;
+
   rmSync(runtimeConfigDir, { recursive: true, force: true });
   mkdirSync(runtimeConfigDir, { recursive: true });
+  if (preservedClaudeJson) {
+    writeFileSync(runtimeClaudeJsonPath, preservedClaudeJson);
+  }
+  refreshRuntimeClaudeJsonMcpServers(baseConfigDir, runtimeClaudeJsonPath);
   copyFileSync(companionPath, join(runtimeConfigDir, 'CLAUDE.md'));
 
   for (const entry of [
@@ -102,14 +146,20 @@ export function prepareOmcLaunchConfigDir(baseConfigDir = getClaudeConfigDir()):
     'projects',
     'rules',
     'skills',
+    'themes',
     OMC_CONFIG_FILE_REL,
     '.omc-version.json',
     '.omc-silent-update.json',
     'keybindings.json',
     'settings.json',
     'settings.local.json',
+    '.credentials.json',
   ]) {
-    ensureMirroredPath(join(baseConfigDir, entry), join(runtimeConfigDir, basename(entry)));
+    ensureMirroredPath(
+      join(baseConfigDir, entry),
+      join(runtimeConfigDir, basename(entry)),
+      { allowCopyFallback: entry !== '.credentials.json' },
+    );
   }
 
   const runtimeSettingsPath = join(runtimeConfigDir, 'settings.json');
@@ -370,6 +420,36 @@ export function isPrintMode(args: string[]): boolean {
 }
 
 /**
+ * Detect raw --madmax / --yolo tokens in launch args. Used before
+ * normalizeClaudeLaunchArgs strips them so we can apply OMC-specific
+ * launch contracts (e.g. tmux-mandatory on macOS).
+ */
+export function hasMadmaxFlag(args: string[]): boolean {
+  return args.some((arg) => arg === MADMAX_FLAG || arg === YOLO_FLAG);
+}
+
+class MadmaxTmuxRequiredError extends Error {
+  constructor(public readonly reason: 'missing' | 'launch-failed') {
+    super(`madmax requires tmux: ${reason}`);
+    this.name = 'MadmaxTmuxRequiredError';
+  }
+}
+
+function abortMadmaxRequiresTmux(reason: 'missing' | 'launch-failed'): never {
+  if (reason === 'missing') {
+    console.error('[omc] Error: --madmax/--yolo on macOS requires tmux, but tmux is not installed.');
+    console.error('  Install it with: brew install tmux');
+  } else {
+    console.error('[omc] Error: --madmax/--yolo on macOS requires tmux, but launching tmux failed.');
+    console.error('  Verify tmux works: tmux -V && tmux new-session -d -s _omc_probe \\; kill-session -t _omc_probe');
+  }
+  process.exit(1);
+  // process.exit may be intercepted by tests; throwing guarantees the caller
+  // stops and prevents accidental fall-through to a direct claude launch.
+  throw new MadmaxTmuxRequiredError(reason);
+}
+
+/**
  * runClaude: Launch Claude CLI (blocks until exit)
  * Handles 3 scenarios:
  * 1. inside-tmux: Launch claude in current pane
@@ -377,6 +457,12 @@ export function isPrintMode(args: string[]): boolean {
  * 3. direct: tmux not available, run claude directly
  *
  * When --print/-p is present, always runs direct to preserve stdout piping.
+ *
+ * On macOS, `--madmax` (and its `--yolo` alias) require tmux: if tmux is not
+ * installed we exit with a brew install hint rather than silently launching
+ * direct. Inside an existing tmux session the current pane is reused. If
+ * tmux is installed but new-session/attach-session fails, we surface the
+ * error instead of silently demoting to direct mode.
  */
 export function runClaude(cwd: string, args: string[], sessionId: string): void {
   // Print mode must bypass tmux so stdout flows to the parent process (issue #1665)
@@ -385,18 +471,35 @@ export function runClaude(cwd: string, args: string[], sessionId: string): void 
     return;
   }
 
-  const policy = resolveLaunchPolicy(process.env, args);
+  const requireTmux = process.platform === 'darwin' && hasMadmaxFlag(args);
+  try {
+    if (requireTmux && !process.env.TMUX && !isTmuxAvailable()) {
+      abortMadmaxRequiresTmux('missing');
+    }
 
-  switch (policy) {
-    case 'inside-tmux':
-      runClaudeInsideTmux(cwd, args);
-      break;
-    case 'outside-tmux':
-      runClaudeOutsideTmux(cwd, args, sessionId);
-      break;
-    case 'direct':
-      runClaudeDirect(cwd, args);
-      break;
+    const policy = resolveLaunchPolicy(process.env, args, { requireTmux });
+
+    switch (policy) {
+      case 'inside-tmux':
+        runClaudeInsideTmux(cwd, args);
+        break;
+      case 'outside-tmux':
+        runClaudeOutsideTmux(cwd, args, sessionId, { requireTmux });
+        break;
+      case 'direct':
+        if (requireTmux) {
+          abortMadmaxRequiresTmux('missing');
+        }
+        runClaudeDirect(cwd, args);
+        break;
+    }
+  } catch (err) {
+    if (err instanceof MadmaxTmuxRequiredError) {
+      // Already reported via stderr + process.exit(1); swallow so test harnesses
+      // that mock process.exit do not see the synthetic throw escape runClaude.
+      return;
+    }
+    throw err;
   }
 }
 
@@ -405,7 +508,11 @@ export function runClaude(cwd: string, args: string[], sessionId: string): void 
  * Launches Claude in current pane
  */
 function runClaudeInsideTmux(cwd: string, args: string[]): void {
-  // Enable mouse scrolling in the current tmux session (non-fatal if it fails)
+  // Enable OSC 52 clipboard forwarding and mouse scrolling in the current tmux session (non-fatal if unsupported).
+  try {
+    configureTmuxClipboardForCurrentSession({ stdio: 'ignore' });
+  } catch { /* non-fatal — user's tmux may not support these options */ }
+
   try {
     tmuxExec(['set-option', 'mouse', 'on'], { stdio: 'ignore' });
   } catch { /* non-fatal — user's tmux may not support these options */ }
@@ -459,10 +566,17 @@ export function buildEnvExportPrefix(vars: string[]): string {
 }
 
 /**
- * Run Claude outside tmux - create new session
- * Creates tmux session with Claude
+ * Run Claude outside tmux - create new session.
+ *
+ * `requireTmux=true` (set by --madmax on macOS) turns the tmux launch
+ * failures from silent demotions into hard errors with a remediation hint.
  */
-function runClaudeOutsideTmux(cwd: string, args: string[], _sessionId: string): void {
+function runClaudeOutsideTmux(
+  cwd: string,
+  args: string[],
+  _sessionId: string,
+  options: { requireTmux?: boolean } = {},
+): void {
   const forwardedEnv = Object.fromEntries(
     TMUX_ENV_FORWARD
       .map((name) => [name, process.env[name]] as const)
@@ -489,8 +603,17 @@ function runClaudeOutsideTmux(cwd: string, args: string[], _sessionId: string): 
   try {
     tmuxExec(['new-session', '-d', '-s', sessionName, '-c', cwd, claudeCmd], { stripTmux: true, stdio: 'inherit' });
   } catch {
+    if (options.requireTmux) {
+      abortMadmaxRequiresTmux('launch-failed');
+    }
     runClaudeDirect(cwd, args);
     return;
+  }
+
+  try {
+    configureTmuxClipboardForSession(sessionName, { stripTmux: true, stdio: 'ignore' });
+  } catch {
+    /* non-fatal — user's tmux may not support these options */
   }
 
   try {
@@ -502,6 +625,9 @@ function runClaudeOutsideTmux(cwd: string, args: string[], _sessionId: string): 
   try {
     tmuxExec(['attach-session', '-t', sessionName], { stripTmux: true, stdio: 'inherit' });
   } catch {
+    if (options.requireTmux) {
+      abortMadmaxRequiresTmux('launch-failed');
+    }
     // If the detached session still exists, preserve it so interrupted
     // attach paths (SSH disconnect, terminal drop, etc.) do not kill or
     // duplicate a valid Claude session.
@@ -642,7 +768,7 @@ export async function launchCommand(args: string[]): Promise<void> {
   // Pre-flight: check claude CLI availability
   if (!isClaudeAvailable()) {
     console.error('[omc] Error: claude CLI not found. Install Claude Code first:');
-    console.error('  npm install -g @anthropic-ai/claude-code');
+    console.error('  https://code.claude.com/docs/en/setup');
     process.exit(1);
   }
 

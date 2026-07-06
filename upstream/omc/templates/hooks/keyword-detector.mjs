@@ -35,6 +35,34 @@ const __dirname = dirname(__filename);
 const { readStdin } = await import(pathToFileURL(join(__dirname, 'lib', 'stdin.mjs')).href);
 const { atomicWriteFileSync } = await import(pathToFileURL(join(__dirname, 'lib', 'atomic-write.mjs')).href);
 const { getClaudeConfigDir } = await import(pathToFileURL(join(__dirname, 'lib', 'config-dir.mjs')).href);
+const { resolveSessionStatePathsForHook } = await import(pathToFileURL(join(__dirname, 'lib', 'state-root.mjs')).href);
+
+
+const _omcRoot = process.env.CLAUDE_PLUGIN_ROOT || join(__dirname, '..');
+const SKILL_INVOCATION_USER_REQUEST_MAX = 1200;
+
+function compactHookText(text, maxChars = SKILL_INVOCATION_USER_REQUEST_MAX) {
+  const notice = '\n...[truncated; original user prompt remains available in the conversation]';
+  if (!text || text.length <= maxChars) return text || '';
+  if (maxChars <= notice.length) return notice.slice(0, Math.max(0, maxChars));
+  return `${text.slice(0, maxChars - notice.length).trimEnd()}${notice}`;
+}
+
+function getSkillPathCandidates(skillName) {
+  const roots = [
+    process.env.CLAUDE_PLUGIN_ROOT,
+    _omcRoot,
+    process.cwd(),
+  ].filter(Boolean);
+  return [...new Set(roots.map(root => join(root, 'skills', skillName, 'SKILL.md')))];
+}
+
+function resolveSkillPath(skillName) {
+  for (const skillPath of getSkillPathCandidates(skillName)) {
+    if (existsSync(skillPath)) return skillPath;
+  }
+  return getSkillPathCandidates(skillName)[0] || `skills/${skillName}/SKILL.md`;
+}
 
 const ULTRATHINK_MESSAGE = `<think-mode>
 
@@ -118,7 +146,7 @@ function extractPrompt(input) {
 }
 
 function isExplicitAskSlashInvocation(prompt) {
-  return /^\s*\/(?:oh-my-claudecode:)?ask\s+(?:claude|codex|gemini)\b/i.test(prompt);
+  return /^\s*\/(?:oh-my-claudecode:)?ask\s+(?:claude|codex|gemini|grok)\b/i.test(prompt);
 }
 
 // Sanitize text to prevent false positives from code blocks, XML tags, URLs, and file paths
@@ -165,9 +193,15 @@ function sanitizeForKeywordDetection(text) {
     .replace(/^\s*>\s.*$/gm, '')
     .replace(/^\s*\|(?:[^|\n]*\|){2,}\s*$/gm, '')
     .replace(/^\s*\|?(?:\s*:?-{3,}:?\s*\|){1,}\s*$/gm, '')
-    // 4. Strip file paths: /foo/bar/baz or foo/bar/baz — uses lookbehind (Node.js supports it)
-    // The TypeScript version (index.ts) uses capture group + $1 replacement for broader compat
-    .replace(/(?<=^|[\s"'`(])(?:\/)?(?:[\w.-]+\/)+[\w.-]+/gm, '')
+    // 4. Strip file paths — uses lookbehind (Node.js supports it). Requires at least one
+    // slash-terminated directory segment (?:SEG+\/)+ so bare slash-commands like /ralph are NOT
+    // stripped (the .mjs has no pre-sanitization slash handler for them). Directory/stem segments
+    // are Unicode-aware (\w.- plus the NON_LATIN_SCRIPT_PATTERN ranges) so CJK file names like
+    // docs/コードレビュー.md are stripped. The final segment is bounded: a CJK-capable stem ending
+    // in a .ext, OR an ASCII-only extensionless name — so a no-space CJK directive following a path
+    // (e.g. src/auth.tsをコードレビューして) is NOT consumed by a greedy CJK tail and the alias
+    // still activates.
+    .replace(/(?<=^|[\s"'`(])(?:\/)?(?:[\w.\-　-鿿가-힯Ѐ-ӿ؀-ۿऀ-ॿ฀-๿က-႟]+\/)+(?:[\w.\-　-鿿가-힯Ѐ-ӿ؀-ۿऀ-ॿ฀-๿က-႟]*\.\w+|[\w.\-]+)/gm, '')
     // 5. Strip markdown code blocks (existing)
     .replace(/```[\s\S]*?```/g, '')
     // 6. Strip inline code (existing)
@@ -180,7 +214,7 @@ const ROLE_BOUNDARY_PATTERN =
   /^<\s*\/?\s*(system|human|assistant|user|tool_use|tool_result)\b[^>]*>/i;
 const SKILL_TRANSCRIPT_LINE_PATTERN =
   /^\s*Skill:\s+oh-my-(?:claudecode|codex):/i;
-const USER_REQUEST_LINE_PATTERN = /^\s*User request:\s*$/i;
+const USER_REQUEST_LINE_PATTERN = /^\s*User request(?:\s*\([^)]*\))?:\s*$/i;
 const SHELL_TRANSCRIPT_LINE_PATTERN = /^\s*[$%❯]\s+/;
 const GIT_DIFF_START_PATTERNS = [
   /^diff\s+--git\s+a\//,
@@ -302,7 +336,7 @@ function stripPastedCommandPayloads(text) {
 const INFORMATIONAL_INTENT_PATTERNS = [
   /\b(?:what(?:'s|\s+is)|what\s+are|how\s+(?:to|do\s+i)\s+use|explain|explanation|tell\s+me\s+about|describe)\b/i,
   /(?:뭐야|뭔데|무엇(?:이야|인가요)?|어떻게|설명(?!서\s*(?:작성|만들|생성|추가|업데이트|수정|편집|쓰))|사용법|알려\s?줘|알려줄래|소개해?\s?줘|소개\s*부탁|설명해\s?줘|뭐가\s*달라|어떤\s*기능|기능\s*(?:알려|설명|뭐)|방법\s*(?:알려|설명|뭐))/u,
-  /(?:とは|って何|使い方|説明)/u,
+  /(?:とは|って何|使い方|説明|(?:について|に関して|違い)[^\n]{0,24}(?:教えて|説明|知りたい)|(?:どう|何が|どこが)違う)/u,
   /(?:什么是|什麼是|怎(?:么|樣)用|如何使用|解释|說明|说明)/u,
 ];
 const INFORMATIONAL_CONTEXT_WINDOW = 80;
@@ -323,6 +357,105 @@ const QUESTION_FOLLOWUP_PATTERNS = [
   /\b(?:how\s+many|how\s+much|why|what\s+happened|what\s+went\s+wrong|token\s+budget|cost|pricing)\b/i,
   /(?:왜|얼마|몇\s*번|몇번|토큰|가격|비용|질문)/u,
 ];
+
+// Patterns that identify system-generated echoes (hook outputs) which users may
+// paste back into a prompt while debugging. If a mode keyword only appears
+// inside such an echo block we must NOT re-activate the mode: otherwise
+// copying a "[RALPH LOOP - ITERATION N] ..." block to ask "why does this keep
+// firing?" silently re-triggers ralph and the echo itself becomes state.prompt
+// — a self-reinforcing loop that is hard to cancel.
+// Continuation lines that hook output typically emits DIRECTLY after a
+// recognized block header. They must be stripped only in that context —
+// never standalone — because a user might legitimately start a prompt with
+// "Task: …" or similar (Codex automated review P1/P2 on #2795).
+const ECHO_CONTINUATION = '(?:\\r?\\n[ \\t]*(?:Task:\\s|When FULLY complete \\(after Architect verification\\)|run\\s+\\/oh-my-claudecode:cancel).*)*';
+
+// Each pattern is a single logical block: the block header line + zero or
+// more continuation lines emitted right after it. The whole match is
+// stripped together.
+function buildEchoBlockRegex(headerBody) {
+  return new RegExp(`^[ \\t]*${headerBody}.*${ECHO_CONTINUATION}$`, 'gim');
+}
+
+const SYSTEM_ECHO_BLOCK_PATTERNS = [
+  buildEchoBlockRegex('\\[RALPH LOOP\\s*-\\s*ITERATION[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[RALPH LOOP\\s*-\\s*(?:HARD LIMIT|EXTENDED)\\]'),
+  buildEchoBlockRegex('\\[TEAM\\s*-\\s*Phase:[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[AUTOPILOT[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[ULTRAPILOT[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[ULTRAWORK[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[ULTRAQA[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[PIPELINE[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[SWARM[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[TOOL ERROR[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[MAGIC KEYWORD:[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('\\[MAGIC KEYWORDS DETECTED:[^\\]\\n]*\\]'),
+  buildEchoBlockRegex('Stop hook (?:blocking error|feedback|stopped continuation)'),
+  buildEchoBlockRegex('PreToolUse:[^\\n]*hook additional context:'),
+  buildEchoBlockRegex('PostToolUse:[^\\n]*hook additional context:'),
+];
+
+const SYSTEM_ECHO_SIGNATURES = [
+  /\bWhen FULLY complete \(after Architect verification\)\b/i,
+  /\brun\s+\/oh-my-claudecode:cancel\b/i,
+  /\[RALPH LOOP\s*-\s*ITERATION\b/i,
+];
+
+const MAX_STATE_PROMPT_LEN = 500;
+
+function stripSystemEchoes(text) {
+  if (typeof text !== 'string' || text.length === 0) return '';
+  let cleaned = text;
+  for (const pattern of SYSTEM_ECHO_BLOCK_PATTERNS) {
+    cleaned = cleaned.replace(pattern, ' ');
+  }
+  return cleaned;
+}
+
+function looksLikeSystemEcho(text) {
+  if (typeof text !== 'string' || text.length === 0) return false;
+  if (SYSTEM_ECHO_SIGNATURES.some((pattern) => pattern.test(text))) return true;
+  // Also treat the presence of ANY echo block pattern as an echo.
+  for (const pattern of SYSTEM_ECHO_BLOCK_PATTERNS) {
+    const probe = new RegExp(pattern.source, pattern.flags.replace('g', ''));
+    if (probe.test(text)) return true;
+  }
+  return false;
+}
+
+/**
+ * Sanitize a prompt before persisting it to a *-state.json file.
+ *
+ * Strategy:
+ * 1. Strip echoes first. If non-empty content remains AND that remainder no
+ *    longer looks like an echo, keep it (preserves the real user request in
+ *    an "echo + blank line + real request" paste).
+ * 2. Otherwise, if the raw prompt looks like a pure echo, substitute the
+ *    placeholder sentinel.
+ * 3. Finally, hard-truncate to MAX_STATE_PROMPT_LEN chars.
+ */
+function sanitizePromptForState(prompt) {
+  if (typeof prompt !== 'string') return '';
+  const trimmed = prompt.trim();
+  if (!trimmed) return '';
+
+  const stripped = stripSystemEchoes(trimmed).trim();
+  if (stripped.length > 0 && !looksLikeSystemEcho(stripped)) {
+    return stripped.length > MAX_STATE_PROMPT_LEN
+      ? `${stripped.slice(0, MAX_STATE_PROMPT_LEN - 3)}...`
+      : stripped;
+  }
+
+  if (looksLikeSystemEcho(trimmed)) {
+    return '(prompt omitted: pasted system echo)';
+  }
+
+  const base = stripped.length > 0 ? stripped : trimmed;
+  return base.length > MAX_STATE_PROMPT_LEN
+    ? `${base.slice(0, MAX_STATE_PROMPT_LEN - 3)}...`
+    : base;
+}
+
 const MODE_REFERENCE_PATTERN =
   /\b(?:ralph|autopilot|auto[\s-]?pilot|ultrawork|ulw|ralplan|ultrathink|deepsearch|deep[\s-]?analyze|deepanalyze|deep[\s-]interview|ouroboros|ccg|claude-codex-gemini|deerflow)\b/gi;
 
@@ -347,6 +480,24 @@ function isWithinQuotedSpan(text, position) {
     }
   }
   return false;
+}
+
+// Bounds of the specific quoted span containing `position`, or null if none.
+// Used to scope the execution-directive check for the quote exemption to
+// this keyword's own quote — not the generic ±80-char context window, which
+// can otherwise pick up an unrelated genuine command elsewhere in the same
+// message and wrongly neutralize the exemption for a keyword that is purely
+// quoted as an example.
+function findQuotedSpanBounds(text, position) {
+  for (const match of text.matchAll(QUOTED_SPAN_PATTERN)) {
+    if (match.index === undefined) continue;
+    const start = match.index;
+    const end = start + match[0].length;
+    if (position >= start && position < end) {
+      return { start, end };
+    }
+  }
+  return null;
 }
 
 function stripQuotedSpans(text) {
@@ -395,6 +546,23 @@ function hasDirectInvocationPrefix(text, position) {
   return /^\s*(?:[$/!]\s*|force:\s*|oh-my-(?:claudecode|codex):\s*)?$/i.test(prefix);
 }
 
+function hasConversationalInvocationNearKeyword(text, position, _keywordLength, _keywordText) {
+  if (isWithinQuotedSpan(text, position)) {
+    return false;
+  }
+
+  const start = Math.max(0, position - INFORMATIONAL_CONTEXT_WINDOW);
+  const prefix = stripQuotedSpans(text.slice(start, position));
+  const conversationalInvocationPatterns = [
+    /\bplease\s+$/i,
+    /\blet['’]?s\s+$/i,
+    /\bi\s+(?:want|need|would\s+like)\s+(?:a|an)\s+$/i,
+    /\b(?:can|could|would|will)\s+you\s+$/i,
+  ];
+
+  return conversationalInvocationPatterns.some((pattern) => pattern.test(prefix));
+}
+
 function hasExplicitInvocationContext(text, position, keywordLength, keywordText) {
   if (hasDirectInvocationPrefix(text, position)) {
     return true;
@@ -403,7 +571,11 @@ function hasExplicitInvocationContext(text, position, keywordLength, keywordText
   const start = Math.max(0, position - INFORMATIONAL_CONTEXT_WINDOW);
   const end = Math.min(text.length, position + keywordLength + INFORMATIONAL_CONTEXT_WINDOW);
   const context = text.slice(start, end);
-  return hasActivationIntentNearKeyword(context, keywordText);
+  if (hasActivationIntentNearKeyword(context, keywordText)) {
+    return true;
+  }
+
+  return hasConversationalInvocationNearKeyword(text, position, keywordLength, keywordText);
 }
 
 function hasDiagnosticIntentNearKeyword(context, keyword) {
@@ -414,9 +586,42 @@ function hasDiagnosticIntentNearKeyword(context, keyword) {
     new RegExp(`\\b${escaped}\\b[^\\n]{0,48}\\b(?:keeps?\\s+(?:looping|re-?running)|has\\s+(?:a\\s+)?(?:bug|issue|problem|error)|is\\s+(?:stuck|broken|failing)|loop(?:ing)?)\\b`, 'i'),
     new RegExp(`\\b(?:bug|issue|problem|error)\\b[^\\n]{0,16}\\b(?:with|in)\\s+\\b${escaped}\\b`, 'i'),
     new RegExp(`${escaped}.{0,14}(?:자꾸|계속).{0,14}(?:재실행|반복|루프|멈추)`, 'u'),
+    // Japanese: repeated-failure complaint — direct mirror of the Korean 자꾸/계속 line above
+    // (frequency adverb + problem verb). No P2 subject-particle pattern / no work-request escape: Korean parity.
+    new RegExp(`${escaped}[^\\n]{0,16}(?:また|何度も|ずっと|頻繁|繰り返|いつも)[^\\n]{0,16}(?:失敗|エラー|ループ|止ま|落ち|再実行|動かな|フリーズ|壊れ|クラッシュ|こけ|暴走|無限)`, 'u'),
   ];
 
   return patterns.some((pattern) => pattern.test(context));
+}
+
+function isRalphUltraworkMetaOrBanterContext(context, keywordText) {
+  const normalizedKeyword = (keywordText || '').toLowerCase().replace(/\s+/g, '');
+  if (!['ralph', '랄프', 'ラルフ', 'ultrawork', 'ulw', 'uw', '울트라워크', 'ウルトラワーク'].includes(normalizedKeyword)) {
+    return false;
+  }
+
+  const currentKeywordAliases = normalizedKeyword === 'ralph' || normalizedKeyword === '랄프' || normalizedKeyword === 'ラルフ'
+    ? ['랄프', 'ラルフ']
+    : ['울트라워크', 'ウルトラワーク'];
+  const currentKeywordPattern = currentKeywordAliases.join('|');
+  const imperativeVerbPattern = '켜|켜줘|실행|시작|돌려|돌려줘|써|써줘|사용해|진행해';
+  const koreanImperativePatterns = [
+    new RegExp(`(?:${currentKeywordPattern})[^?？\n]{0,16}(?:${imperativeVerbPattern})`, 'u'),
+    new RegExp(`(?:${imperativeVerbPattern})[^?？\n]{0,16}(?:${currentKeywordPattern})`, 'u'),
+  ];
+  if (koreanImperativePatterns.some((pattern) => pattern.test(context))) {
+    return false;
+  }
+
+  const metaOrBanterPatterns = [
+    /[?？].{0,12}(?:ㅋ{1,}|ㅎ{1,}|lol|lmao)/iu,
+    /(?:ㅋ{1,}|ㅎ{1,}|lol|lmao).{0,40}[?？]/iu,
+    /(?:ralph|랄프|ultrawork|ulw|uw|울트라워크).{0,40}(?:라도|줘야\s*해|쥐어\s*줘야\s*해|해야\s*해).{0,20}[?？]/iu,
+    /(?:관계|관련|연관|차이|비교).{0,40}(?:뭐|무엇|어떻게|설명|알려|궁금|인가|야|냐|니|까|[?？])/u,
+    /(?:뭐|무엇|어떻게|설명|알려|궁금).{0,40}(?:관계|관련|연관|차이|비교)/u,
+  ];
+
+  return metaOrBanterPatterns.some((pattern) => pattern.test(context));
 }
 
 function isInformationalKeywordContext(text, position, keywordLength, keywordText) {
@@ -427,10 +632,57 @@ function isInformationalKeywordContext(text, position, keywordLength, keywordTex
   const line = text.slice(lineBounds.start, lineBounds.end);
   const questionOutsideQuotes = stripQuotedSpans(text);
   const keywordInsideQuotes = isWithinQuotedSpan(text, position);
+  const hasExecutionDirective = /\b(?:fix|debug|investigate|resolve|handle|patch|address|implement|build)\b/i.test(context);
+
+  // A keyword occurrence inside a quoted span is usually reported/example
+  // text, not a command directed at the assistant — e.g. an example sentence
+  // like `"use autopilot"` inside a paragraph discussing that exact phrasing.
+  // But a quoted keyword paired with a nearby execution directive OR
+  // activation verb (e.g. `"ralph" fix the auth bug`, or `run "ralph" on
+  // this issue`) is still a genuine request stylistically wrapped in quotes,
+  // so the exemption only applies when neither is present.
+  //
+  // This check is scoped to text immediately OUTSIDE this keyword's own
+  // quoted span (±28 chars before/after the span's bounds), not the generic
+  // ±80-char context window used elsewhere in this function, and NOT the
+  // quote's own interior. Three failure modes this avoids:
+  // - Scoping to the wide window: an unrelated genuine command elsewhere in
+  //   the same message could sit inside it and wrongly neutralize the
+  //   exemption for a keyword that is purely quoted as an example.
+  // - Scoping to (or including) the quote's own interior: a directive or
+  //   activation word used INSIDE the quoted text itself — extremely common
+  //   in narrated examples and bug reports, e.g. `"please fix autopilot"
+  //   they said` or `"...told it to use autopilot..."` — would make the
+  //   quote self-report as command-bearing and defeat the exemption for
+  //   exactly the reported-speech case it exists to catch.
+  // - Checking only execution-directive verbs (fix/debug/...) and not
+  //   activation verbs (use/run/start/...): genuine commands stylistically
+  //   quoting just the mode name, e.g. `run "ralph" on this issue` or
+  //   `use "autopilot" on this task`, would be wrongly suppressed even
+  //   though they activated before this exemption existed.
+  if (keywordInsideQuotes) {
+    const span = findQuotedSpanBounds(text, position);
+    const hasGenuineCommandNearQuote = span
+      ? /\b(?:fix|debug|investigate|resolve|handle|patch|address|implement|build|use|run|start|enable|activate|invoke|trigger|launch)\b/i.test(
+          text.slice(Math.max(0, span.start - 28), span.start) +
+            ' ' +
+            text.slice(span.end, Math.min(text.length, span.end + 28)),
+        )
+      : hasExecutionDirective;
+    if (!hasGenuineCommandNearQuote) {
+      return true;
+    }
+  }
 
   if (keywordText) {
     if (hasActivationIntentNearKeyword(context, keywordText)) {
       return false;
+    }
+    if (hasConversationalInvocationNearKeyword(text, position, keywordLength, keywordText)) {
+      return false;
+    }
+    if (isRalphUltraworkMetaOrBanterContext(context, keywordText)) {
+      return true;
     }
     if (hasDiagnosticIntentNearKeyword(context, keywordText)) {
       return true;
@@ -453,15 +705,23 @@ function isInformationalKeywordContext(text, position, keywordLength, keywordTex
 }
 
 function hasActionableKeyword(text, pattern) {
+  // Strip system-generated echo blocks (hook outputs, Stop-hook wrappers)
+  // before searching for keywords. Otherwise pasting a previous
+  // "[RALPH LOOP - ITERATION N] ..." block into a prompt would re-activate
+  // the mode and the echo itself would become the new state.prompt.
+  const searchText = looksLikeSystemEcho(text)
+    ? stripSystemEchoes(text)
+    : text;
+
   const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
   const globalPattern = new RegExp(pattern.source, flags);
 
-  for (const match of text.matchAll(globalPattern)) {
+  for (const match of searchText.matchAll(globalPattern)) {
     if (match.index === undefined) {
       continue;
     }
 
-    if (isInformationalKeywordContext(text, match.index, match[0].length, match[0])) {
+    if (isInformationalKeywordContext(searchText, match.index, match[0].length, match[0])) {
       continue;
     }
 
@@ -472,19 +732,24 @@ function hasActionableKeyword(text, pattern) {
 }
 
 function hasActionableRalplanKeyword(text, pattern) {
+  // Same echo guard as hasActionableKeyword.
+  const searchText = looksLikeSystemEcho(text)
+    ? stripSystemEchoes(text)
+    : text;
+
   const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
   const globalPattern = new RegExp(pattern.source, flags);
 
-  for (const match of text.matchAll(globalPattern)) {
+  for (const match of searchText.matchAll(globalPattern)) {
     if (match.index === undefined) {
       continue;
     }
 
-    if (isInformationalKeywordContext(text, match.index, match[0].length, match[0])) {
+    if (isInformationalKeywordContext(searchText, match.index, match[0].length, match[0])) {
       continue;
     }
 
-    if (!hasExplicitInvocationContext(text, match.index, match[0].length, match[0])) {
+    if (!hasExplicitInvocationContext(searchText, match.index, match[0].length, match[0])) {
       continue;
     }
 
@@ -497,7 +762,11 @@ function hasActionableRalplanKeyword(text, pattern) {
 // Create state file for a mode
 const SESSION_ID_ALLOWLIST = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/;
 
-function activateState(directory, prompt, stateName, sessionId) {
+async function activateState(directory, prompt, stateName, sessionId) {
+  const now = new Date().toISOString();
+  // Sanitize prompt BEFORE writing to state: prevents pasted system echoes
+  // and oversized blobs from being persisted and re-emitted by Stop hook.
+  const safePrompt = sanitizePromptForState(prompt);
   let state;
 
   if (stateName === 'ralph') {
@@ -506,37 +775,37 @@ function activateState(directory, prompt, stateName, sessionId) {
       active: true,
       iteration: 1,
       max_iterations: 100,
-      started_at: new Date().toISOString(),
-      prompt: prompt,
+      started_at: now,
+      prompt: safePrompt,
       session_id: sessionId || undefined,
       project_path: directory,
       reinforcement_count: 0,
       awaiting_confirmation: true,
-      last_checked_at: new Date().toISOString()
+      awaiting_confirmation_set_at: now,
+      last_checked_at: now
     };
   } else {
     state = {
       active: true,
-      started_at: new Date().toISOString(),
-      original_prompt: prompt,
+      started_at: now,
+      original_prompt: safePrompt,
       session_id: sessionId || undefined,
       project_path: directory,
       reinforcement_count: 0,
       awaiting_confirmation: true,
-      last_checked_at: new Date().toISOString()
+      awaiting_confirmation_set_at: now,
+      last_checked_at: now
     };
   }
 
   // Write to session-scoped local path when sessionId is available (must match persistent-mode.mjs reads)
-  const stateDir = join(directory, '.omc', 'state');
   const safeSessionId = sessionId && SESSION_ID_ALLOWLIST.test(sessionId) ? sessionId : '';
-  const targetDir = safeSessionId
-    ? join(stateDir, 'sessions', safeSessionId)
-    : stateDir;
+  const { writePath } = await resolveSessionStatePathsForHook(directory, stateName, safeSessionId || undefined);
+  const targetDir = join(writePath, '..');
 
   try {
     if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
-    atomicWriteFileSync(join(targetDir, `${stateName}-state.json`), JSON.stringify(state, null, 2));
+    atomicWriteFileSync(writePath, JSON.stringify(state, null, 2));
   } catch {}
 
   // Also write to global fallback
@@ -550,9 +819,9 @@ function activateState(directory, prompt, stateName, sessionId) {
 /**
  * Clear state files for cancel operation
  */
-function clearStateFiles(directory, modeNames) {
+async function clearStateFiles(directory, modeNames) {
   for (const name of modeNames) {
-    const localPath = join(directory, '.omc', 'state', `${name}-state.json`);
+    const { writePath: localPath } = await resolveSessionStatePathsForHook(directory, name, undefined);
     const globalPath = join(homedir(), '.omc', 'state', `${name}-state.json`);
     try { if (existsSync(localPath)) unlinkSync(localPath); } catch {}
     try { if (existsSync(globalPath)) unlinkSync(globalPath); } catch {}
@@ -563,17 +832,16 @@ function clearStateFiles(directory, modeNames) {
  * Link ralph and team state files for composition.
  * Updates both state files to reference each other.
  */
-function linkRalphTeam(directory, sessionId) {
-  const getStatePath = (modeName) => {
-    if (sessionId && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId)) {
-      return join(directory, '.omc', 'state', 'sessions', sessionId, `${modeName}-state.json`);
-    }
-    return join(directory, '.omc', 'state', `${modeName}-state.json`);
+async function linkRalphTeam(directory, sessionId) {
+  const safeSessionId = sessionId && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(sessionId) ? sessionId : undefined;
+  const getStatePath = async (modeName) => {
+    const { writePath } = await resolveSessionStatePathsForHook(directory, modeName, safeSessionId);
+    return writePath;
   };
 
   // Update ralph state with linked_team
   try {
-    const ralphPath = getStatePath('ralph');
+    const ralphPath = await getStatePath('ralph');
     if (existsSync(ralphPath)) {
       const state = JSON.parse(readFileSync(ralphPath, 'utf-8'));
       state.linked_team = true;
@@ -583,7 +851,7 @@ function linkRalphTeam(directory, sessionId) {
 
   // Update team state with linked_ralph
   try {
-    const teamPath = getStatePath('team');
+    const teamPath = await getStatePath('team');
     if (existsSync(teamPath)) {
       const state = JSON.parse(readFileSync(teamPath, 'utf-8'));
       state.linked_ralph = true;
@@ -593,20 +861,27 @@ function linkRalphTeam(directory, sessionId) {
 }
 
 /**
- * Create a skill invocation message that tells Claude to use the Skill tool
+ * Create a compact skill invocation guide without inlining SKILL.md bodies.
+ * Full skill text remains available by path, avoiding UserPromptSubmit token blowups.
  */
 function createSkillInvocation(skillName, originalPrompt, args = '') {
-  const argsSection = args ? `\nArguments: ${args}` : '';
+  const argsSection = args ? `
+Arguments: ${args}` : '';
+  const skillPath = resolveSkillPath(skillName);
+  const pathStatus = existsSync(skillPath)
+    ? `Read fallback: open ${skillPath} and follow its SKILL.md instructions.`
+    : `Read fallback: locate skills/${skillName}/SKILL.md in the active oh-my-claudecode plugin/install and follow it.`;
+
   return `[MAGIC KEYWORD: ${skillName.toUpperCase()}]
 
-You MUST invoke the skill using the Skill tool:
+Skill routing detected: ${skillName}
+Preferred invocation: /oh-my-claudecode:${skillName}${args ? ` ${args}` : ''}
+${pathStatus}${argsSection}
 
-Skill: oh-my-claudecode:${skillName}${argsSection}
+User request (compact echo; original prompt remains authoritative):
+${compactHookText(originalPrompt)}
 
-User request:
-${originalPrompt}
-
-IMPORTANT: Invoke the skill IMMEDIATELY. Do not proceed without loading the skill instructions.`;
+IMPORTANT: Start the ${skillName} workflow immediately. If the slash invocation is unavailable, read the SKILL.md at the fallback path instead of relying on this compact guide.`;
 }
 
 /**
@@ -619,21 +894,26 @@ function createMultiSkillInvocation(skills, originalPrompt) {
   }
 
   const skillBlocks = skills.map((s, i) => {
-    const argsSection = s.args ? `\nArguments: ${s.args}` : '';
+    const skillPath = resolveSkillPath(s.name);
+    const argsText = s.args ? ` ${s.args}` : '';
+    const pathStatus = existsSync(skillPath)
+      ? `Read fallback: ${skillPath}`
+      : `Read fallback: locate skills/${s.name}/SKILL.md in the active oh-my-claudecode plugin/install`;
     return `### Skill ${i + 1}: ${s.name.toUpperCase()}
-Skill: oh-my-claudecode:${s.name}${argsSection}`;
+Preferred invocation: /oh-my-claudecode:${s.name}${argsText}
+${pathStatus}`;
   }).join('\n\n');
 
   return `[MAGIC KEYWORDS DETECTED: ${skills.map(s => s.name.toUpperCase()).join(', ')}]
 
-You MUST invoke ALL of the following skills using the Skill tool, in order:
+Execute ALL detected workflows in order using compact invocation guidance. Do not inline full SKILL.md files into the prompt.
 
 ${skillBlocks}
 
-User request:
-${originalPrompt}
+User request (compact echo; original prompt remains authoritative):
+${compactHookText(originalPrompt)}
 
-IMPORTANT: Invoke ALL skills listed above. Start with the first skill IMMEDIATELY. After it completes, invoke the next skill in order. Do not skip any skill.`;
+IMPORTANT: Complete ALL skills listed above in order. Start with the first skill IMMEDIATELY.`;
 }
 
 /**
@@ -764,12 +1044,12 @@ async function main() {
     }
 
     // Ralph keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(ralph)\b|(랄프)(?!로렌)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ralph)\b|(랄프)(?!로렌)|(ラルフ)(?!・?ローレン)/i)) {
       matches.push({ name: 'ralph', args: '' });
     }
 
     // Autopilot keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(autopilot|auto[\s-]?pilot|fullsend|full\s+auto)\b|(오토파일럿)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(autopilot|auto[\s-]?pilot|fullsend|full\s+auto)\b|(오토파일럿)|(オートパイロット)/i)) {
       matches.push({ name: 'autopilot', args: '' });
     }
 
@@ -777,24 +1057,31 @@ async function main() {
     // This prevents infinite spawning when Claude workers receive prompts containing "team".
 
     // Ultrawork keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(ultrawork|ulw)\b|(울트라워크)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ultrawork|ulw)\b|(울트라워크)|(ウルトラワーク)/i)) {
       matches.push({ name: 'ultrawork', args: '' });
     }
 
 
     // CCG keywords (Claude-Codex-Gemini tri-model orchestration)
-    if (hasActionableKeyword(cleanPrompt, /\b(ccg|claude-codex-gemini)\b|(씨씨지)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ccg|claude-codex-gemini)\b|(씨씨지)|(シーシージー)/i)) {
       matches.push({ name: 'ccg', args: '' });
     }
 
     // Ralplan keyword
-    if (hasActionableRalplanKeyword(cleanPrompt, /\b(ralplan)\b|(랄플랜)/i)) {
+    if (hasActionableRalplanKeyword(cleanPrompt, /\b(ralplan)\b|(랄플랜)|(ラルプラン)/i)) {
       matches.push({ name: 'ralplan', args: '' });
     }
 
     // Deep interview keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]interview|ouroboros)\b|(딥인터뷰)/i)) {
-      matches.push({ name: 'deep-interview', args: '' });
+    // Skip when the prompt is an upstream Ouroboros CLI invocation —
+    // `ouroboros <sub>`, `ooo <sub>`, or `/ouroboros:<sub>`. The bare
+    // brand name as the first token is a deterministic command, not a
+    // routing request. Natural-language mentions ("please use ouroboros
+    // to clarify…") still match because the brand is mid-sentence.
+    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]interview|ouroboros)\b|(딥인터뷰)|(ディープインタビュー)/i)) {
+      if (!/^\s*\/?(?:ouroboros|ooo)\b/i.test(cleanPrompt)) {
+        matches.push({ name: 'deep-interview', args: '' });
+      }
     }
 
     // AI slop cleanup keywords
@@ -803,7 +1090,7 @@ async function main() {
     }
 
     // TDD keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(tdd)\b|(테스트\s?퍼스트)/i) ||
+    if (hasActionableKeyword(cleanPrompt, /\b(tdd)\b|(테스트\s?퍼스트)|(テスト\s?ファースト)/i) ||
         hasActionableKeyword(cleanPrompt, /\btest\s+first\b/i) ||
         hasActionableKeyword(cleanPrompt, /\bred\s+green\b/i)) {
       matches.push({ name: 'tdd', args: '' });
@@ -811,30 +1098,30 @@ async function main() {
 
     // Code review keywords — skip when the prompt is echoed review-instruction text
     if (!isReviewSeedContext(cleanPrompt) &&
-        hasActionableKeyword(cleanPrompt, /\b(code\s+review|review\s+code)\b|(코드\s?리뷰)(?!어)/i)) {
+        hasActionableKeyword(cleanPrompt, /\b(code\s+review|review\s+code)\b|(코드\s?리뷰)(?!어)|(コード\s?レビュー)(?!ア)/i)) {
       matches.push({ name: 'code-review', args: '' });
     }
 
     // Security review keywords — skip when the prompt is echoed review-instruction text
     if (!isReviewSeedContext(cleanPrompt) &&
-        hasActionableKeyword(cleanPrompt, /\b(security\s+review|review\s+security)\b|(보안\s?리뷰)(?!어)/i)) {
+        hasActionableKeyword(cleanPrompt, /\b(security\s+review|review\s+security)\b|(보안\s?리뷰)(?!어)|(セキュリティ[ー]?\s?レビュー)(?!ア)/i)) {
       matches.push({ name: 'security-review', args: '' });
     }
 
     // Ultrathink keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(ultrathink)\b|(울트라씽크)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(ultrathink)\b|(울트라씽크)|(ウルトラシンク)/i)) {
       matches.push({ name: 'ultrathink', args: '' });
     }
 
     // Deepsearch keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(deepsearch)\b|(딥\s?서치)/i) ||
+    if (hasActionableKeyword(cleanPrompt, /\b(deepsearch)\b|(딥\s?서치)|(ディープ\s?サーチ)/i) ||
         hasActionableKeyword(cleanPrompt, /\bsearch\s+the\s+codebase\b/i) ||
         hasActionableKeyword(cleanPrompt, /\bfind\s+in\s+(the\s+)?codebase\b/i)) {
       matches.push({ name: 'deepsearch', args: '' });
     }
 
     // Analyze keywords
-    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]?analyze|deepanalyze)\b|(딥\s?분석)/i)) {
+    if (hasActionableKeyword(cleanPrompt, /\b(deep[\s-]?analyze|deepanalyze)\b|(딥\s?분석)|(ディープ\s?アナライズ)/i)) {
       matches.push({ name: 'analyze', args: '' });
     }
 
@@ -859,7 +1146,7 @@ async function main() {
 
     // Handle cancel specially - clear states and emit
     if (resolved.length > 0 && resolved[0].name === 'cancel') {
-      clearStateFiles(directory, ['ralph', 'autopilot', 'ultrawork']);
+      await clearStateFiles(directory, ['ralph', 'autopilot', 'ultrawork']);
       console.log(JSON.stringify(createHookOutput(createSkillInvocation('cancel', prompt))));
       return;
     }
@@ -868,14 +1155,14 @@ async function main() {
     const sessionId = data.sessionId || data.session_id || data.sessionid || '';
     const stateModes = resolved.filter(m => ['ralph', 'autopilot', 'ultrawork'].includes(m.name));
     for (const mode of stateModes) {
-      activateState(directory, prompt, mode.name, sessionId);
+      await activateState(directory, prompt, mode.name, sessionId);
     }
 
     // Special: Ralph with ultrawork (ralph always includes ultrawork)
     const hasRalph = resolved.some(m => m.name === 'ralph');
     const hasUltrawork = resolved.some(m => m.name === 'ultrawork');
     if (hasRalph && !hasUltrawork) {
-      activateState(directory, prompt, 'ultrawork', sessionId);
+      await activateState(directory, prompt, 'ultrawork', sessionId);
     }
 
     const additionalContextParts = [];

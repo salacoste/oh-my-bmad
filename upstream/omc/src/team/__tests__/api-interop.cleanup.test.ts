@@ -32,6 +32,28 @@ async function writeJson(cwd: string, relativePath: string, value: unknown): Pro
   await writeFile(fullPath, JSON.stringify(value, null, 2), 'utf-8');
 }
 
+
+async function writeText(cwd: string, relativePath: string, value: string): Promise<void> {
+  const fullPath = join(cwd, relativePath);
+  await mkdir(dirname(fullPath), { recursive: true });
+  await writeFile(fullPath, value, 'utf-8');
+}
+
+async function expectCleanupBlockedAndStatePreserved(cwd: string, teamName: string, evidencePath: string): Promise<void> {
+  const teamRoot = join(cwd, '.omc', 'state', 'team', teamName);
+
+  const result = await executeTeamApiOperation('cleanup', { team_name: teamName }, cwd);
+
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error('expected cleanup to be blocked');
+  expect(result.error.code).toBe('operation_failed');
+  expect(result.error.message).toContain('cleanup_blocked:worktree_cleanup_evidence_present');
+  await expect(readFile(join(teamRoot, 'orphan.txt'), 'utf-8')).resolves.toBe('stale');
+  await expect(readFile(evidencePath, 'utf-8')).resolves.toBeTruthy();
+  expect(shutdownTeamV2Mock).not.toHaveBeenCalled();
+  expect(shutdownTeamMock).not.toHaveBeenCalled();
+}
+
 describe('team api cleanup', () => {
   let cwd = '';
 
@@ -128,7 +150,7 @@ describe('team api cleanup', () => {
     expect(shutdownTeamV2Mock).toHaveBeenCalledWith(teamName, cwd);
   });
 
-  it('falls back to raw cleanup when no config exists', async () => {
+  it('falls back to raw cleanup when no config or native worktree evidence exists', async () => {
     cwd = await mkdtemp(join(tmpdir(), 'omc-api-cleanup-orphan-'));
     const teamName = 'cleanup-orphan';
     const teamRoot = join(cwd, '.omc', 'state', 'team', teamName);
@@ -141,5 +163,103 @@ describe('team api cleanup', () => {
     await expect(readFile(join(teamRoot, 'orphan.txt'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(shutdownTeamV2Mock).not.toHaveBeenCalled();
     expect(shutdownTeamMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks orphan-cleanup when worktree recovery evidence exists without explicit acknowledgement', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-api-orphan-cleanup-guard-'));
+    const teamName = 'orphan-cleanup-guard';
+    const teamRoot = join(cwd, '.omc', 'state', 'team', teamName);
+    await mkdir(teamRoot, { recursive: true });
+    await writeFile(join(teamRoot, 'orphan.txt'), 'stale', 'utf-8');
+    const backupPath = join(teamRoot, 'workers', 'worker-1', 'worktree-root-agents.json');
+    await writeJson(cwd, `.omc/state/team/${teamName}/workers/worker-1/worktree-root-agents.json`, {
+      worktreePath: join(cwd, '.omc-worktrees', `${teamName}-worker-1`),
+      hadOriginal: false,
+      installedContent: 'worker overlay',
+      installedAt: new Date().toISOString(),
+    });
+
+    const result = await executeTeamApiOperation('orphan-cleanup', { team_name: teamName }, cwd);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected orphan-cleanup to be blocked');
+    expect(result.error.code).toBe('invalid_input');
+    expect(result.error.message).toContain('orphan_cleanup_blocked:worktree_recovery_evidence_present');
+    await expect(readFile(join(teamRoot, 'orphan.txt'), 'utf-8')).resolves.toBe('stale');
+    await expect(readFile(backupPath, 'utf-8')).resolves.toBeTruthy();
+    expect(shutdownTeamV2Mock).not.toHaveBeenCalled();
+    expect(shutdownTeamMock).not.toHaveBeenCalled();
+  });
+
+  it('allows acknowledged orphan-cleanup to remove team state despite worktree recovery evidence', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-api-orphan-cleanup-ack-'));
+    const teamName = 'orphan-cleanup-ack';
+    const teamRoot = join(cwd, '.omc', 'state', 'team', teamName);
+    await mkdir(teamRoot, { recursive: true });
+    await writeFile(join(teamRoot, 'orphan.txt'), 'stale', 'utf-8');
+    await writeJson(cwd, `.omc/state/team/${teamName}/workers/worker-1/worktree-root-agents.json`, {
+      worktreePath: join(cwd, '.omc-worktrees', `${teamName}-worker-1`),
+      hadOriginal: false,
+      installedContent: 'worker overlay',
+      installedAt: new Date().toISOString(),
+    });
+
+    const result = await executeTeamApiOperation('orphan-cleanup', {
+      team_name: teamName,
+      acknowledge_lost_worktree_recovery: true,
+    }, cwd);
+
+    expect(result).toEqual({ ok: true, operation: 'orphan-cleanup', data: { team_name: teamName } });
+    await expect(readFile(join(teamRoot, 'orphan.txt'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(shutdownTeamV2Mock).not.toHaveBeenCalled();
+    expect(shutdownTeamMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks no-config cleanup when worktree metadata is unreadable', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-api-cleanup-corrupt-worktrees-'));
+    const teamName = 'cleanup-corrupt-worktrees';
+    const teamRoot = join(cwd, '.omc', 'state', 'team', teamName);
+    await mkdir(teamRoot, { recursive: true });
+    await writeFile(join(teamRoot, 'orphan.txt'), 'stale', 'utf-8');
+    const metadataPath = join(teamRoot, 'worktrees.json');
+    await writeFile(metadataPath, '{not-json', 'utf-8');
+
+    await expectCleanupBlockedAndStatePreserved(cwd, teamName, metadataPath);
+  });
+
+  it('blocks no-config cleanup when only a root AGENTS backup remains', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-api-cleanup-backup-only-'));
+    const teamName = 'cleanup-backup-only';
+    const teamRoot = join(cwd, '.omc', 'state', 'team', teamName);
+    await mkdir(teamRoot, { recursive: true });
+    await writeFile(join(teamRoot, 'orphan.txt'), 'stale', 'utf-8');
+    const backupPath = join(teamRoot, 'workers', 'worker-1', 'worktree-root-agents.json');
+    await writeJson(cwd, `.omc/state/team/${teamName}/workers/worker-1/worktree-root-agents.json`, {
+      worktreePath: join(cwd, '.omc-worktrees', `${teamName}-worker-1`),
+      hadOriginal: true,
+      originalContent: 'root agents',
+      installedContent: 'worker overlay',
+      installedAt: new Date().toISOString(),
+    });
+
+    await expectCleanupBlockedAndStatePreserved(cwd, teamName, backupPath);
+  });
+
+  it('blocks corrupt-config cleanup when native worktree recovery evidence exists', async () => {
+    cwd = await mkdtemp(join(tmpdir(), 'omc-api-cleanup-corrupt-config-'));
+    const teamName = 'cleanup-corrupt-config';
+    const teamRoot = join(cwd, '.omc', 'state', 'team', teamName);
+    await mkdir(teamRoot, { recursive: true });
+    await writeFile(join(teamRoot, 'orphan.txt'), 'stale', 'utf-8');
+    await writeText(cwd, `.omc/state/team/${teamName}/config.json`, '{bad-config');
+    const metadataPath = join(teamRoot, 'worktrees.json');
+    await writeJson(cwd, `.omc/state/team/${teamName}/worktrees.json`, [{
+      workerName: 'worker-1',
+      path: join(cwd, '.omc-worktrees', `${teamName}-worker-1`),
+      branch: `omc/${teamName}/worker-1`,
+      createdAt: new Date().toISOString(),
+    }]);
+
+    await expectCleanupBlockedAndStatePreserved(cwd, teamName, metadataPath);
   });
 });

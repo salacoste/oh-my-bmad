@@ -8,7 +8,7 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, readdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { randomBytes } from 'crypto';
-import { getWorktreeRoot } from '../lib/worktree-paths.js';
+import { getWorktreeRoot, getOmcRoot } from '../lib/worktree-paths.js';
 import {
   createArtifactDescriptorFromPath,
   type ArtifactDescriptor,
@@ -171,7 +171,7 @@ export interface BackgroundJobMeta {
  */
 export function getPromptsDir(workingDirectory?: string): string {
   const root = getWorktreeRoot(workingDirectory) || workingDirectory || process.cwd();
-  return join(root, '.omc', 'prompts');
+  return join(getOmcRoot(root), 'prompts');
 }
 
 /**

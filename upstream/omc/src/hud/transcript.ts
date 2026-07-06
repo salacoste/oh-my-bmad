@@ -510,13 +510,19 @@ function processEntry(
     if (block.type === "tool_use" && block.id && block.name) {
       result.toolCallCount++;
       result.lastToolName = block.name;
-      if (block.name === "Task" || block.name === "proxy_Task" || block.name === "Agent") {
+      if (
+        block.name === "Task" ||
+        block.name === "proxy_Task" ||
+        block.name === "Agent" ||
+        block.name === "proxy_Agent"
+      ) {
         result.agentCallCount++;
         const input = block.input as TaskInput | undefined;
         const agentEntry: ActiveAgent = {
           id: block.id,
           type: input?.subagent_type ?? "unknown",
           model: input?.model,
+          name: input?.name,
           description: input?.description,
           status: "running",
           startTime: timestamp,
@@ -702,6 +708,7 @@ interface ContentBlock {
 interface TaskInput {
   subagent_type?: string;
   model?: string;
+  name?: string;
   description?: string;
 }
 

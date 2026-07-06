@@ -94,9 +94,11 @@ describe('package dir resolution regression (#1322, #1324)', () => {
 
     expect(snippet).toContain('fileURLToPath(import.meta.url)');
     expect(snippet).toContain('currentDirName === "bridge"');
-    expect(snippet.indexOf('fileURLToPath(import.meta.url)')).toBeLessThan(
-      snippet.indexOf('return join7(__dirname2, "..", "..")'),
-    );
+    // esbuild numbers bundled helper imports (join7/join9/…) non-deterministically
+    // across bundle composition changes, so match the shape, not the exact alias.
+    const dirnameReturn = snippet.search(/return join\d*\(__dirname2, "\.\.", "\.\."\)/);
+    expect(dirnameReturn).toBeGreaterThan(-1);
+    expect(snippet.indexOf('fileURLToPath(import.meta.url)')).toBeLessThan(dirnameReturn);
   });
 
   it('loadAgentPrompt resolves prompts even when cwd is unrelated', () => {

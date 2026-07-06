@@ -42,15 +42,17 @@ Prefix: `oh-my-claudecode:`. See `agents/*.md` for full prompts.
 
 ### External AI / orchestration
 - `/team N:executor "task"`
-- `omc team N:codex|gemini "..."`
-- `omc ask <claude|codex|gemini>`
+- `omc team N:codex|gemini|antigravity "..."`
+- `omc ask <claude|codex|gemini|antigravity>`
 - `/ccg`
 
 ### OMC state
 - `state_read`, `state_write`, `state_clear`, `state_list_active`, `state_get_status`
 
-### Team runtime
-- `TeamCreate`, `TeamDelete`, `SendMessage`, `TaskCreate`, `TaskList`, `TaskGet`, `TaskUpdate`
+### Team orchestration
+- Claude Code 2.1.178+ uses one implicit agent team per session. Spawn teammates directly with Agent/Task using distinct `name` values; do not call removed `TeamCreate`/`TeamDelete` tools or rely on `team_name` for native routing.
+- Use TodoWrite or the available task-list surface for tracking only. Task-list tools do not create native teams.
+- Legacy OMC tmux/CLI teams are separate: use `/team` or `omc team` plus OMC state/API commands for external worker runs.
 
 ### Notepad
 - `notepad_read`, `notepad_write_priority`, `notepad_write_working`, `notepad_write_manual`
@@ -84,7 +86,7 @@ Invoke built-in workflows via `/oh-my-claudecode:<name>`.
 - `ai-slop-cleaner` — regression-safe cleanup workflow
 
 ### Utility skills
-- `ask`, `cancel`, `note`, `learner`, `omc-setup`, `mcp-setup`, `hud`, `omc-doctor`, `trace`, `release`, `project-session-manager`, `skill`, `writer-memory`, `configure-notifications`
+- `ask`, `cancel`, `note`, `skillify`, `learner` (deprecated alias), `omc-setup`, `mcp-setup`, `hud`, `omc-doctor`, `trace`, `release`, `project-session-manager`, `skill`, `writer-memory`, `configure-notifications`
 
 ### Keyword triggers kept compact in CLAUDE.md
 - `"autopilot"→autopilot`

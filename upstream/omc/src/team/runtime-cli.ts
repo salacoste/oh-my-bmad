@@ -6,9 +6,9 @@
  * Bundled as CJS via esbuild (scripts/build-runtime-cli.mjs).
  */
 
-import { readdirSync, readFileSync } from 'fs';
+import { readdirSync, readFileSync, statSync } from 'fs';
 import { readFile, rename, unlink, writeFile } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { startTeam, monitorTeam, shutdownTeam } from './runtime.js';
 import type { TeamConfig, TeamRuntime } from './runtime.js';
 import { appendTeamEvent } from './events.js';
@@ -28,6 +28,14 @@ interface CliInput {
   pollIntervalMs?: number;
   sentinelGateTimeoutMs?: number;
   sentinelGatePollIntervalMs?: number;
+  /** v2-only: when true, start the merge orchestrator (auto-merge + fan-out rebase). */
+  autoMerge?: boolean;
+}
+
+export function assertAutoMergeRuntimeSupported(useV2: boolean, autoMerge: boolean): void {
+  if (autoMerge && !useV2) {
+    throw new Error('--auto-merge requires runtime v2; unset OMC_RUNTIME_V2=0 or disable --auto-merge');
+  }
 }
 
 interface TaskResult {
@@ -188,18 +196,99 @@ async function writePanesFile(
   await rename(panesPath + '.tmp', panesPath);
 }
 
+const MAX_FALLBACK_SUMMARY_CHARS = 2000;
+
+/**
+ * A task "final" is terse when it carries no substantive content: empty/
+ * whitespace, or a bare acknowledgement like "Done." / "Ready." / "OK".
+ * Such finals hide the real work that lives in the task's `.output` file,
+ * so they are candidates for substitution. Anything else is treated as a
+ * substantive final and preserved as-is.
+ */
+export function isTerseFinalSummary(summary: string): boolean {
+  const trimmed = summary.trim();
+  if (trimmed.length === 0) return true;
+  const normalized = trimmed.toLowerCase().replace(/[\s.!]+$/g, '');
+  const TERSE_ACKS = new Set([
+    'done',
+    'ready',
+    'ok',
+    'okay',
+    'complete',
+    'completed',
+    'finished',
+    'success',
+    'all done',
+    'task complete',
+    'task completed',
+  ]);
+  return TERSE_ACKS.has(normalized);
+}
+
+/**
+ * Locate the newest `.output` file recorded for a task under the team's
+ * outputs directory and return its (bounded) content. Returns null when no
+ * non-empty output file exists. Best-effort: never throws.
+ */
+export function readTaskOutputFallback(
+  outputsDir: string,
+  teamName: string,
+  taskId: string,
+): string | null {
+  let entries: string[];
+  try {
+    entries = readdirSync(outputsDir);
+  } catch {
+    return null;
+  }
+  const prefix = `team-${teamName}-task-${taskId}-`;
+  const candidates = entries.filter(f => f.startsWith(prefix) && f.endsWith('.md'));
+  if (candidates.length === 0) return null;
+
+  let newest: { path: string; mtime: number } | null = null;
+  for (const name of candidates) {
+    const full = join(outputsDir, name);
+    try {
+      const mtime = statSync(full).mtimeMs;
+      if (!newest || mtime > newest.mtime) newest = { path: full, mtime };
+    } catch {
+      // skip unreadable entry
+    }
+  }
+  if (!newest) return null;
+
+  try {
+    const content = readFileSync(newest.path, 'utf-8').trim();
+    if (content.length === 0) return null;
+    return content.length > MAX_FALLBACK_SUMMARY_CHARS
+      ? content.slice(0, MAX_FALLBACK_SUMMARY_CHARS) + '\n... (truncated)'
+      : content;
+  } catch {
+    return null;
+  }
+}
+
 function collectTaskResults(stateRoot: string): TaskResult[] {
   const tasksDir = join(stateRoot, 'tasks');
+  const teamName = basename(stateRoot);
+  // stateRoot is `<omcRoot>/state/team/<teamName>`; outputs live at `<omcRoot>/outputs`.
+  const outputsDir = join(stateRoot, '..', '..', '..', 'outputs');
   try {
     const files = readdirSync(tasksDir).filter(f => f.endsWith('.json'));
     return files.map(f => {
       try {
         const raw = readFileSync(join(tasksDir, f), 'utf-8');
         const task = JSON.parse(raw) as { id?: string; status?: string; result?: string; summary?: string };
+        const taskId = task.id ?? f.replace('.json', '');
+        let summary = (task.result ?? task.summary) ?? '';
+        if (isTerseFinalSummary(summary)) {
+          const fallback = readTaskOutputFallback(outputsDir, teamName, taskId);
+          if (fallback) summary = fallback;
+        }
         return {
-          taskId: task.id ?? f.replace('.json', ''),
+          taskId,
           status: task.status ?? 'unknown',
-          summary: (task.result ?? task.summary) ?? '',
+          summary,
         };
       } catch {
         return { taskId: f.replace('.json', ''), status: 'unknown', summary: '' };
@@ -251,6 +340,7 @@ async function main(): Promise<void> {
     pollIntervalMs = 5000,
     sentinelGateTimeoutMs = 30_000,
     sentinelGatePollIntervalMs = 250,
+    autoMerge = false,
   } = input;
 
   const workerCount = input.workerCount ?? agentTypes.length;
@@ -266,6 +356,12 @@ async function main(): Promise<void> {
   };
 
   const useV2 = isRuntimeV2Enabled();
+  try {
+    assertAutoMergeRuntimeSupported(useV2, autoMerge);
+  } catch (err) {
+    process.stderr.write(`[runtime-cli] ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(1);
+  }
   let runtime: TeamRuntime | null = null;
   let finalStatus: 'completed' | 'failed' = 'failed';
   let pollActive = true;
@@ -345,6 +441,7 @@ async function main(): Promise<void> {
         tasks,
         cwd,
         newWindow,
+        autoMerge,
       });
       const v2PaneIds = v2Runtime.config.workers
         .map(w => w.pane_id)

@@ -8,7 +8,7 @@
 import { execFileSync } from 'child_process';
 import { randomUUID } from 'crypto';
 import { isTmuxAvailable, isClaudeAvailable, tmuxExec } from './tmux-utils.js';
-import { initInteropSession } from '../interop/shared-state.js';
+import { initInteropSession, getInteropDir } from '../interop/shared-state.js';
 
 export type InteropMode = 'off' | 'observe' | 'active';
 
@@ -104,7 +104,7 @@ export function launchInteropSession(cwd: string = process.cwd()): void {
 
   console.log(`Initializing interop session: ${sessionId}`);
   console.log(`Working directory: ${cwd}`);
-  console.log(`Config saved to: ${cwd}/.omc/state/interop/config.json\n`);
+  console.log(`Config saved to: ${getInteropDir(cwd)}/config.json\n`);
 
   // Get current pane ID
   let currentPaneId: string;

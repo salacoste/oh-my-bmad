@@ -38,7 +38,7 @@ function writeSubagentTrackingState(
   const stateDir = join(tempDir, '.omc', 'state');
   mkdirSync(stateDir, { recursive: true });
   writeFileSync(
-    join(stateDir, 'subagent-tracking.json'),
+    join(stateDir, 'subagent-tracking-state.json'),
     JSON.stringify(
       {
         agents,

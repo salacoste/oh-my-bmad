@@ -46,8 +46,10 @@ import {
 import { doctorConflictsCommand } from './commands/doctor-conflicts.js';
 import { doctorTeamRoutingCommand } from './commands/doctor-team-routing.js';
 import { sessionSearchCommand } from './commands/session-search.js';
+import { sessionFrictionReportCommand } from './commands/session-friction-report.js';
 import { teamCommand } from './commands/team.js';
 import { ralphthonCommand } from './commands/ralphthon.js';
+import { ultragoalCommand, ULTRAGOAL_HELP } from './commands/ultragoal.js';
 import {
   teleportCommand,
   teleportListCommand,
@@ -1141,7 +1143,9 @@ const sessionCmd = program
 Examples:
   $ omc session search "team leader stale"
   $ omc session search notify-hook --since 7d
-  $ omc session search provider-routing --project all --json`);
+  $ omc session search provider-routing --project all --json
+  $ omc session friction report --since 24h
+  $ omc session friction report --json`);
 
 sessionCmd
   .command('search <query>')
@@ -1162,6 +1166,27 @@ sessionCmd
       json: options.json,
       caseSensitive: options.caseSensitive,
       context: parseInt(options.context, 10),
+      workingDirectory: process.cwd(),
+    });
+  });
+
+sessionCmd
+  .command('friction')
+  .description('Report local session context-bloat and operator-friction signals')
+  .command('report')
+  .description('Summarize local session/context bloat and friction without raw prompt content')
+  .option('-l, --limit <number>', 'Maximum number of sessions to return', '10')
+  .option('-s, --session <id>', 'Restrict report to a specific session id')
+  .option('--since <duration|date>', 'Only include artifacts since a duration (e.g. 7d, 24h) or absolute date')
+  .option('--project <scope>', 'Project scope. Defaults to current project. Use "all" to inspect all local projects')
+  .option('--json', 'Output report as JSON')
+  .action(async (options) => {
+    await sessionFrictionReportCommand({
+      limit: parseInt(options.limit, 10),
+      session: options.session,
+      since: options.since,
+      project: options.project,
+      json: options.json,
       workingDirectory: process.cwd(),
     });
   });
@@ -1451,6 +1476,27 @@ program
   .argument('[args...]', 'ralphthon arguments')
   .action(async (args: string[]) => {
     await ralphthonCommand(args);
+  });
+
+/**
+ * Ultragoal command - Durable repo-native multi-goal workflow with Claude /goal handoff
+ *
+ * Writes plan/ledger artifacts under .omc/ultragoal/ and prints model-facing
+ * handoff text that tells the active Claude agent when to invoke /goal,
+ * checkpoint progress, and gate final completion behind ai-slop-cleaner +
+ * verification + $code-review evidence. The shell cannot mutate the Claude
+ * session /goal directive; this command only persists durable state.
+ */
+program
+  .command('ultragoal')
+  .description('Durable repo-native multi-goal workflow with Claude Code /goal handoff (see omc ultragoal help)')
+  .helpOption(false)
+  .allowUnknownOption(true)
+  .allowExcessArguments(true)
+  .argument('[args...]', 'ultragoal subcommand arguments')
+  .addHelpText('after', `\n${ULTRAGOAL_HELP}`)
+  .action(async (args: string[]) => {
+    await ultragoalCommand(args);
   });
 
 /**

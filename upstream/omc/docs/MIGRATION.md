@@ -7,6 +7,7 @@ This guide covers all migration paths for oh-my-claudecode. Find your current ve
 ## Table of Contents
 
 - [Unreleased: Team MCP Runtime Deprecation (CLI-Only)](#unreleased-team-mcp-runtime-deprecation-cli-only)
+- [Unreleased: Native Team Worktree Mode (Opt-In)](#unreleased-native-team-worktree-mode-opt-in)
 - [v3.5.3 → v3.5.5: Test Fixes & Cleanup](#v353--v355-test-fixes--cleanup)
 - [v3.5.2 → v3.5.3: Skill Consolidation](#v352--v353-skill-consolidation)
 - [v2.x → v3.0: Package Rename & Auto-Activation](#v2x--v30-package-rename--auto-activation)
@@ -62,6 +63,21 @@ omc team api list-tasks --input '{"team_name":"review-auth-flow"}' --json
 ```
 
 ---
+
+## Unreleased: Native Team Worktree Mode (Opt-In)
+
+### TL;DR
+
+`omc team` runtime-v2 is gaining an opt-in worker worktree mode. Worktree-backed workers run from dedicated git worktrees while task lifecycle, mailbox, status, and manifest files stay under the leader workspace's team-specific coordination root (`<repo>/.omc/state/team/<team-name>`).
+
+### Contract
+
+- Worktree paths use `<repo>/.omc/team/<team-name>/worktrees/<worker-name>`.
+- `OMC_TEAM_STATE_ROOT` points workers back to `<repo>/.omc/state/team/<team-name>`.
+- Status/config/manifest/identity surfaces should expose `workspace_mode`, `worktree_mode`, `team_state_root`, and worker worktree metadata.
+- Dirty worker worktrees are preserved and reported; they are not force-cleaned by shutdown/cleanup.
+
+See [Native Team Worktree Mode](TEAM-WORKTREE-MODE.md) for the full rollout contract and verification checklist.
 
 ## v3.5.3 → v3.5.5: Test Fixes & Cleanup
 
@@ -223,45 +239,17 @@ Agent naming is now strictly descriptive and role-based (for example: `architect
 
 Use canonical role names across prompts, commands, docs, and scripts. Avoid introducing alternate myth-style or legacy aliases in new content.
 
-### Directory Migration
+### Directory and Environment Migration
 
-Directory structures have been renamed for consistency with the new package name:
+No directory rename is required for the current OMC state paths. Keep existing `.omc/` project state and `~/.omc/` global state directories in place.
 
-#### Local Project Directories
+Only update genuinely legacy or custom paths that predate the OMC layout:
 
-- **Old**: `.omc/`
-- **New**: `.omc/`
+| Area | Old | New |
+| ---- | --- | --- |
+| Config file | `~/.claude/omc/mnemosyne.json` | `~/.claude/omc/learner.json` |
 
-#### Global Directories
-
-- **Old**: `~/.omc/`
-- **New**: `~/.omc/`
-
-#### Skills Directory
-
-- **Old**: `~/.claude/skills/omc-learned/`
-- **New**: `~/.claude/skills/omc-learned/`
-
-#### Config Files
-
-- **Old**: `~/.claude/omc/mnemosyne.json`
-- **New**: `~/.claude/omc/learner.json`
-
-### Environment Variables
-
-All environment variables have been renamed from `OMC_*` to `OMC_*`:
-
-| Old                      | New                      |
-| ------------------------ | ------------------------ |
-| OMC_USE_NODE_HOOKS       | OMC_USE_NODE_HOOKS       |
-| OMC_USE_BASH_HOOKS       | OMC_USE_BASH_HOOKS       |
-| OMC_PARALLEL_EXECUTION   | OMC_PARALLEL_EXECUTION   |
-| OMC_LSP_TOOLS            | OMC_LSP_TOOLS            |
-| OMC_MAX_BACKGROUND_TASKS | OMC_MAX_BACKGROUND_TASKS |
-| OMC_ROUTING_ENABLED      | OMC_ROUTING_ENABLED      |
-| OMC_ROUTING_DEFAULT_TIER | OMC_ROUTING_DEFAULT_TIER |
-| OMC_ESCALATION_ENABLED   | OMC_ESCALATION_ENABLED   |
-| OMC_DEBUG                | OMC_DEBUG                |
+Environment variables that already use the `OMC_` prefix do not need renaming. Continue using the existing documented variables such as `OMC_LSP_TOOLS`, `OMC_PARALLEL_EXECUTION`, and `OMC_DEBUG`.
 
 ### Command Mapping
 
@@ -341,10 +329,10 @@ Follow these steps to migrate your existing setup:
 #### 1. Uninstall Old Package (if installed via npm)
 
 ```bash
-npm uninstall -g oh-my-claudecode
+npm uninstall -g oh-my-claude-sisyphus
 ```
 
-#### 2. Install via Plugin System (Required)
+#### 2. Install via Plugin System
 
 ```bash
 # In Claude Code:
@@ -352,51 +340,25 @@ npm uninstall -g oh-my-claudecode
 /plugin install oh-my-claudecode
 ```
 
-> **Note**: npm/bun global installs are no longer supported. Use the plugin system.
+> **Note**: npm/bun global installs no longer provide the in-session plugin surface by themselves. Use the plugin system for slash commands, hooks, and skills; use the published npm package `oh-my-claude-sisyphus` when you need the terminal `omc` CLI.
 
-#### 3. Rename Local Project Directories
+#### 3. Preserve Existing OMC Directories
 
-If you have existing projects using the old directory structure:
+Do not rename current OMC directories. Existing project state in `.omc/` and global state in `~/.omc/` are already on the current paths.
 
-```bash
-# In each project directory
-mv .omc .omc
-```
+#### 4. Update Legacy Config Names
 
-#### 4. Rename Global Directories
+If you still have the pre-3.0 learner config filename, rename only that file:
 
 ```bash
-# Global configuration directory
-mv ~/.omc ~/.omc
-
-# Skills directory
-mv ~/.claude/skills/omc-learned ~/.claude/skills/omc-learned
-
-# Config directory
-mv ~/.claude/omc ~/.claude/omc
+mv ~/.claude/omc/mnemosyne.json ~/.claude/omc/learner.json
 ```
 
-#### 5. Update Environment Variables
+#### 5. Review Scripts and Configurations
 
-Update your shell configuration files (`.bashrc`, `.zshrc`, etc.):
+Search your local scripts and docs for stale references to removed commands or the old config filename. Keep the npm package name as `oh-my-claude-sisyphus` for npm/bun installs; do not rewrite it to the project/plugin brand name.
 
-```bash
-# Replace all OMC_* variables with OMC_*
-# Example:
-# OLD: export OMC_ROUTING_ENABLED=true
-# NEW: export OMC_ROUTING_ENABLED=true
-```
-
-#### 6. Update Scripts and Configurations
-
-Search for and update any references to:
-
-- Package name: `oh-my-claudecode` → `oh-my-claudecode`
-- Agent names: Use the mapping table above
-- Commands: Use the new slash commands
-- Directory paths: Update `.omc` → `.omc`
-
-#### 7. Run One-Time Setup
+#### 6. Run One-Time Setup
 
 In Claude Code, just say "setup omc", "omc setup", or any natural language equivalent.
 
@@ -412,10 +374,10 @@ This:
 
 After migration, verify your setup:
 
-1. **Check installation**:
+1. **Check CLI installation, if you use the npm CLI surface**:
 
    ```bash
-   npm list -g oh-my-claudecode
+   npm list -g oh-my-claude-sisyphus
    ```
 
 2. **Verify directories exist**:
@@ -457,9 +419,9 @@ Your request              Claude's action
 
 You don't ask for delegation - it happens automatically.
 
-#### 3. Learned Skills (`/oh-my-claudecode:learner`)
+#### 3. Learned Skills (`/oh-my-claudecode:skillify`)
 
-Extract reusable insights from problem-solving:
+Extract reusable insights from problem-solving. `/oh-my-claudecode:learner` remains as a deprecated compatibility alias:
 
 ```bash
 # After solving a tricky bug:
@@ -472,7 +434,7 @@ Next time keywords match → Solution auto-injects
 
 Storage:
 
-- **Project-level**: `.omc/skills/` (version-controlled)
+- **Project-level**: `.omc/skills/` (intended to be committed with the repo; uncommitted worktree-local skills disappear when that worktree is removed)
 - **User-level**: `~/.claude/skills/omc-learned/` (portable)
 
 #### 4. HUD Statusline (Real-Time Orchestration)
@@ -603,7 +565,7 @@ Background agents can be resumed with full context via `resume-session` tool.
 Version 3.1 is a drop-in upgrade. No migration required!
 
 ```bash
-npm update -g oh-my-claudecode
+npm update -g oh-my-claude-sisyphus
 ```
 
 All existing configurations, plans, and workflows continue working unchanged.
@@ -711,7 +673,7 @@ Users set their default mode preference via `/oh-my-claudecode:omc-setup`.
 Version 3.4.0 is a drop-in upgrade. No migration required!
 
 ```bash
-npm update -g oh-my-claudecode
+npm update -g oh-my-claude-sisyphus
 ```
 
 All existing configurations, plans, and workflows continue working unchanged.
@@ -777,10 +739,10 @@ Once upgraded, you automatically gain access to:
 
 After upgrading, verify new features:
 
-1. **Check installation**:
+1. **Check CLI installation, if you use the npm CLI surface**:
 
    ```bash
-   npm list -g oh-my-claudecode
+   npm list -g oh-my-claude-sisyphus
    ```
 
 2. **Test unified cancel**:

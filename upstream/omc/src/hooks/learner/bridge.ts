@@ -18,7 +18,8 @@ import {
 } from "fs";
 import { join, dirname, basename } from "path";
 import { homedir } from "os";
-import { OmcPaths } from "../../lib/worktree-paths.js";
+import { OmcPaths, getOmcRoot } from "../../lib/worktree-paths.js";
+import { parseYamlMetadata } from "./parser.js";
 import { expandTriggers } from "./transliteration-map.js";
 
 // Re-export constants
@@ -86,6 +87,8 @@ interface CachedSkillData {
   triggersLower: string[];
   matching: "exact" | "fuzzy" | undefined;
   content: string;
+  description?: string;
+  summary?: string;
   scope: "user" | "project";
 }
 
@@ -124,7 +127,9 @@ function getSkillMetadataCache(projectRoot: string): CachedSkillData[] {
       const parsed = parseSkillFile(content);
       if (!parsed) continue;
 
-      const triggers = parsed.metadata.triggers ?? [];
+      const triggers = (parsed.metadata.triggers ?? [])
+        .map((trigger) => trigger.trim())
+        .filter(Boolean);
       if (triggers.length === 0) continue;
 
       const name =
@@ -137,6 +142,8 @@ function getSkillMetadataCache(projectRoot: string): CachedSkillData[] {
         triggersLower: expandTriggers(triggers.map((t) => t.toLowerCase())),
         matching: parsed.metadata.matching,
         content: parsed.content,
+        description: parsed.metadata.description,
+        summary: summarizeSkillContent(parsed.content),
         scope: candidate.scope,
       });
     } catch {
@@ -167,8 +174,13 @@ export function clearLevenshteinCache(): void {
   levenshteinCache.clear();
 }
 
-/** State file path */
-const STATE_FILE = `${OmcPaths.STATE}/skill-sessions.json`;
+function summarizeSkillContent(content: string): string {
+  const firstUsefulLine = content
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^#+\s*/, "").trim())
+    .find((line) => line && !line.startsWith("---"));
+  return (firstUsefulLine || content.replace(/\s+/g, " ").trim()).slice(0, 240);
+}
 
 // =============================================================================
 // Types
@@ -202,6 +214,8 @@ export interface MatchedSkill {
   path: string;
   name: string;
   content: string;
+  description?: string;
+  summary?: string;
   score: number;
   scope: "user" | "project";
   triggers: string[];
@@ -225,7 +239,7 @@ interface SessionState {
  * Get state file path for a project.
  */
 function getStateFilePath(projectRoot: string): string {
-  return join(projectRoot, STATE_FILE);
+  return join(getOmcRoot(projectRoot), "state", "skill-sessions.json");
 }
 
 /**
@@ -457,7 +471,7 @@ export function parseSkillFile(content: string): ParseResult | null {
   const errors: string[] = [];
 
   try {
-    const metadata = parseYamlMetadata(yamlContent);
+    const metadata = parseYamlMetadata(yamlContent) as ParseResult["metadata"];
     return {
       metadata,
       content: body,
@@ -472,128 +486,6 @@ export function parseSkillFile(content: string): ParseResult | null {
       errors: [`YAML parse error: ${e}`],
     };
   }
-}
-
-/**
- * Simple YAML parser for skill frontmatter.
- * Handles: id, name, description, triggers, tags, matching, model, agent
- */
-function parseYamlMetadata(yamlContent: string): ParseResult["metadata"] {
-  const lines = yamlContent.split("\n");
-  const metadata: ParseResult["metadata"] = {};
-
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    const colonIndex = line.indexOf(":");
-
-    if (colonIndex === -1) {
-      i++;
-      continue;
-    }
-
-    const key = line.slice(0, colonIndex).trim();
-    const rawValue = line.slice(colonIndex + 1).trim();
-
-    switch (key) {
-      case "id":
-        metadata.id = parseStringValue(rawValue);
-        break;
-      case "name":
-        metadata.name = parseStringValue(rawValue);
-        break;
-      case "description":
-        metadata.description = parseStringValue(rawValue);
-        break;
-      case "model":
-        metadata.model = parseStringValue(rawValue);
-        break;
-      case "agent":
-        metadata.agent = parseStringValue(rawValue);
-        break;
-      case "matching":
-        metadata.matching = parseStringValue(rawValue) as "exact" | "fuzzy";
-        break;
-      case "triggers":
-      case "tags": {
-        const { value, consumed } = parseArrayValue(rawValue, lines, i);
-        if (key === "triggers") {
-          metadata.triggers = Array.isArray(value)
-            ? value
-            : value
-              ? [value]
-              : [];
-        } else {
-          metadata.tags = Array.isArray(value) ? value : value ? [value] : [];
-        }
-        i += consumed - 1;
-        break;
-      }
-    }
-
-    i++;
-  }
-
-  return metadata;
-}
-
-function parseStringValue(value: string): string {
-  if (!value) return "";
-  if (
-    (value.startsWith('"') && value.endsWith('"')) ||
-    (value.startsWith("'") && value.endsWith("'"))
-  ) {
-    return value.slice(1, -1);
-  }
-  return value;
-}
-
-function parseArrayValue(
-  rawValue: string,
-  lines: string[],
-  currentIndex: number,
-): { value: string | string[]; consumed: number } {
-  // Inline array: ["a", "b"]
-  if (rawValue.startsWith("[")) {
-    const endIdx = rawValue.lastIndexOf("]");
-    if (endIdx === -1) return { value: [], consumed: 1 };
-    const content = rawValue.slice(1, endIdx).trim();
-    if (!content) return { value: [], consumed: 1 };
-
-    const items = content
-      .split(",")
-      .map((s) => parseStringValue(s.trim()))
-      .filter(Boolean);
-    return { value: items, consumed: 1 };
-  }
-
-  // Multi-line array
-  if (!rawValue || rawValue === "") {
-    const items: string[] = [];
-    let consumed = 1;
-
-    for (let j = currentIndex + 1; j < lines.length; j++) {
-      const nextLine = lines[j];
-      const arrayMatch = nextLine.match(/^\s+-\s*(.*)$/);
-
-      if (arrayMatch) {
-        const itemValue = parseStringValue(arrayMatch[1].trim());
-        if (itemValue) items.push(itemValue);
-        consumed++;
-      } else if (nextLine.trim() === "") {
-        consumed++;
-      } else {
-        break;
-      }
-    }
-
-    if (items.length > 0) {
-      return { value: items, consumed };
-    }
-  }
-
-  // Single value
-  return { value: parseStringValue(rawValue), consumed: 1 };
 }
 
 // =============================================================================
@@ -708,6 +600,8 @@ export function matchSkillsForInjection(
         path: skill.path,
         name: skill.name,
         content: skill.content,
+        description: skill.description,
+        summary: skill.summary,
         score: totalScore,
         scope: skill.scope,
         triggers: skill.triggers,

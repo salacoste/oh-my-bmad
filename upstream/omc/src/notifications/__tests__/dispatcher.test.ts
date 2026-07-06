@@ -13,10 +13,32 @@ import type {
 vi.mock("https", () => {
   const EventEmitter = require("events");
   return {
-    request: vi.fn((_opts: unknown, callback: (res: unknown) => void) => {
+    request: vi.fn((opts: { createConnection?: (opts: unknown, callback: (error: Error | null) => void) => void }, callback: (res: unknown) => void) => {
       const req = new EventEmitter();
       req.write = vi.fn();
+      req.emit = req.emit.bind(req);
       req.end = vi.fn(() => {
+        if (typeof opts?.createConnection === "function") {
+          opts.createConnection(opts, (error: Error | null) => {
+            if (error) {
+              req.emit("error", error);
+              return;
+            }
+            const res = new EventEmitter();
+            res.statusCode = 200;
+            res.resume = vi.fn();
+            callback(res);
+            setImmediate(() => {
+              const responseBody = JSON.stringify({
+                ok: true,
+                result: { message_id: 12345 },
+              });
+              res.emit("data", Buffer.from(responseBody));
+              res.emit("end");
+            });
+          });
+          return;
+        }
         // Simulate successful response by default
         const res = new EventEmitter();
         res.statusCode = 200;
@@ -34,6 +56,38 @@ vi.mock("https", () => {
       });
       req.destroy = vi.fn();
       return req;
+    }),
+  };
+});
+
+vi.mock("net", () => {
+  const EventEmitter = require("events");
+  return {
+    connect: vi.fn(() => {
+      const socket = new EventEmitter();
+      socket.write = vi.fn(() => {
+        setImmediate(() => socket.emit("data", Buffer.from("HTTP/1.1 200 OK\r\n\r\n")));
+      });
+      socket.destroy = vi.fn();
+      setImmediate(() => socket.emit("connect"));
+      return socket;
+    }),
+  };
+});
+
+vi.mock("tls", () => {
+  const EventEmitter = require("events");
+  return {
+    connect: vi.fn((...args: unknown[]) => {
+      const socket = new EventEmitter();
+      socket.write = vi.fn();
+      socket.destroy = vi.fn();
+      const callback = args.find((arg) => typeof arg === "function") as (() => void) | undefined;
+      setImmediate(() => {
+        socket.emit("secureConnect");
+        callback?.();
+      });
+      return socket;
     }),
   };
 });
@@ -386,8 +440,19 @@ describe("sendDiscordBot", () => {
 });
 
 describe("sendTelegram", () => {
+  beforeEach(() => {
+    vi.stubEnv("HTTPS_PROXY", "");
+    vi.stubEnv("https_proxy", "");
+    vi.stubEnv("HTTP_PROXY", "");
+    vi.stubEnv("http_proxy", "");
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("no_proxy", "");
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it("returns not configured when disabled", async () => {
@@ -451,6 +516,105 @@ describe("sendTelegram", () => {
     expect(request).toHaveBeenCalled();
     const callArgs = vi.mocked(request).mock.calls[0][0];
     expect(callArgs).toHaveProperty("family", 4);
+  });
+
+  it("adds createConnection when HTTPS_PROXY is configured", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.example:8080");
+    const { request } = await import("https");
+    const config: TelegramNotificationConfig = {
+      enabled: true,
+      botToken: "123456:ABCdef",
+      chatId: "999",
+    };
+    await sendTelegram(config, basePayload);
+
+    const callArgs = vi
+      .mocked(request)
+      .mock.calls.at(-1)![0] as unknown as Record<string, unknown>;
+    expect(callArgs).toHaveProperty("createConnection");
+    expect(callArgs).not.toHaveProperty("agent");
+  });
+
+  it("falls back to HTTP_PROXY when HTTPS_PROXY is unset", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://proxy.example:3128");
+    const { request } = await import("https");
+    const config: TelegramNotificationConfig = {
+      enabled: true,
+      botToken: "123456:ABCdef",
+      chatId: "999",
+    };
+    await sendTelegram(config, basePayload);
+
+    const callArgs = vi
+      .mocked(request)
+      .mock.calls.at(-1)![0] as unknown as Record<string, unknown>;
+    expect(callArgs).toHaveProperty("createConnection");
+  });
+
+  it("bypasses proxy when NO_PROXY matches api.telegram.org", async () => {
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.example:8080");
+    vi.stubEnv("NO_PROXY", "localhost,api.telegram.org");
+    const { request } = await import("https");
+    const config: TelegramNotificationConfig = {
+      enabled: true,
+      botToken: "123456:ABCdef",
+      chatId: "999",
+    };
+    await sendTelegram(config, basePayload);
+
+    const callArgs = vi
+      .mocked(request)
+      .mock.calls.at(-1)![0] as unknown as Record<string, unknown>;
+    expect(callArgs).not.toHaveProperty("createConnection");
+    expect(callArgs).not.toHaveProperty("agent");
+  });
+
+  it("bypasses proxy when NO_PROXY matches parent domain", async () => {
+    vi.stubEnv("https_proxy", "http://proxy.example:8080");
+    vi.stubEnv("no_proxy", ".telegram.org");
+    const { request } = await import("https");
+    const config: TelegramNotificationConfig = {
+      enabled: true,
+      botToken: "123456:ABCdef",
+      chatId: "999",
+    };
+    await sendTelegram(config, basePayload);
+
+    const callArgs = vi
+      .mocked(request)
+      .mock.calls.at(-1)![0] as unknown as Record<string, unknown>;
+    expect(callArgs).not.toHaveProperty("createConnection");
+  });
+
+  it("fails promptly when proxy accepts CONNECT but never responds", async () => {
+    vi.useFakeTimers();
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.example:8080");
+    const { connect } = await import("net");
+    const EventEmitter = require("events");
+    const stalledSocket = new EventEmitter();
+    stalledSocket.write = vi.fn();
+    stalledSocket.destroy = vi.fn();
+    vi.mocked(connect).mockImplementationOnce(() => {
+      setImmediate(() => stalledSocket.emit("connect"));
+      return stalledSocket as ReturnType<typeof connect>;
+    });
+
+    const config: TelegramNotificationConfig = {
+      enabled: true,
+      botToken: "123456:ABCdef",
+      chatId: "999",
+    };
+    const resultPromise = sendTelegram(config, basePayload);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await resultPromise;
+
+    expect(result).toEqual({
+      platform: "telegram",
+      success: false,
+      error: "Proxy CONNECT timeout",
+    });
+    expect(stalledSocket.destroy).toHaveBeenCalledOnce();
   });
 
   it("handles response parse failure gracefully", async () => {
@@ -1320,8 +1484,8 @@ describe("dispatcher mention separation", () => {
       path.join(import.meta.dirname, "..", "dispatcher.ts"),
       "utf-8",
     );
-    // Dispatcher should not reference process.env at all - mention resolution is in config layer
-    expect(dispatcherSource).not.toContain("process.env");
+    // Dispatcher should not read mention env vars; mention resolution is in config layer.
+    expect(dispatcherSource).not.toContain("OMC_DISCORD_MENTION");
   });
 
   it("sendDiscordBot uses config.mention directly without env lookup", async () => {

@@ -15,9 +15,12 @@ import {
   rmSync,
   existsSync,
   readFileSync,
+  readdirSync,
   symlinkSync,
 } from "fs";
 import { join } from "path";
+import { contextCollector } from "../../../features/context-injector/index.js";
+import { processMessageForSkills, clearSkillSession } from "../../../hooks/learner/index.js";
 import { tmpdir } from "os";
 import {
   findSkillFiles,
@@ -34,6 +37,8 @@ describe("Skill Bridge Module", () => {
 
   beforeEach(() => {
     clearSkillMetadataCache();
+    clearSkillSession("emitted-learner-session");
+    contextCollector.clear("emitted-learner-session");
     originalCwd = process.cwd();
     testProjectRoot = join(tmpdir(), `omc-bridge-test-${Date.now()}`);
     mkdirSync(testProjectRoot, { recursive: true });
@@ -42,6 +47,8 @@ describe("Skill Bridge Module", () => {
 
   afterEach(() => {
     process.chdir(originalCwd);
+    contextCollector.clear("emitted-learner-session");
+    clearSkillSession("emitted-learner-session");
     if (existsSync(testProjectRoot)) {
       rmSync(testProjectRoot, { recursive: true, force: true });
     }
@@ -245,6 +252,110 @@ Content`;
       expect(matches[0].score).toBeGreaterThan(0);
     });
 
+    it("returns compact descriptor metadata for matched skills", () => {
+      const skillsDir = join(testProjectRoot, ".omc", "skills");
+      mkdirSync(skillsDir, { recursive: true });
+
+      const longBody = `${"Full body secret. ".repeat(200)}Do not inject this whole body.`;
+      writeFileSync(
+        join(skillsDir, "descriptor-skill.md"),
+        `---
+name: Descriptor Skill
+description: Use descriptor metadata only
+triggers:
+  - descriptor
+---
+${longBody}`,
+      );
+
+      const matches = matchSkillsForInjection(
+        "please use descriptor guidance",
+        testProjectRoot,
+        "descriptor-session",
+      );
+
+      expect(matches).toHaveLength(1);
+      expect(matches[0].description).toBe("Use descriptor metadata only");
+      expect(matches[0].summary).toBeTruthy();
+      expect(matches[0].content).toContain("Full body secret");
+    });
+
+    it("registers emitted learner context as compact descriptors within budget", () => {
+      const skillsDir = join(testProjectRoot, ".omc", "skills");
+      mkdirSync(skillsDir, { recursive: true });
+
+      const giantBody = `${"Sensitive full body content. ".repeat(400)}Tail.`;
+      for (const [name, trigger] of [
+        ["Alpha Skill", "alpha"],
+        ["Beta Skill", "beta"],
+        ["Gamma Skill", "gamma"],
+      ] as const) {
+        writeFileSync(
+          join(skillsDir, `${trigger}.md`),
+          `---
+id: ${trigger}
+name: ${name}
+description: ${name} summary
+source: manual
+triggers:
+  - ${trigger}
+---
+${giantBody}`,
+        );
+      }
+
+      const result = processMessageForSkills(
+        "alpha beta gamma",
+        "emitted-learner-session",
+        testProjectRoot,
+      );
+      const pending = contextCollector.getPending("emitted-learner-session");
+
+      expect(result.injected).toBe(3);
+      expect(pending.hasContent).toBe(true);
+      expect(pending.merged).toContain("Compact descriptors only");
+      expect(pending.merged).toContain("Alpha Skill summary");
+      expect(pending.merged).toContain("Load instructions:");
+      expect(pending.merged).not.toContain("Sensitive full body content. Sensitive full body content. Sensitive full body content.");
+      expect(pending.merged.length).toBeLessThanOrEqual(3000);
+    });
+
+    it("keeps learner omission text inside the descriptor budget", () => {
+      const skillsDir = join(testProjectRoot, ".omc", "skills");
+      mkdirSync(skillsDir, { recursive: true });
+
+      const largeSummary = "Summary ".repeat(220);
+      for (const [name, trigger] of [
+        ["Delta Skill", "delta"],
+        ["Epsilon Skill", "epsilon"],
+        ["Zeta Skill", "zeta"],
+        ["Eta Skill", "eta"],
+      ] as const) {
+        writeFileSync(
+          join(skillsDir, `${trigger}.md`),
+          `---
+id: ${trigger}
+name: ${name}
+description: ${largeSummary}
+source: manual
+triggers:
+  - ${trigger}
+---
+Body`,
+        );
+      }
+
+      processMessageForSkills(
+        "delta epsilon zeta eta",
+        "emitted-learner-session",
+        testProjectRoot,
+      );
+      const pending = contextCollector.getPending("emitted-learner-session");
+
+      expect(pending.merged.length).toBeLessThanOrEqual(3000);
+      expect(pending.merged).toContain("Additional learned skills omitted");
+    });
+
     it("should not match when triggers dont match", () => {
       const skillsDir = join(testProjectRoot, ".omc", "skills");
       mkdirSync(skillsDir, { recursive: true });
@@ -261,6 +372,57 @@ Content`;
       );
 
       expect(matches).toHaveLength(0);
+    });
+
+    it("should not match skills with empty scalar triggers", () => {
+      const skillsDir = join(testProjectRoot, ".omc", "skills");
+      mkdirSync(skillsDir, { recursive: true });
+
+      writeFileSync(
+        join(skillsDir, "blank-trigger-skill.md"),
+        "---\nname: Blank Trigger\ntriggers:\n---\nBlank trigger instructions",
+      );
+
+      const matches = matchSkillsForInjection(
+        "Help me with React components",
+        testProjectRoot,
+        "blank-trigger-session",
+      );
+
+      expect(matches).toHaveLength(0);
+    });
+
+    it("should ignore blank trigger entries while matching valid triggers", () => {
+      const skillsDir = join(testProjectRoot, ".omc", "skills");
+      mkdirSync(skillsDir, { recursive: true });
+
+      writeFileSync(
+        join(skillsDir, "mixed-trigger-skill.md"),
+        `---
+name: Mixed Trigger
+triggers:
+  -
+  - ""
+  - "   "
+  - deploy
+---
+Mixed trigger instructions`,
+      );
+
+      const unrelatedMatches = matchSkillsForInjection(
+        "Help me with React components",
+        testProjectRoot,
+        "mixed-trigger-unrelated-session",
+      );
+      const validMatches = matchSkillsForInjection(
+        "Please deploy the app",
+        testProjectRoot,
+        "mixed-trigger-valid-session",
+      );
+
+      expect(unrelatedMatches).toHaveLength(0);
+      expect(validMatches).toHaveLength(1);
+      expect(validMatches[0].triggers).toEqual(["deploy"]);
     });
 
     it("should use fuzzy matching when opt-in", () => {
@@ -352,6 +514,36 @@ Content`;
       expect(state.sessions["persist-test"].injectedPaths).toContain(
         "/path/to/persist.md",
       );
+    });
+
+    it("does not write project-local .omc when OMC_STATE_DIR is set", () => {
+      const centralizedDir = join(tmpdir(), `omc-state-dir-${Date.now()}`);
+      mkdirSync(centralizedDir, { recursive: true });
+      const previousOmcStateDir = process.env.OMC_STATE_DIR;
+      process.env.OMC_STATE_DIR = centralizedDir;
+      try {
+        markSkillsInjected(
+          "omc-state-dir-test",
+          ["/path/to/centralized.md"],
+          testProjectRoot,
+        );
+
+        // State must NOT land in the project-local .omc/
+        expect(existsSync(join(testProjectRoot, ".omc"))).toBe(false);
+
+        // State must land somewhere under the centralized dir
+        const found = readdirSync(centralizedDir, { recursive: true })
+          .map((f) => String(f))
+          .filter((f) => f.endsWith("skill-sessions.json"));
+        expect(found).toHaveLength(1);
+      } finally {
+        if (previousOmcStateDir === undefined) {
+          delete process.env.OMC_STATE_DIR;
+        } else {
+          process.env.OMC_STATE_DIR = previousOmcStateDir;
+        }
+        rmSync(centralizedDir, { recursive: true, force: true });
+      }
     });
 
     it("should not re-inject already injected skills", () => {

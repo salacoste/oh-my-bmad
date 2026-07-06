@@ -10,7 +10,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from 'fs';
-import { join, dirname, basename } from 'path';
+import { join, dirname, basename, resolve, relative, isAbsolute, win32 } from 'path';
 import { fileURLToPath } from 'url';
 import type { BuiltinSkill } from './types.js';
 import { parseFrontmatter, parseFrontmatterAliases } from '../../utils/frontmatter.js';
@@ -73,7 +73,6 @@ const SKININTHEGAMEBROS_ONLY_SKILLS = new Set([
   'remember',
   'verify',
   'debug',
-  'skillify',
 ]);
 
 const DEFAULT_DEEP_INTERVIEW_AMBIGUITY_THRESHOLD = 0.2;
@@ -118,25 +117,81 @@ function readDeepInterviewThresholdFromSettings(path: string): number | null {
     : null;
 }
 
-function getDeepInterviewAmbiguityThreshold(): number {
-  const profileThreshold = readDeepInterviewThresholdFromSettings(join(getClaudeConfigDir(), 'settings.json'));
-  const projectThreshold = readDeepInterviewThresholdFromSettings(join(process.cwd(), '.claude', 'settings.json'));
-  return projectThreshold ?? profileThreshold ?? DEFAULT_DEEP_INTERVIEW_AMBIGUITY_THRESHOLD;
+type DeepInterviewThresholdResolution = {
+  threshold: number;
+  source: string;
+};
+
+function getDeepInterviewAmbiguityThresholdResolution(): DeepInterviewThresholdResolution {
+  const profileSettingsPath = join(getClaudeConfigDir(), 'settings.json');
+  const projectSettingsPath = join(process.cwd(), '.claude', 'settings.json');
+  const profileThreshold = readDeepInterviewThresholdFromSettings(profileSettingsPath);
+  const projectThreshold = readDeepInterviewThresholdFromSettings(projectSettingsPath);
+
+  if (projectThreshold !== null) {
+    return { threshold: projectThreshold, source: './.claude/settings.json' };
+  }
+
+  if (profileThreshold !== null) {
+    return { threshold: profileThreshold, source: '[$CLAUDE_CONFIG_DIR|~/.claude]/settings.json' };
+  }
+
+  return { threshold: DEFAULT_DEEP_INTERVIEW_AMBIGUITY_THRESHOLD, source: 'default' };
 }
 
 function formatThresholdPercent(threshold: number): string {
   return `${(threshold * 100).toFixed(2).replace(/\.?0+$/, '')}%`;
 }
 
+function pathLooksWindows(value: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith('\\\\');
+}
+
+export function isPathInsideOrEqual(parentPath: string, candidatePath: string): boolean {
+  const pathApi = pathLooksWindows(parentPath) || pathLooksWindows(candidatePath) ? win32 : { relative, isAbsolute };
+  const rel = pathApi.relative(parentPath, candidatePath);
+  return rel === '' || (!rel.startsWith('..') && !pathApi.isAbsolute(rel));
+}
+
+function getFrontmatterString(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readSkillBodyOverride(skillPath: string, metadata: Record<string, unknown>, fallbackBody: string): string {
+  const bodyPath = getFrontmatterString(metadata, 'omc-full-body');
+  if (!bodyPath) {
+    return fallbackBody;
+  }
+
+  const skillDir = dirname(skillPath);
+  const resolvedBodyPath = resolve(skillDir, bodyPath);
+  const packageRoot = resolve(getPackageDir());
+
+  if (!isPathInsideOrEqual(packageRoot, resolvedBodyPath)) {
+    return fallbackBody;
+  }
+
+  try {
+    const fullContent = readFileSync(resolvedBodyPath, 'utf-8');
+    const { body } = parseFrontmatter(fullContent);
+    return body;
+  } catch {
+    return fallbackBody;
+  }
+}
+
 function applyDeepInterviewRuntimeSettings(template: string): string {
-  const threshold = getDeepInterviewAmbiguityThreshold();
+  const { threshold, source } = getDeepInterviewAmbiguityThresholdResolution();
   const percent = formatThresholdPercent(threshold);
 
   const withResolvedPlaceholders = template
     .replaceAll('<resolvedThreshold>', `${threshold}`)
-    .replaceAll('<resolvedThresholdPercent>', percent);
+    .replaceAll('<resolvedThresholdPercent>', percent)
+    .replaceAll('<resolvedThresholdSource>', source);
 
   const withRuntimeSettings = withResolvedPlaceholders.includes('3.5. **Load runtime settings**:')
+    || withResolvedPlaceholders.includes('## Phase 0: Resolve Ambiguity Threshold')
     ? withResolvedPlaceholders
     : withResolvedPlaceholders.replace(
       '4. **Initialize state** via `state_write(mode="deep-interview")`:',
@@ -161,9 +216,14 @@ function applyDeepInterviewRuntimeSettings(template: string): string {
     .replace('ambiguity ≤ 20%', `ambiguity ≤ ${percent}`);
 }
 
+function normalizeSkillNameForRuntimeRendering(skillName: string): string {
+  return skillName.trim().toLowerCase().replace(/^oh-my-claudecode:/, '').replace(/^omc:/, '');
+}
+
 export function renderBundledSkillBody(skillName: string, body: string): string {
+  const normalizedSkillName = normalizeSkillNameForRuntimeRendering(skillName);
   const rewrittenBody = rewriteOmcCliInvocations(body.trim());
-  return skillName === 'deep-interview'
+  return normalizedSkillName === 'deep-interview' || normalizedSkillName === 'deep-dive'
     ? applyDeepInterviewRuntimeSettings(rewrittenBody)
     : rewrittenBody;
 }
@@ -178,7 +238,8 @@ function loadSkillFromFile(skillPath: string, skillName: string): BuiltinSkill[]
     const resolvedName = metadata.name || skillName;
     const safePrimaryName = toSafeSkillName(resolvedName);
     const pipeline = parseSkillPipelineMetadata(metadata);
-    const renderedBody = renderBundledSkillBody(safePrimaryName, body);
+    const fullBody = readSkillBodyOverride(skillPath, metadata, body);
+    const renderedBody = renderBundledSkillBody(safePrimaryName, fullBody);
     const template = [
       renderedBody,
       renderSkillRuntimeGuidance(safePrimaryName),
@@ -239,7 +300,14 @@ function loadSkillsFromDirectory(): BuiltinSkill[] {
   const seenNames = new Set<string>();
 
   try {
-    const entries = readdirSync(SKILLS_DIR, { withFileTypes: true });
+    const entries = readdirSync(SKILLS_DIR, { withFileTypes: true })
+      .sort((a, b) => {
+        // Public canonical skill-making surface must claim its deprecated
+        // learner alias before the legacy compatibility skill is encountered.
+        if (a.name === 'skillify') return -1;
+        if (b.name === 'skillify') return 1;
+        return a.name.localeCompare(b.name);
+      });
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
@@ -272,7 +340,7 @@ let cachedSkillsKey: string | null = null;
 
 function getBuiltinSkillsCacheKey(): string {
   return JSON.stringify({
-    deepInterviewAmbiguityThreshold: getDeepInterviewAmbiguityThreshold(),
+    deepInterviewAmbiguityThreshold: getDeepInterviewAmbiguityThresholdResolution(),
   });
 }
 

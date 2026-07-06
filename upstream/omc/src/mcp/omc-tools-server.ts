@@ -2,7 +2,8 @@
  * OMC Tools Server - In-process MCP server for custom tools
  *
  * Exposes 18 custom tools (12 LSP, 2 AST, 1 python_repl, 3 skills) via the Claude Agent SDK's
- * createSdkMcpServer helper for use by subagents.
+ * createSdkMcpServer helper for local Node.js Agent SDK integrations. This is not a VS Code
+ * extension host or CI runner by itself.
  */
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
@@ -19,6 +20,8 @@ import { getInteropTools } from "../interop/mcp-bridge.js";
 import { deepinitManifestTool } from "../tools/deepinit-manifest.js";
 import { wikiTools } from "../tools/wiki-tools.js";
 import { TOOL_CATEGORIES, type ToolCategory } from "../constants/index.js";
+import { filterDisabledTools, tagCategory } from "./disable-tools.js";
+export { DISABLE_TOOLS_GROUP_MAP, parseDisabledGroups } from "./disable-tools.js";
 
 // Type for our tool definitions
 interface ToolDef {
@@ -29,63 +32,6 @@ interface ToolDef {
   handler: (args: unknown) => Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }>;
 }
 
-// Tag each tool array with its category before aggregation
-function tagCategory<T extends { name: string }>(tools: T[], category: ToolCategory): (T & { category: ToolCategory })[] {
-  return tools.map(t => ({ ...t, category }));
-}
-
-/**
- * Map from user-facing OMC_DISABLE_TOOLS group names to ToolCategory values.
- * Supports both canonical names and common aliases.
- */
-export const DISABLE_TOOLS_GROUP_MAP: Record<string, ToolCategory> = {
-  'lsp': TOOL_CATEGORIES.LSP,
-  'ast': TOOL_CATEGORIES.AST,
-  'python': TOOL_CATEGORIES.PYTHON,
-  'python-repl': TOOL_CATEGORIES.PYTHON,
-  'trace': TOOL_CATEGORIES.TRACE,
-  'state': TOOL_CATEGORIES.STATE,
-  'notepad': TOOL_CATEGORIES.NOTEPAD,
-  'memory': TOOL_CATEGORIES.MEMORY,
-  'project-memory': TOOL_CATEGORIES.MEMORY,
-  'skills': TOOL_CATEGORIES.SKILLS,
-  'interop': TOOL_CATEGORIES.INTEROP,
-  'codex': TOOL_CATEGORIES.CODEX,
-  'gemini': TOOL_CATEGORIES.GEMINI,
-  'shared-memory': TOOL_CATEGORIES.SHARED_MEMORY,
-  'deepinit': TOOL_CATEGORIES.DEEPINIT,
-  'deepinit-manifest': TOOL_CATEGORIES.DEEPINIT,
-  'wiki': TOOL_CATEGORIES.WIKI,
-};
-
-/**
- * Parse OMC_DISABLE_TOOLS env var value into a Set of disabled ToolCategory values.
- *
- * Accepts a comma-separated list of group names (case-insensitive).
- * Unknown names are silently ignored.
- *
- * @param envValue - The env var value to parse. Defaults to process.env.OMC_DISABLE_TOOLS.
- * @returns Set of ToolCategory values that should be disabled.
- *
- * @example
- * // OMC_DISABLE_TOOLS=lsp,python-repl,project-memory
- * parseDisabledGroups(); // Set { 'lsp', 'python', 'memory' }
- */
-export function parseDisabledGroups(envValue?: string): Set<ToolCategory> {
-  const disabled = new Set<ToolCategory>();
-  const value = envValue ?? process.env.OMC_DISABLE_TOOLS;
-  if (!value || !value.trim()) return disabled;
-
-  for (const name of value.split(',')) {
-    const trimmed = name.trim().toLowerCase();
-    if (!trimmed) continue;
-    const category = DISABLE_TOOLS_GROUP_MAP[trimmed];
-    if (category !== undefined) {
-      disabled.add(category);
-    }
-  }
-  return disabled;
-}
 
 // Aggregate all custom tools with category metadata (full list, unfiltered)
 const interopToolsEnabled = process.env.OMC_INTEROP_TOOLS_ENABLED === '1';
@@ -109,10 +55,7 @@ const allTools: ToolDef[] = [
 ];
 
 // Read OMC_DISABLE_TOOLS once at startup and filter tools accordingly
-const _startupDisabledGroups = parseDisabledGroups();
-const enabledTools: ToolDef[] = _startupDisabledGroups.size === 0
-  ? allTools
-  : allTools.filter(t => !t.category || !_startupDisabledGroups.has(t.category));
+const enabledTools: ToolDef[] = filterDisabledTools(allTools);
 
 // Convert to SDK tool format
 // The SDK's tool() expects a ZodRawShape directly (not wrapped in z.object())
@@ -149,11 +92,7 @@ const toolCategoryMap = new Map<string, ToolCategory>(
   allTools.map(t => [`mcp__t__${t.name}`, t.category!])
 );
 
-/**
- * Get tool names filtered by category.
- * Uses category metadata instead of string heuristics.
- */
-export function getOmcToolNames(options?: {
+interface ToolNameFilterOptions {
   includeLsp?: boolean;
   includeAst?: boolean;
   includePython?: boolean;
@@ -166,7 +105,9 @@ export function getOmcToolNames(options?: {
   includeSharedMemory?: boolean;
   includeDeepinit?: boolean;
   includeWiki?: boolean;
-}): string[] {
+}
+
+function getExcludedCategories(options?: ToolNameFilterOptions): Set<ToolCategory> {
   const {
     includeLsp = true,
     includeAst = true,
@@ -195,62 +136,35 @@ export function getOmcToolNames(options?: {
   if (!includeSharedMemory) excludedCategories.add(TOOL_CATEGORIES.SHARED_MEMORY);
   if (!includeDeepinit) excludedCategories.add(TOOL_CATEGORIES.DEEPINIT);
   if (!includeWiki) excludedCategories.add(TOOL_CATEGORIES.WIKI);
+  return excludedCategories;
+}
 
-  if (excludedCategories.size === 0) return [...omcToolNames];
+function filterToolNames(
+  names: string[],
+  categoriesByName: Map<string, ToolCategory>,
+  options?: ToolNameFilterOptions,
+): string[] {
+  const excludedCategories = getExcludedCategories(options);
+  if (excludedCategories.size === 0) return [...names];
 
-  return omcToolNames.filter(name => {
-    const category = toolCategoryMap.get(name);
+  return names.filter(name => {
+    const category = categoriesByName.get(name);
     return !category || !excludedCategories.has(category);
   });
 }
 
 /**
+ * Get tool names filtered by category.
+ * Uses category metadata instead of string heuristics.
+ */
+export function getOmcToolNames(options?: ToolNameFilterOptions): string[] {
+  return filterToolNames(omcToolNames, toolCategoryMap, options);
+}
+
+/**
  * Test-only helper for deterministic category-filter verification independent of env startup state.
  */
-export function _getAllToolNamesForTests(options?: {
-  includeLsp?: boolean;
-  includeAst?: boolean;
-  includePython?: boolean;
-  includeSkills?: boolean;
-  includeState?: boolean;
-  includeNotepad?: boolean;
-  includeMemory?: boolean;
-  includeTrace?: boolean;
-  includeInterop?: boolean;
-  includeSharedMemory?: boolean;
-  includeDeepinit?: boolean;
-  includeWiki?: boolean;
-}): string[] {
-  const {
-    includeLsp = true,
-    includeAst = true,
-    includePython = true,
-    includeSkills = true,
-    includeState = true,
-    includeNotepad = true,
-    includeMemory = true,
-    includeTrace = true,
-    includeInterop = true,
-    includeSharedMemory = true,
-    includeDeepinit = true,
-    includeWiki = true,
-  } = options || {};
-
-  const excludedCategories = new Set<ToolCategory>();
-  if (!includeLsp) excludedCategories.add(TOOL_CATEGORIES.LSP);
-  if (!includeAst) excludedCategories.add(TOOL_CATEGORIES.AST);
-  if (!includePython) excludedCategories.add(TOOL_CATEGORIES.PYTHON);
-  if (!includeSkills) excludedCategories.add(TOOL_CATEGORIES.SKILLS);
-  if (!includeState) excludedCategories.add(TOOL_CATEGORIES.STATE);
-  if (!includeNotepad) excludedCategories.add(TOOL_CATEGORIES.NOTEPAD);
-  if (!includeMemory) excludedCategories.add(TOOL_CATEGORIES.MEMORY);
-  if (!includeTrace) excludedCategories.add(TOOL_CATEGORIES.TRACE);
-  if (!includeInterop) excludedCategories.add(TOOL_CATEGORIES.INTEROP);
-  if (!includeSharedMemory) excludedCategories.add(TOOL_CATEGORIES.SHARED_MEMORY);
-  if (!includeDeepinit) excludedCategories.add(TOOL_CATEGORIES.DEEPINIT);
-  if (!includeWiki) excludedCategories.add(TOOL_CATEGORIES.WIKI);
-
-  return allTools
-    .filter(t => !t.category || !excludedCategories.has(t.category))
-    .map(t => `mcp__t__${t.name}`);
+export function _getAllToolNamesForTests(options?: ToolNameFilterOptions): string[] {
+  const allToolNames = allTools.map(t => `mcp__t__${t.name}`);
+  return filterToolNames(allToolNames, toolCategoryMap, options);
 }
