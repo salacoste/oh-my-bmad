@@ -202,9 +202,12 @@ stays deferred/fail-closed.
 
 ## Future-story boundaries
 
-- **Story 131.2 — credential readiness:** may define or validate scoped credential
-  provisioning only after it satisfies this preflight contract. Until then,
-  production credentials remain fail-closed/deferred.
+- **Story 131.2 — credential readiness:** defines the static/readiness contract
+  for `GITHUB_MCP_SCOPED_TOKEN` in `docs/production-credential-inventory.json`
+  and enforces it with `scripts/check_production_credentials.py`. This is not
+  real-write activation: credential values, real GitHub writes, deployment
+  mutations, command surfaces, and runtime production audit emitters remain
+  fail-closed/deferred until later approved stories.
 - **Story 131.3 — GitHub write activation:** may introduce a controlled GitHub
   mutation path for a named repository only after dry-run, approval, scoped token,
   emergency-disable, rollback, and audit requirements are met. Until then, real

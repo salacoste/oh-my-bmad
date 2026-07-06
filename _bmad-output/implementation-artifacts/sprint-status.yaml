@@ -1115,14 +1115,49 @@ development_status:
   # =========================================================================
   # Epic 131: Production operations runbook and preflight contract
   # =========================================================================
-  epic-131: in-progress  # Story 131.1 docs/status-only runbook/preflight contract completed locally; no runtime production operation is activated
+  epic-131: in-progress  # Stories 131.1-131.2 completed locally as production-operations contract/readiness slices; no runtime production operation or real write is activated
   131-1-production-operations-runbook-and-preflight-contract: done  # Defines operation classes, preflight fields, dry-run evidence, approval levels, docs/status audit shape, emergency-disable evidence, rollback/drill prerequisites, ownership, future Story 131.2-131.6 boundaries, and unsupported/fail-closed behavior; real GitHub writes, credentials, deployment mutations, command surfaces, lifecycle/retention jobs, Epic 129/PR #100 reclassification, and runtime production audit emitters remain fail-closed/deferred
+  131-2-credential-provisioning-scoping-rotation-revocation: done  # Adds executable credential-readiness inventory/checker for GITHUB_MCP_SCOPED_TOKEN scope, env location, MCP subprocess allowlists, rotation, revocation, scanner coverage, docs refs, and metadata-only secret.accessed behavior; broad GitHub tokens remain denied from MCP/agent subprocesses; no real credential value, GitHub write activation, deployment mutation, command surface, or runtime audit emitter behavior is enabled
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
 
+
+  - date: "2026-07-06"
+    event: story-131-2-credential-provisioning-scoping-rotation-revocation-local-done
+    from: in-progress
+    to: done
+    epic: epic-131
+    story: 131-2-credential-provisioning-scoping-rotation-revocation
+    source: scoped-ultragoal-story-131-2
+    operation_id: story-131-2-credential-readiness
+    operation_class: credential_handling
+    target_environment: repo-static-readiness
+    target_repository_or_service: github-mcp
+    authority_source: _bmad-output/planning-artifacts/phase-48-production-readiness-epics.md
+    dry_run_evidence_ref: scripts/check_production_credentials.py
+    approval_ref: docs/production-operations.md#approval-levels
+    request_trace_correlation_id: epic-131-story-131-2
+    emergency_disable_state: fail-closed-no-real-write-activation
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 131.2 adds static/readiness validation for the scoped GitHub MCP
+      credential contract only. It does not add credential values, enable real
+      GitHub writes, change deployment behavior, add production command surfaces,
+      or emit runtime production audit events. The checker pins that
+      GITHUB_MCP_SCOPED_TOKEN is scoped to github-mcp, broad GITHUB_TOKEN does
+      not reach MCP or agent subprocesses, rotation/revocation/scanner/audit
+      metadata is documented, and forbidden output surfaces remain fail-closed.
+    rollback_ref: revert-story-131-2-credential-readiness-diff
+    expiry_freshness: static-readiness-entry-refresh-on-story-131-3-or-credential-contract-change
+    status: done
+    summary: >-
+      Story 131.2 records a credential-readiness transition only; it is not a
+      runtime production audit event, not a production audit emitter, and not a
+      real-write or deployment activation. Verification is executable through
+      scripts/check_production_credentials.py, its self-test, and focused pytest.
 
   - date: "2026-07-06"
     event: epic-129-status-docs-local-done-reconciliation
