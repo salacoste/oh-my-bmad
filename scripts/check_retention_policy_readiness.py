@@ -29,6 +29,11 @@ PLANNING_PATH = Path("_bmad-output/planning-artifacts/phase-48-production-readin
 ARTIFACT_PATH = Path(
     "_bmad-output/implementation-artifacts/130-1-retention-policy-object-storage-adapter-contract.md"
 )
+STORY_130_2_MODULE_PATH = Path("packages/replay/src/replay/retention.py")
+STORY_130_2_TEST_PATH = Path("packages/replay/src/replay/test_retention.py")
+STORY_130_2_ARTIFACT_PATH = Path(
+    "_bmad-output/implementation-artifacts/130-2-object-storage-lifecycle-dry-run-manifest-validation.md"
+)
 CI_PATH = Path(".github/workflows/ci.yml")
 JUSTFILE_PATH = Path("justfile")
 
@@ -266,6 +271,36 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
             Violation(str(CONTRACT_PATH), f"non_goals missing {sorted(missing_non_goals)}")
         )
 
+    evidence_130_2 = data.get("story_130_2_evidence")
+    if not isinstance(evidence_130_2, dict):
+        violations.append(Violation(str(CONTRACT_PATH), "story_130_2_evidence must be an object"))
+    else:
+        expected_refs = {
+            "module_ref": STORY_130_2_MODULE_PATH,
+            "test_ref": STORY_130_2_TEST_PATH,
+            "artifact_ref": STORY_130_2_ARTIFACT_PATH,
+        }
+        for key, relpath in expected_refs.items():
+            if evidence_130_2.get(key) != str(relpath):
+                violations.append(
+                    Violation(str(CONTRACT_PATH), f"story_130_2_evidence {key} mismatch")
+                )
+            if not (root / relpath).exists():
+                violations.append(Violation(str(relpath), "Story 130.2 evidence file is missing"))
+        rules = "\n".join(str(x) for x in evidence_130_2.get("authoritative_rules", []))
+        for phrase in (
+            "per-domain allowed_actions required",
+            "default_action must be retain",
+            "last_modified_at_utc age basis",
+            "evidence_max_age_days freshness",
+            "any repeated domain/object_key fails closed",
+            "metadata-only",
+        ):
+            if phrase not in rules:
+                violations.append(
+                    Violation(str(CONTRACT_PATH), f"story_130_2_evidence missing rule {phrase!r}")
+                )
+
     for ref in data.get("docs_refs", []):
         if not isinstance(ref, str):
             continue
@@ -289,6 +324,9 @@ def _validate_docs(root: Path) -> list[Violation]:
     feature = _read(root, FEATURE_STATUS_PATH)
     sprint = _read(root, SPRINT_STATUS_PATH)
     artifact = _read(root, ARTIFACT_PATH)
+    artifact_130_2 = _read(root, STORY_130_2_ARTIFACT_PATH)
+    retention_module = _read(root, STORY_130_2_MODULE_PATH)
+    retention_tests = _read(root, STORY_130_2_TEST_PATH)
     planning = _read(root, PLANNING_PATH)
 
     for needle in (
@@ -297,6 +335,9 @@ def _validate_docs(root: Path) -> list[Violation]:
         "scripts/check_retention_policy_readiness.py",
         "Scheduled retention jobs remain disabled",
         "no object-storage deletion or transition",
+        "Story 130.2",
+        "packages/replay/src/replay/retention.py",
+        "metadata-only retention dry-run",
     ):
         if needle not in prod:
             violations.append(Violation(str(PRODUCTION_OPS_PATH), f"missing {needle!r}"))
@@ -306,6 +347,8 @@ def _validate_docs(root: Path) -> list[Violation]:
         "no scheduled retention job runner",
         "no object-storage deletion or transition",
         "no external object storage calls",
+        "Object-storage lifecycle dry-run and manifest validation (Story 130.2)",
+        "create_retention_dry_run_plan",
     ):
         if needle not in operator:
             violations.append(Violation(str(OPERATOR_RUNBOOK_PATH), f"missing {needle!r}"))
@@ -313,12 +356,15 @@ def _validate_docs(root: Path) -> list[Violation]:
         "Story 130.1",
         "Retention policy and object-storage adapter contract",
         "Epic 130",
+        "Story 130.2",
+        "Object-storage lifecycle dry-run and manifest validation",
     ):
         if needle not in feature:
             violations.append(Violation(str(FEATURE_STATUS_PATH), f"missing {needle!r}"))
     for needle in (
         "epic-130: in-progress",
         "130-1-retention-policy-and-object-storage-adapter-contract: done",
+        "130-2-object-storage-lifecycle-dry-run-and-manifest-validation: done",
     ):
         if needle not in sprint:
             violations.append(Violation(str(SPRINT_STATUS_PATH), f"missing {needle!r}"))
@@ -330,6 +376,29 @@ def _validate_docs(root: Path) -> list[Violation]:
     ):
         if needle not in artifact:
             violations.append(Violation(str(ARTIFACT_PATH), f"missing {needle!r}"))
+    for needle in (
+        "Story 130.2",
+        "metadata-only",
+        "does not add a scheduler",
+        "packages/replay/src/replay/retention.py",
+    ):
+        if needle not in artifact_130_2:
+            violations.append(Violation(str(STORY_130_2_ARTIFACT_PATH), f"missing {needle!r}"))
+    for needle in (
+        "create_retention_dry_run_plan",
+        "RetentionDryRunPlan",
+        "default_action must be retain",
+        "repeats object key",
+    ):
+        if needle not in retention_module:
+            violations.append(Violation(str(STORY_130_2_MODULE_PATH), f"missing {needle!r}"))
+    for needle in (
+        "test_valid_manifest_returns_deterministic_metadata_only_plan",
+        "test_repeated_same_domain_object_key_fails_even_with_different_version_and_checksum",
+        "test_future_and_stale_timestamps_fail_closed",
+    ):
+        if needle not in retention_tests:
+            violations.append(Violation(str(STORY_130_2_TEST_PATH), f"missing {needle!r}"))
     if "Story 130.1: Retention Policy and Object-Storage Adapter Contract" not in planning:
         violations.append(Violation(str(PLANNING_PATH), "Story 130.1 planning source missing"))
     return violations
@@ -390,6 +459,9 @@ def _self_test() -> int:
         SPRINT_STATUS_PATH,
         PLANNING_PATH,
         ARTIFACT_PATH,
+        STORY_130_2_MODULE_PATH,
+        STORY_130_2_TEST_PATH,
+        STORY_130_2_ARTIFACT_PATH,
         CI_PATH,
         JUSTFILE_PATH,
     ]

@@ -362,6 +362,31 @@ Treat every retention apply/delete/transition request as fail-closed until later
 Stories 130.2-130.4 provide dry-run manifest validation, lock/idempotency-protected
 scheduler evidence, approval-bound apply, audit, and recovery proof.
 
+
+### Object-storage lifecycle dry-run and manifest validation (Story 130.2)
+
+Story 130.2 exposes the package-local `create_retention_dry_run_plan(...)` API in
+`packages/replay/src/replay/retention.py`. It is for local dry-run evidence only:
+policy JSON plus object manifest JSON go in, and a metadata-only deterministic
+`RetentionDryRunPlan` with blockers, decisions, and `plan_hash` comes out.
+
+The dry-run validates explicit policy domains, required per-domain
+`allowed_actions`, `default_action=retain`, strict UTC timestamps, generated-at
+freshness via `evidence_max_age_days`, exact-key exclusions, protected holds, and
+repeated object-key ambiguity. Any repeated `(domain, object_key)` fails closed in
+Story 130.2; versioned multi-entry semantics are deferred.
+
+Example local validation target:
+
+```bash
+uv run pytest packages/replay/src/replay/test_retention.py -q
+uv run python scripts/check_retention_policy_readiness.py --verbose
+```
+
+This dry-run does not add a scheduler, object-storage adapter call, credential
+load, object deletion, object transition, archive/manifest mutation, backup
+pruning, command surface, registry mutation endpoint, or runtime audit emitter.
+
 ### `memory` / `artifact` — store paths + retention
 
 Each store-backed server owns an **isolated subtree of the existing `oh-my-bmad-data`

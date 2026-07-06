@@ -1118,6 +1118,7 @@ development_status:
   # =========================================================================
   epic-130: in-progress  # Story 130.1 opens Epic 130 as a static retention policy/object-storage adapter readiness contract only; no scheduled job, object-storage deletion/transition, archive/manifest mutation, backup pruning, external storage call, production credential loading, command surface, registry mutation endpoint, or runtime audit emitter is enabled
   130-1-retention-policy-and-object-storage-adapter-contract: done  # Defines executable retention policy and adapter readiness contract/checker for policy fields, manifest-backed object identity, holds/exclusions, dry-run/apply separation, UTC clock semantics, eventual-consistency fail-closed handling, and CI/just/docs wiring; scheduled retention jobs and storage mutations remain disabled/deferred
+  130-2-object-storage-lifecycle-dry-run-and-manifest-validation: done  # Adds package-local metadata-only retention dry-run planner in packages/replay with strict policy domains, per-domain allowed_actions, default_action=retain, UTC/freshness validation, exact-key holds/exclusions, repeated object-key fail-closed behavior, deterministic plan hashes, and no scheduler/object-storage call/delete/transition/apply surface
 
   # =========================================================================
   # Epic 131: Production operations runbook and preflight contract
@@ -1138,6 +1139,37 @@ audit_trail:
 
 
 
+
+  - date: "2026-07-06"
+    event: story-130-2-object-storage-lifecycle-dry-run-and-manifest-validation-local-done
+    from: planned
+    to: done
+    epic: epic-130
+    story: 130-2-object-storage-lifecycle-dry-run-and-manifest-validation
+    source: scoped-autopilot-story-130-2
+    operation_id: story-130-2-object-storage-lifecycle-dry-run-and-manifest-validation
+    operation_class: lifecycle_retention
+    target_environment: repo-package-local-readiness
+    target_repository_or_service: packages/replay/src/replay/retention.py
+    authority_source: _bmad-output/planning-artifacts/phase-48-production-readiness-epics.md
+    dry_run_evidence_ref: packages/replay/src/replay/test_retention.py
+    approval_ref: .omx/plans/story-130-2-retention-dry-run-plan-20260706T104000Z.md
+    request_trace_correlation_id: epic-130-story-130-2
+    emergency_disable_state: fail-closed-no-retention-job-or-storage-mutation
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 130.2 adds package-local metadata-only retention dry-run validation.
+      It does not add scheduled retention jobs, external object storage calls,
+      object deletion or transition, archive/manifest mutation, backup pruning,
+      production credential loading, command surfaces, registry mutation endpoints,
+      deployment behavior, or runtime audit emitters.
+    rollback_ref: revert-story-130-2-retention-dry-run-diff
+    expiry_freshness: static-readiness-entry-refresh-on-story-130-3-scheduler-or-story-130-4-apply-contract-change
+    status: done
+    summary: >-
+      Story 130.2 implements deterministic retention dry-run evidence with strict
+      domain, action, timestamp, freshness, hold/exclusion, repeated-key, and
+      no-mutation tests.
 
   - date: "2026-07-06"
     event: story-130-1-retention-policy-object-storage-adapter-contract-local-done

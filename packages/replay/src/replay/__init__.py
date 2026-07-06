@@ -31,6 +31,16 @@ from replay.lifecycle import (
     create_lifecycle_dry_run_plan,
 )
 from replay.models import ReplayMemoryError, ReplayMetadata, ReplayProgress, ReplayResult
+from replay.retention import (
+    RetentionBlocker,
+    RetentionDecision,
+    RetentionDomainPolicy,
+    RetentionDryRunPlan,
+    RetentionObjectIdentity,
+    RetentionPlanError,
+    RetentionPolicy,
+    create_retention_dry_run_plan,
+)
 from replay.snapshots import (
     SnapshotInfo,
     create_snapshot,
@@ -65,11 +75,19 @@ __all__ = [
     "LifecycleDryRunPlan",
     "LifecycleRetentionPolicy",
     "LifecycleSegmentIdentity",
+    "RetentionPolicy",
+    "RetentionPlanError",
+    "RetentionObjectIdentity",
+    "RetentionDryRunPlan",
+    "RetentionDomainPolicy",
+    "RetentionDecision",
+    "RetentionBlocker",
     "SnapshotInfo",
     "ValidationFieldDiff",
     "ValidationResult",
     "create_snapshot",
     "create_lifecycle_dry_run_plan",
+    "create_retention_dry_run_plan",
     "find_nearest_snapshot",
     "list_snapshots",
     "load_snapshot",

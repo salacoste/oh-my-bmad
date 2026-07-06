@@ -30,6 +30,23 @@ mutation endpoint. Future Stories 130.2-130.4 must provide dry-run validation,
 lock/idempotency-protected scheduling, approval-bound apply evidence, audit, and
 recovery proof before retention automation can mutate anything.
 
+
+## Story 130.2 object-storage lifecycle dry-run and manifest validation
+
+Story 130.2 adds a package-local, metadata-only retention dry-run in
+`packages/replay/src/replay/retention.py`. The dry-run function
+`create_retention_dry_run_plan(...)` reads local policy and object manifest JSON,
+validates explicit policy domains, manifest-backed object identity, strict UTC
+timestamps, `evidence_max_age_days` freshness, exact-key holds/exclusions, and
+fail-closed repeated `(domain, object_key)` ambiguity before producing a
+deterministic plan hash.
+
+The planned `transition` and `delete` outputs are dry-run metadata only. Story
+130.2 still performs no scheduled retention job, no object-storage deletion or
+transition, no archive or lifecycle-manifest mutation, no backup pruning, no
+external object storage calls, no production credential loading, no dashboard
+command surface, no registry mutation endpoint, and no runtime audit emitter.
+
 ## Operating principles
 
 - **No authority by documentation alone.** This document describes evidence and

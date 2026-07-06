@@ -30,6 +30,9 @@ def _copy_live_fixture(tmp_path: Path, mod: object) -> None:
         mod.SPRINT_STATUS_PATH,  # type: ignore[attr-defined]
         mod.PLANNING_PATH,  # type: ignore[attr-defined]
         mod.ARTIFACT_PATH,  # type: ignore[attr-defined]
+        mod.STORY_130_2_MODULE_PATH,  # type: ignore[attr-defined]
+        mod.STORY_130_2_TEST_PATH,  # type: ignore[attr-defined]
+        mod.STORY_130_2_ARTIFACT_PATH,  # type: ignore[attr-defined]
         mod.CI_PATH,  # type: ignore[attr-defined]
         mod.JUSTFILE_PATH,  # type: ignore[attr-defined]
     ]:
@@ -85,3 +88,14 @@ def test_missing_ci_wiring_fails(tmp_path: Path) -> None:
     assert any(
         ".github/workflows/ci.yml" in v.location and "missing" in v.message for v in violations
     )
+
+
+def test_missing_story_130_2_evidence_fails(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    contract = tmp_path / mod.CONTRACT_PATH  # type: ignore[attr-defined]
+    data = json.loads(contract.read_text(encoding="utf-8"))
+    data["story_130_2_evidence"]["authoritative_rules"] = []
+    contract.write_text(json.dumps(data), encoding="utf-8")
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("story_130_2_evidence missing rule" in v.message for v in violations)
