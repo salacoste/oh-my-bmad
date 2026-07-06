@@ -22,13 +22,13 @@ prerequisites, dry-run/apply separation, UTC clock semantics, eventual-consisten
 stale-read handling, legal holds/exclusions, recovery references, and fail-closed
 conditions.
 
-Scheduled retention jobs remain disabled in this slice. Current non-goals include
-no object-storage deletion or transition, no archive or lifecycle-manifest mutation,
-no backup pruning, no external object storage calls, no production credential
-loading, no runtime audit emitter, no dashboard command surface, and no registry
-mutation endpoint. Future Stories 130.2-130.4 must provide dry-run validation,
-lock/idempotency-protected scheduling, approval-bound apply evidence, audit, and
-recovery proof before retention automation can mutate anything.
+Scheduled retention runner orchestration is present but default-disabled after
+Story 130.3. Current non-goals include no cron daemon or live scheduled retention
+activation, no object-storage deletion or transition, no archive or lifecycle-manifest
+mutation, no backup pruning, no external object storage calls, no production
+credential loading, no runtime audit emitter, no dashboard command surface, and no
+registry mutation endpoint. Future Story 130.4 must provide approval-bound apply
+evidence, audit, and recovery proof before retention automation can mutate anything.
 
 
 ## Story 130.2 object-storage lifecycle dry-run and manifest validation
@@ -46,6 +46,30 @@ The planned `transition` and `delete` outputs are dry-run metadata only. Story
 transition, no archive or lifecycle-manifest mutation, no backup pruning, no
 external object storage calls, no production credential loading, no dashboard
 command surface, no registry mutation endpoint, and no runtime audit emitter.
+
+
+## Story 130.3 scheduled retention job runner
+
+Story 130.3 adds the package-local metadata-only runner in
+`packages/replay/src/replay/retention_runner.py`. The public
+`run_scheduled_retention_job(...)` API accepts an externally supplied schedule
+slot and is default-disabled unless `RetentionRunnerConfig(enabled=True)` is
+provided by a caller. It records lock, retry/backoff, trace, idempotency, status,
+and post-run dry-run audit metadata only.
+
+The runner uses a single lock with `max_concurrency` exactly 1 and computes a
+deterministic pre-run idempotency key before planner execution. Dry-run mode calls
+Story 130.2 `create_retention_dry_run_plan(...)` and records post-run evidence
+including `plan_hash`, artifact filename, policy id/version, manifest id/generated
+time, action counts, and blocker count. `mode="apply"` returns `apply_deferred`
+and performs no storage call, credential loading, manifest mutation, delete,
+transition, backup pruning, production activation, dashboard/API mutation, or
+runtime audit emission.
+
+Story 130.3 does not add a cron entry, daemon loop, live scheduler activation,
+object-storage deletion or transition, archive/lifecycle-manifest mutation, backup
+pruning, external object-storage call, production credential load, command surface,
+registry mutation endpoint, deployment behavior, or runtime audit emitter.
 
 ## Operating principles
 

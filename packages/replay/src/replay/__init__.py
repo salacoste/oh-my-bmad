@@ -41,6 +41,18 @@ from replay.retention import (
     RetentionPolicy,
     create_retention_dry_run_plan,
 )
+from replay.retention_runner import (
+    RUNNER_POLICY_VERSION,
+    InMemoryRetentionRunnerLedger,
+    RetentionLockMetadata,
+    RetentionRetryMetadata,
+    RetentionRunnerConfig,
+    RetentionRunnerConfigError,
+    RetentionRunnerRecord,
+    RetentionRunnerRequest,
+    compute_retention_runner_idempotency_key,
+    run_scheduled_retention_job,
+)
 from replay.snapshots import (
     SnapshotInfo,
     create_snapshot,
@@ -56,6 +68,16 @@ from replay.validation import (
 )
 
 __all__ = [
+    "InMemoryRetentionRunnerLedger",
+    "RUNNER_POLICY_VERSION",
+    "RetentionLockMetadata",
+    "RetentionRetryMetadata",
+    "RetentionRunnerConfig",
+    "RetentionRunnerConfigError",
+    "RetentionRunnerRecord",
+    "RetentionRunnerRequest",
+    "compute_retention_runner_idempotency_key",
+    "run_scheduled_retention_job",
     "HOT_ONLY_REPLAY",
     "HotOnlyReplaySentinel",
     "ReplayArchiveChecksumError",

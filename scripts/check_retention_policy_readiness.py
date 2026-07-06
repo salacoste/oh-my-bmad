@@ -31,8 +31,13 @@ ARTIFACT_PATH = Path(
 )
 STORY_130_2_MODULE_PATH = Path("packages/replay/src/replay/retention.py")
 STORY_130_2_TEST_PATH = Path("packages/replay/src/replay/test_retention.py")
+STORY_130_3_MODULE_PATH = Path("packages/replay/src/replay/retention_runner.py")
+STORY_130_3_TEST_PATH = Path("packages/replay/src/replay/test_retention_runner.py")
 STORY_130_2_ARTIFACT_PATH = Path(
     "_bmad-output/implementation-artifacts/130-2-object-storage-lifecycle-dry-run-manifest-validation.md"
+)
+STORY_130_3_ARTIFACT_PATH = Path(
+    "_bmad-output/implementation-artifacts/130-3-scheduled-retention-job-runner.md"
 )
 CI_PATH = Path(".github/workflows/ci.yml")
 JUSTFILE_PATH = Path("justfile")
@@ -79,7 +84,7 @@ REQUIRED_EVIDENCE = frozenset(
         "clock semantics use UTC timestamps and reject ambiguous stale or future-dated evidence",
         "eventual consistency ambiguity blocks mutation until fresh head/list evidence is available",
         "adapter responses are metadata-only and never contain credentials or secret values",
-        "scheduled jobs remain disabled until a later implementation story adds lock and idempotency evidence",
+        "scheduled runner is package-local default-disabled metadata-only and externally triggered with lock and idempotency evidence",
     }
 )
 REQUIRED_FAIL_CLOSED = frozenset(
@@ -93,12 +98,12 @@ REQUIRED_FAIL_CLOSED = frozenset(
         "eventual-consistency stale-read ambiguity",
         "adapter lacks checksum etag version generation or idempotency evidence",
         "missing rollback recovery or restore reference",
-        "attempted apply delete transition backup pruning archive mutation or scheduled job activation in Story 130.1",
+        "attempted apply delete transition backup pruning archive mutation or live scheduled job activation in Story 130.1",
     }
 )
 REQUIRED_NON_GOALS = frozenset(
     {
-        "no scheduled retention job runner",
+        "no cron daemon or live scheduled retention activation",
         "no object storage deletion or transition",
         "no archive or lifecycle manifest mutation",
         "no backup pruning",
@@ -120,6 +125,7 @@ REQUIRED_ADAPTER_CAPABILITIES = frozenset(
 )
 FORBIDDEN_NEW_PATHS = (
     Path("scripts/run_retention_job.py"),
+    Path("scripts/retention_runner.py"),
     Path("scripts/apply_object_storage_retention.py"),
     Path("scripts/prune_object_storage.py"),
     Path("services/registry-api/src/registry_api/routes/retention.py"),
@@ -243,7 +249,7 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
             )
         unsupported = "\n".join(str(x) for x in adapter.get("unsupported_modes_in_this_story", []))
         for phrase in (
-            "scheduled retention job runner",
+            "cron daemon",
             "object storage delete",
             "external storage credential loading",
         ):
@@ -301,6 +307,37 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
                     Violation(str(CONTRACT_PATH), f"story_130_2_evidence missing rule {phrase!r}")
                 )
 
+    evidence_130_3 = data.get("story_130_3_evidence")
+    if not isinstance(evidence_130_3, dict):
+        violations.append(Violation(str(CONTRACT_PATH), "story_130_3_evidence must be an object"))
+    else:
+        expected_refs = {
+            "module_ref": STORY_130_3_MODULE_PATH,
+            "test_ref": STORY_130_3_TEST_PATH,
+            "artifact_ref": STORY_130_3_ARTIFACT_PATH,
+        }
+        for key, relpath in expected_refs.items():
+            if evidence_130_3.get(key) != str(relpath):
+                violations.append(
+                    Violation(str(CONTRACT_PATH), f"story_130_3_evidence {key} mismatch")
+                )
+            if not (root / relpath).exists():
+                violations.append(Violation(str(relpath), "Story 130.3 evidence file is missing"))
+        rules = "\n".join(str(x) for x in evidence_130_3.get("authoritative_rules", []))
+        for phrase in (
+            "default-disabled",
+            "externally triggered",
+            "max_concurrency exactly 1",
+            "pre-run idempotency",
+            "completed replay does not call planner",
+            "apply_deferred",
+            "metadata-only",
+        ):
+            if phrase not in rules:
+                violations.append(
+                    Violation(str(CONTRACT_PATH), f"story_130_3_evidence missing rule {phrase!r}")
+                )
+
     for ref in data.get("docs_refs", []):
         if not isinstance(ref, str):
             continue
@@ -325,30 +362,38 @@ def _validate_docs(root: Path) -> list[Violation]:
     sprint = _read(root, SPRINT_STATUS_PATH)
     artifact = _read(root, ARTIFACT_PATH)
     artifact_130_2 = _read(root, STORY_130_2_ARTIFACT_PATH)
+    artifact_130_3 = _read(root, STORY_130_3_ARTIFACT_PATH)
     retention_module = _read(root, STORY_130_2_MODULE_PATH)
     retention_tests = _read(root, STORY_130_2_TEST_PATH)
+    retention_runner_module = _read(root, STORY_130_3_MODULE_PATH)
+    retention_runner_tests = _read(root, STORY_130_3_TEST_PATH)
     planning = _read(root, PLANNING_PATH)
 
     for needle in (
         "Story 130.1",
         "docs/retention-policy-object-storage-readiness.json",
         "scripts/check_retention_policy_readiness.py",
-        "Scheduled retention jobs remain disabled",
+        "Scheduled retention runner orchestration is present but default-disabled",
         "no object-storage deletion or transition",
         "Story 130.2",
         "packages/replay/src/replay/retention.py",
         "metadata-only retention dry-run",
+        "Story 130.3",
+        "packages/replay/src/replay/retention_runner.py",
+        "apply_deferred",
     ):
         if needle not in prod:
             violations.append(Violation(str(PRODUCTION_OPS_PATH), f"missing {needle!r}"))
     for needle in (
         "Retention policy and object-storage adapter contract (Story 130.1)",
         "uv run python scripts/check_retention_policy_readiness.py",
-        "no scheduled retention job runner",
+        "no cron daemon or live scheduled retention activation",
         "no object-storage deletion or transition",
         "no external object storage calls",
         "Object-storage lifecycle dry-run and manifest validation (Story 130.2)",
         "create_retention_dry_run_plan",
+        "Scheduled retention job runner (Story 130.3)",
+        "run_scheduled_retention_job",
     ):
         if needle not in operator:
             violations.append(Violation(str(OPERATOR_RUNBOOK_PATH), f"missing {needle!r}"))
@@ -358,6 +403,8 @@ def _validate_docs(root: Path) -> list[Violation]:
         "Epic 130",
         "Story 130.2",
         "Object-storage lifecycle dry-run and manifest validation",
+        "Story 130.3",
+        "Scheduled retention job runner",
     ):
         if needle not in feature:
             violations.append(Violation(str(FEATURE_STATUS_PATH), f"missing {needle!r}"))
@@ -365,6 +412,7 @@ def _validate_docs(root: Path) -> list[Violation]:
         "epic-130: in-progress",
         "130-1-retention-policy-and-object-storage-adapter-contract: done",
         "130-2-object-storage-lifecycle-dry-run-and-manifest-validation: done",
+        "130-3-scheduled-retention-job-runner: done",
     ):
         if needle not in sprint:
             violations.append(Violation(str(SPRINT_STATUS_PATH), f"missing {needle!r}"))
@@ -399,6 +447,31 @@ def _validate_docs(root: Path) -> list[Violation]:
     ):
         if needle not in retention_tests:
             violations.append(Violation(str(STORY_130_2_TEST_PATH), f"missing {needle!r}"))
+    for needle in (
+        "Story 130.3",
+        "metadata-only",
+        "default-disabled",
+        "packages/replay/src/replay/retention_runner.py",
+        "apply_deferred",
+    ):
+        if needle not in artifact_130_3:
+            violations.append(Violation(str(STORY_130_3_ARTIFACT_PATH), f"missing {needle!r}"))
+    for needle in (
+        "run_scheduled_retention_job",
+        "RetentionRunnerConfig",
+        "max_concurrency exactly 1",
+        "apply_deferred",
+        "create_retention_dry_run_plan",
+    ):
+        if needle not in retention_runner_module:
+            violations.append(Violation(str(STORY_130_3_MODULE_PATH), f"missing {needle!r}"))
+    for needle in (
+        "test_default_disabled_returns_metadata_without_planner_or_active_record",
+        "test_idempotency_key_is_pre_run_and_excludes_trace_retry_and_plan_evidence",
+        "test_apply_mode_records_deferred_intent_only_and_replays_without_planner",
+    ):
+        if needle not in retention_runner_tests:
+            violations.append(Violation(str(STORY_130_3_TEST_PATH), f"missing {needle!r}"))
     if "Story 130.1: Retention Policy and Object-Storage Adapter Contract" not in planning:
         violations.append(Violation(str(PLANNING_PATH), "Story 130.1 planning source missing"))
     return violations
@@ -423,13 +496,36 @@ def _validate_absent_runtime_activation(root: Path) -> list[Violation]:
     violations: list[Violation] = []
     for relpath in FORBIDDEN_NEW_PATHS:
         if (root / relpath).exists():
-            violations.append(
-                Violation(
-                    str(relpath),
-                    "Story 130.1 must not add retention job runner or mutation endpoint files",
-                )
-            )
+            violations.append(_forbidden_runtime_violation(relpath))
+
+    allowed_runner_paths = {STORY_130_3_MODULE_PATH, STORY_130_3_TEST_PATH}
+    replay_root = root / "packages/replay/src/replay"
+    if replay_root.exists():
+        for path in replay_root.glob("*retention*runner*.py"):
+            relpath = path.relative_to(root)
+            if relpath not in allowed_runner_paths:
+                violations.append(_forbidden_runtime_violation(relpath))
+
+    scripts_root = root / "scripts"
+    if scripts_root.exists():
+        for path in scripts_root.rglob("*.py"):
+            name = path.name
+            if "retention" in name and any(token in name for token in ("runner", "job")):
+                violations.append(_forbidden_runtime_violation(path.relative_to(root)))
+
+    routes_root = root / "services/registry-api/src/registry_api/routes"
+    if routes_root.exists():
+        for path in routes_root.glob("*.py"):
+            if "retention" in path.name or "object_storage_lifecycle" in path.name:
+                violations.append(_forbidden_runtime_violation(path.relative_to(root)))
     return violations
+
+
+def _forbidden_runtime_violation(relpath: Path) -> Violation:
+    return Violation(
+        str(relpath),
+        "Story 130 readiness allows only the package-local metadata runner; retention job runner scripts/routes/mutation endpoints remain forbidden",
+    )
 
 
 def validate(root: Path = REPO_ROOT) -> list[Violation]:
@@ -461,7 +557,10 @@ def _self_test() -> int:
         ARTIFACT_PATH,
         STORY_130_2_MODULE_PATH,
         STORY_130_2_TEST_PATH,
+        STORY_130_3_MODULE_PATH,
+        STORY_130_3_TEST_PATH,
         STORY_130_2_ARTIFACT_PATH,
+        STORY_130_3_ARTIFACT_PATH,
         CI_PATH,
         JUSTFILE_PATH,
     ]
