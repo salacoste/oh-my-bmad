@@ -224,10 +224,16 @@ stays deferred/fail-closed.
   and future health/smoke evidence. It does not run deployments or migrations;
   deployment mutations remain fail-closed/deferred until a later approved live
   deployment story supplies profile-specific evidence.
-- **Story 131.5 — lifecycle/retention operations:** may extend object-storage,
-  archive, backup, retention, or cleanup behavior only after dry-run
-  manifests, restore proof, data-owner approval, and drill evidence exist. Until
-  then, lifecycle/retention jobs remain fail-closed/deferred.
+- **Story 131.5 — production command surfaces and audit dashboard:** defines
+  the static/readiness contract in
+  `docs/production-command-surface-readiness.json` and enforces it with
+  `scripts/check_production_command_surface.py`. This pins that existing
+  console/Telegram decision commands remain task-lifecycle-only, dashboard
+  production-operation controls stay absent, registry API production-operation
+  mutation endpoints stay absent, and future inspect/approve/stop/disable
+  surfaces require metadata-only audit evidence. It does not add command
+  surfaces; command surfaces remain fail-closed/deferred until a later approved
+  implementation story supplies live evidence.
 - **Story 131.6 — production audit/closure evidence:** may add runtime audit event
   emitters or closure evidence only through explicit event schema, implementation,
   and tests. Until then, production audit emitters remain fail-closed/deferred.

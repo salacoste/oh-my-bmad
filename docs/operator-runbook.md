@@ -275,6 +275,41 @@ This section is a readiness/checker contract only: it performs no live docker
 compose invocation, no migration, no credential read, no remote host mutation,
 no runtime audit emission, and no new operator command surface.
 
+
+### Production command surface readiness (Story 131.5)
+
+Story 131.5 makes future production operation command and audit-dashboard
+surfaces executable as a static readiness check without adding live controls.
+The canonical contract is
+[`production-command-surface-readiness.json`](production-command-surface-readiness.json)
+and the gate is:
+
+```bash
+uv run python scripts/check_production_command_surface.py
+```
+
+The readiness contract requires all of the following before any future live
+console, Telegram, or dashboard production-operation control can proceed:
+
+1. Read-only inspection model exists before any approve/stop/disable/apply
+   control is exposed.
+2. Approval actor, authority source, operation id, request id, trace id, status,
+   and freshness are captured as metadata-only evidence.
+3. Stop, disable, rollback, and apply controls fail closed without explicit
+   operator approval bound to current preflight evidence.
+4. Credentials are never rendered in console, Telegram, dashboard, events, logs,
+   snapshots, or artifacts.
+5. Existing console and Telegram `approve`/`stop` commands remain task-lifecycle
+   decisions only; no console production operation commands, no Telegram
+   production operation commands, and no dashboard production operation controls
+   are added by this story.
+6. Story 131.2 credential readiness and Story 131.4 deployment readiness remain
+   prerequisites for any future activation.
+
+This section is a readiness/checker contract only: it performs no production
+operation mutation, exposes no new operator controls, and emits no runtime
+production audit event.
+
 ### `memory` / `artifact` — store paths + retention
 
 Each store-backed server owns an **isolated subtree of the existing `oh-my-bmad-data`

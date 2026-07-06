@@ -250,6 +250,7 @@ lint:
     uv run python scripts/check_production_credentials.py
     uv run python scripts/check_github_write_activation.py
     uv run python scripts/check_deployment_change_readiness.py
+    uv run python scripts/check_production_command_surface.py
     git ls-files -z | xargs -0 uv run secret-hygiene-precommit
 
 # Run the secret-hygiene scanner across every tracked file. Pre-commit hook
@@ -271,6 +272,7 @@ check-gates:
     uv run python scripts/check_production_credentials.py
     uv run python scripts/check_github_write_activation.py
     uv run python scripts/check_deployment_change_readiness.py
+    uv run python scripts/check_production_command_surface.py
     uv run python scripts/check_task_fsm_only.py
 
 # Run the architectural-gate self-tests — exercises the bundled fixture
@@ -287,6 +289,7 @@ check-gates-self-test:
     uv run python scripts/check_production_credentials.py --self-test
     uv run python scripts/check_github_write_activation.py --self-test
     uv run python scripts/check_deployment_change_readiness.py --self-test
+    uv run python scripts/check_production_command_surface.py --self-test
     uv run python scripts/check_task_fsm_only.py --self-test
 
 # Scenario harness (journey-level smoke tests) lands across Stories 2.11 /

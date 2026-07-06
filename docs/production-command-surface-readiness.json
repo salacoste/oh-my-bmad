@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "story": "131.5",
+  "title": "Production operation command surface and audit dashboard readiness",
+  "production_activation": "deferred_fail_closed",
+  "mode": "static_readiness_only",
+  "operation_class": "production_command_surface",
+  "target_boundary": {
+    "current_behavior": "readiness contract only; no production operation command, dashboard control, approval, stop, or disable surface is enabled by Story 131.5",
+    "operation_contract_ref": "docs/production-operations.md",
+    "credential_contract_ref": "docs/production-credential-inventory.json",
+    "deployment_contract_ref": "docs/deployment-change-readiness.json"
+  },
+  "allowed_existing_surfaces": [
+    {
+      "surface": "console-cli",
+      "scope": "existing task lifecycle decisions only",
+      "allowed_commands": ["task", "status", "logs", "approve", "reject", "stop", "retry", "agent", "events", "trace", "ping", "key-status"]
+    },
+    {
+      "surface": "telegram-gateway",
+      "scope": "existing task lifecycle decisions only",
+      "allowed_commands": ["/task", "/status", "/logs", "/approve", "/reject", "/stop", "/retry", "/agent", "/approvals", "/trace", "/ping", "/key_status"]
+    },
+    {
+      "surface": "dashboard",
+      "scope": "read-only status and previously approved narrow controls only",
+      "allowed_controls": ["read-only task/session/event/trace/history/digest panels", "approved snapshot-create affordance", "Epic 129 read-only lifecycle mutation status"]
+    }
+  ],
+  "required_evidence": [
+    "read-only production operation inspection model before any control",
+    "approval actor and authority source captured before apply",
+    "stop disable rollback controls require explicit operator approval",
+    "credentials are never rendered in console Telegram dashboard events or artifacts",
+    "audit records include operation id status trace id request id and actor metadata",
+    "controls fail closed when preflight approval evidence is missing stale denied or expired",
+    "dashboard controls are inert unless backed by approved operation state",
+    "emergency disable and revocation path is documented before activation",
+    "Story 131.2 credential readiness and Story 131.4 deployment readiness remain prerequisites"
+  ],
+  "fail_closed_checks": [
+    "no production operation command modules are registered in console-cli",
+    "no production operation Telegram handlers are registered",
+    "dashboard static assets do not expose production operation approve stop disable controls",
+    "registry API routes do not add production operation apply approve stop disable endpoints",
+    "contract contains no credential or private-key values",
+    "docs keep command surfaces deferred until a later approved implementation story"
+  ],
+  "forbidden_runtime_tokens": [
+    "production-operation",
+    "production_operation",
+    "prod-operation",
+    "prod_operation",
+    "prodops",
+    "deploy-approve",
+    "deploy-stop",
+    "deploy-disable",
+    "deployment-approve",
+    "deployment-stop",
+    "deployment-disable",
+    "operation-approve",
+    "operation-stop",
+    "operation-disable"
+  ],
+  "docs_refs": [
+    "docs/production-operations.md#future-story-boundaries",
+    "docs/operator-runbook.md#production-command-surface-readiness-story-1315",
+    "docs/feature-status.md",
+    "_bmad-output/implementation-artifacts/131-5-production-command-surface-readiness.md"
+  ],
+  "non_goals": [
+    "no console production operation commands",
+    "no Telegram production operation commands",
+    "no dashboard production operation controls",
+    "no registry API production operation mutation endpoints",
+    "no credential rendering",
+    "no runtime production audit emitter"
+  ]
+}
