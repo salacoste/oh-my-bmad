@@ -1116,9 +1116,10 @@ development_status:
   # =========================================================================
   # Epic 130: Object-storage lifecycle jobs and scheduled retention
   # =========================================================================
-  epic-130: in-progress  # Story 130.1 opens Epic 130 as a static retention policy/object-storage adapter readiness contract only; no scheduled job, object-storage deletion/transition, archive/manifest mutation, backup pruning, external storage call, production credential loading, command surface, registry mutation endpoint, or runtime audit emitter is enabled
-  130-1-retention-policy-and-object-storage-adapter-contract: done  # Defines executable retention policy and adapter readiness contract/checker for policy fields, manifest-backed object identity, holds/exclusions, dry-run/apply separation, UTC clock semantics, eventual-consistency fail-closed handling, and CI/just/docs wiring; scheduled retention jobs and storage mutations remain disabled/deferred
+  epic-130: in-progress  # Stories 130.1-130.3 provide static policy/adapter readiness, package-local retention dry-run planning, and a default-disabled metadata-only scheduled runner; no cron/daemon/live activation, object-storage deletion/transition, archive/manifest mutation, backup pruning, external storage call, production credential loading, command surface, registry mutation endpoint, or runtime audit emitter is enabled
+  130-1-retention-policy-and-object-storage-adapter-contract: done  # Defines executable retention policy and adapter readiness contract/checker for policy fields, manifest-backed object identity, holds/exclusions, dry-run/apply separation, UTC clock semantics, eventual-consistency fail-closed handling, and CI/just/docs wiring; live scheduled activation and storage mutations remain disabled/deferred
   130-2-object-storage-lifecycle-dry-run-and-manifest-validation: done  # Adds package-local metadata-only retention dry-run planner in packages/replay with strict policy domains, per-domain allowed_actions, default_action=retain, UTC/freshness validation, exact-key holds/exclusions, repeated object-key fail-closed behavior, deterministic plan hashes, and no scheduler/object-storage call/delete/transition/apply surface
+  130-3-scheduled-retention-job-runner: done  # Adds package-local metadata-only retention runner in packages/replay with default-disabled config, externally supplied schedule slots only, single lock/max_concurrency=1, pre-run idempotency, transient started lifecycle, retry/backoff metadata without sleep, completed replay no-op, dry-run planner reuse, and apply_deferred intent-only behavior; no cron/daemon/live activation, storage calls, credentials, delete/transition, manifest mutation, backup pruning, command surface, registry route, or runtime audit emitter
 
   # =========================================================================
   # Epic 131: Production operations runbook and preflight contract
@@ -1135,6 +1136,40 @@ development_status:
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-07-06"
+    event: story-130-3-scheduled-retention-job-runner-local-done
+    from: planned
+    to: done
+    epic: epic-130
+    story: 130-3-scheduled-retention-job-runner
+    source: scoped-autopilot-ultragoal-story-130-3
+    operation_id: story-130-3-scheduled-retention-job-runner
+    operation_class: lifecycle_retention
+    target_environment: repo-package-local-readiness
+    target_repository_or_service: packages/replay/src/replay/retention_runner.py
+    authority_source: .omx/plans/epic-130-story-130-3-scheduled-retention-job-runner-prd.md
+    dry_run_evidence_ref: packages/replay/src/replay/test_retention_runner.py
+    approval_ref: .omx/specs/epic-130-story-130-3-scheduled-retention-job-runner-test-spec.md
+    request_trace_correlation_id: epic-130-story-130-3
+    emergency_disable_state: default-disabled-no-live-scheduler-or-storage-mutation
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 130.3 adds package-local metadata-only runner orchestration around
+      the Story 130.2 dry-run planner. It remains default-disabled and does not
+      add cron, daemon, live scheduled activation, external object storage calls,
+      object deletion or transition, archive/manifest mutation, backup pruning,
+      production credential loading, command surfaces, registry mutation endpoints,
+      deployment behavior, or runtime audit emitters.
+    rollback_ref: revert-story-130-3-retention-runner-diff
+    expiry_freshness: static-readiness-entry-refresh-on-story-130-4-apply-contract-change
+    status: done
+    summary: >-
+      Story 130.3 implements deterministic metadata-only scheduled retention
+      runner evidence with default-disabled config, lock/idempotency protection,
+      fakeable retry/backoff, completed replay no-op, dry-run planner reuse, and
+      apply_deferred intent-only behavior.
+
 
 
 

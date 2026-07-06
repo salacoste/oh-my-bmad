@@ -62,7 +62,8 @@
       "dry_run_contract_only"
     ],
     "unsupported_modes_in_this_story": [
-      "scheduled retention job runner",
+      "cron daemon",
+      "live scheduled retention activation",
       "object storage delete",
       "object storage transition",
       "archive manifest mutation",
@@ -79,7 +80,7 @@
     "clock semantics use UTC timestamps and reject ambiguous stale or future-dated evidence",
     "eventual consistency ambiguity blocks mutation until fresh head/list evidence is available",
     "adapter responses are metadata-only and never contain credentials or secret values",
-    "scheduled jobs remain disabled until a later implementation story adds lock and idempotency evidence"
+    "scheduled runner is package-local default-disabled metadata-only and externally triggered with lock and idempotency evidence"
   ],
   "fail_closed_conditions": [
     "missing or unknown retention policy id",
@@ -91,17 +92,18 @@
     "eventual-consistency stale-read ambiguity",
     "adapter lacks checksum etag version generation or idempotency evidence",
     "missing rollback recovery or restore reference",
-    "attempted apply delete transition backup pruning archive mutation or scheduled job activation in Story 130.1"
+    "attempted apply delete transition backup pruning archive mutation or live scheduled job activation in Story 130.1"
   ],
   "docs_refs": [
     "_bmad-output/implementation-artifacts/130-1-retention-policy-object-storage-adapter-contract.md",
     "_bmad-output/implementation-artifacts/130-2-object-storage-lifecycle-dry-run-manifest-validation.md",
+    "_bmad-output/implementation-artifacts/130-3-scheduled-retention-job-runner.md",
     "docs/feature-status.md#current-bmad-status",
     "docs/operator-runbook.md#retention-policy-and-object-storage-adapter-contract-story-1301",
     "docs/production-operations.md#story-1301-retention-policy-and-object-storage-adapter-contract"
   ],
   "non_goals": [
-    "no scheduled retention job runner",
+    "no cron daemon or live scheduled retention activation",
     "no object storage deletion or transition",
     "no archive or lifecycle manifest mutation",
     "no backup pruning",
@@ -130,11 +132,41 @@
       "planned transition/delete are metadata-only"
     ],
     "non_goals_preserved": [
-      "no scheduled retention job runner",
+      "no cron daemon or live scheduled retention activation",
       "no object storage deletion or transition",
       "no external object storage calls",
       "no production credential loading",
       "no runtime audit emitter"
+    ]
+  },
+  "story_130_3_evidence": {
+    "module_ref": "packages/replay/src/replay/retention_runner.py",
+    "test_ref": "packages/replay/src/replay/test_retention_runner.py",
+    "artifact_ref": "_bmad-output/implementation-artifacts/130-3-scheduled-retention-job-runner.md",
+    "runner_function": "run_scheduled_retention_job",
+    "public_types": [
+      "RetentionRunnerConfig",
+      "RetentionRunnerRequest",
+      "RetentionRunnerRecord",
+      "InMemoryRetentionRunnerLedger"
+    ],
+    "authoritative_rules": [
+      "runner is default-disabled unless explicitly enabled",
+      "schedule slot is externally triggered; no cron daemon or live activation",
+      "max_concurrency exactly 1 under a single metadata lock",
+      "pre-run idempotency excludes trace retry planner output policy ids manifest ids artifact names and action counts",
+      "completed replay does not call planner",
+      "dry_run calls create_retention_dry_run_plan",
+      "apply mode returns apply_deferred metadata only",
+      "retry and backoff metadata are fakeable and perform no sleep",
+      "metadata-only: no storage calls credentials manifest mutation delete transition prune or runtime audit emitter"
+    ],
+    "non_goals_preserved": [
+      "no object storage deletion or transition",
+      "no external object storage calls",
+      "no production credential loading",
+      "no runtime audit emitter",
+      "no dashboard command surface or registry mutation endpoint"
     ]
   }
 }

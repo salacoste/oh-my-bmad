@@ -350,7 +350,8 @@ failure states, adapter metadata-only responses, and rollback/recovery reference
 
 Current boundary:
 
-- no scheduled retention job runner;
+- package-local default-disabled retention runner only;
+- no cron daemon or live scheduled retention activation;
 - no object-storage deletion or transition;
 - no archive or lifecycle-manifest mutation;
 - no backup pruning;
@@ -358,9 +359,8 @@ Current boundary:
 - no production credential loading;
 - no runtime audit emitter, dashboard command surface, or registry mutation endpoint.
 
-Treat every retention apply/delete/transition request as fail-closed until later
-Stories 130.2-130.4 provide dry-run manifest validation, lock/idempotency-protected
-scheduler evidence, approval-bound apply, audit, and recovery proof.
+Treat every retention apply/delete/transition request as fail-closed until a later
+Story 130.4 provides approval-bound apply, audit, and recovery proof.
 
 
 ### Object-storage lifecycle dry-run and manifest validation (Story 130.2)
@@ -386,6 +386,37 @@ uv run python scripts/check_retention_policy_readiness.py --verbose
 This dry-run does not add a scheduler, object-storage adapter call, credential
 load, object deletion, object transition, archive/manifest mutation, backup
 pruning, command surface, registry mutation endpoint, or runtime audit emitter.
+
+
+### Scheduled retention job runner (Story 130.3)
+
+Story 130.3 exposes the package-local default-disabled retention runner API
+`run_scheduled_retention_job(...)` in
+`packages/replay/src/replay/retention_runner.py`. It is externally triggered per
+schedule slot only; it does not install cron, systemd timers, daemon loops, or live
+production scheduler activation.
+
+Operator-relevant status vocabulary is exactly `disabled`, `lock_contended`,
+`started`, `retrying`, `completed`, `terminal_failure`, and `apply_deferred`.
+`started` is transient/internal and must transition during the same invocation.
+With the default in-memory ledger, replay semantics are process-local. Callers
+that need restart durability must inject a durable metadata/status store with the
+same contract. Within that ledger, `completed` replay returns persisted metadata
+and does not call the planner again; lock-present replay returns
+`lock_contended`.
+
+Dry-run mode calls Story 130.2 `create_retention_dry_run_plan(...)` and records
+post-run audit evidence. Apply mode records `apply_deferred` metadata only. No
+object-storage deletion or transition, external storage call, credential load,
+archive/manifest mutation, backup pruning, command surface, registry mutation
+endpoint, or runtime audit emitter is present in this story.
+
+Example local validation target:
+
+```bash
+uv run pytest packages/replay/src/replay/test_retention_runner.py -q
+uv run python scripts/check_retention_policy_readiness.py --verbose
+```
 
 ### `memory` / `artifact` — store paths + retention
 

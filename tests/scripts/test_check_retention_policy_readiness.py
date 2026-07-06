@@ -32,7 +32,10 @@ def _copy_live_fixture(tmp_path: Path, mod: object) -> None:
         mod.ARTIFACT_PATH,  # type: ignore[attr-defined]
         mod.STORY_130_2_MODULE_PATH,  # type: ignore[attr-defined]
         mod.STORY_130_2_TEST_PATH,  # type: ignore[attr-defined]
+        mod.STORY_130_3_MODULE_PATH,  # type: ignore[attr-defined]
+        mod.STORY_130_3_TEST_PATH,  # type: ignore[attr-defined]
         mod.STORY_130_2_ARTIFACT_PATH,  # type: ignore[attr-defined]
+        mod.STORY_130_3_ARTIFACT_PATH,  # type: ignore[attr-defined]
         mod.CI_PATH,  # type: ignore[attr-defined]
         mod.JUSTFILE_PATH,  # type: ignore[attr-defined]
     ]:
@@ -99,3 +102,46 @@ def test_missing_story_130_2_evidence_fails(tmp_path: Path) -> None:
     contract.write_text(json.dumps(data), encoding="utf-8")
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("story_130_2_evidence missing rule" in v.message for v in violations)
+
+
+def test_missing_story_130_3_evidence_fails(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    contract = tmp_path / mod.CONTRACT_PATH  # type: ignore[attr-defined]
+    data = json.loads(contract.read_text(encoding="utf-8"))
+    data["story_130_3_evidence"]["authoritative_rules"] = []
+    contract.write_text(json.dumps(data), encoding="utf-8")
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("story_130_3_evidence missing rule" in v.message for v in violations)
+
+
+def test_only_package_local_retention_runner_module_is_allowed(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    assert not mod.validate(tmp_path)  # type: ignore[attr-defined]
+    bad = tmp_path / "scripts" / "retention_runner.py"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_text("print('retention job runner')\n", encoding="utf-8")
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any(
+        "retention job runner" in v.message or "metadata runner" in v.message for v in violations
+    )
+
+
+def test_extra_package_retention_runner_module_fails(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    bad = tmp_path / "packages" / "replay" / "src" / "replay" / "retention_job_runner.py"
+    bad.write_text("# forbidden duplicate runner\n", encoding="utf-8")
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("retention_job_runner.py" in v.location for v in violations)
+
+
+def test_nested_script_retention_runner_fails(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    bad = tmp_path / "scripts" / "jobs" / "retention_runner.py"
+    bad.parent.mkdir(parents=True, exist_ok=True)
+    bad.write_text("print('nested retention job runner')\n", encoding="utf-8")
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("scripts/jobs/retention_runner.py" in v.location for v in violations)
