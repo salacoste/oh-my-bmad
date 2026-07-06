@@ -234,9 +234,14 @@ stays deferred/fail-closed.
   surfaces require metadata-only audit evidence. It does not add command
   surfaces; command surfaces remain fail-closed/deferred until a later approved
   implementation story supplies live evidence.
-- **Story 131.6 — production audit/closure evidence:** may add runtime audit event
-  emitters or closure evidence only through explicit event schema, implementation,
-  and tests. Until then, production audit emitters remain fail-closed/deferred.
+- **Story 131.6 — production operations readiness closure:** defines the
+  static/readiness closure contract in
+  `docs/production-operations-closure-readiness.json` and enforces it with
+  `scripts/check_production_operations_closure.py`. This closes Epic 131 as a
+  readiness-contract track, not live production activation. Real GitHub writes
+  are not enabled, live deployment changes are not enabled, live command
+  surfaces are not enabled, runtime production audit emitters are not enabled,
+  and retention jobs are not enabled.
 
 Epic 129/PR #100 docs reconciliation was merged separately; this
 production-operations contract does not reclassify Epic 129 support or PR #100 status.

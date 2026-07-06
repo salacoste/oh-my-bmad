@@ -310,6 +310,29 @@ This section is a readiness/checker contract only: it performs no production
 operation mutation, exposes no new operator controls, and emits no runtime
 production audit event.
 
+
+### Production operations readiness closure (Story 131.6)
+
+Story 131.6 closes Epic 131 as a readiness closure only, not live production
+activation. The canonical closure contract is
+[`production-operations-closure-readiness.json`](production-operations-closure-readiness.json)
+and the gate is:
+
+```bash
+uv run python scripts/check_production_operations_closure.py
+```
+
+The closure gate verifies Stories 131.1-131.5 evidence, CI/just gate wiring,
+status docs, and overclaim prevention. It requires the docs to keep these
+statements true: real GitHub writes are not enabled, live deployment changes are
+not enabled, live command surfaces are not enabled, runtime production audit
+emitters are not enabled, and retention jobs are not enabled.
+
+This is readiness closure only: it performs no real GitHub write smoke, no live
+deployment rollback drill, no production command surface activation, no runtime
+production audit emission, no retention job activation, and no credential value
+provisioning.
+
 ### `memory` / `artifact` — store paths + retention
 
 Each store-backed server owns an **isolated subtree of the existing `oh-my-bmad-data`
