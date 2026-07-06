@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import { mkdir, readFile, symlink, writeFile } from 'fs/promises';
 import { dirname, join, resolve } from 'path';
+import { getOmcRoot } from '../lib/worktree-paths.js';
 import {
   readModeState,
   writeModeState,
@@ -158,7 +159,7 @@ export function getAutoresearchMissionArtifactLayout(
   missionSlug: string,
   runId: string,
 ): AutoresearchMissionArtifactLayout {
-  const missionRoot = join(projectRoot, '.omc', 'autoresearch', missionSlug);
+  const missionRoot = join(getOmcRoot(projectRoot), 'autoresearch', missionSlug);
   const runDir = join(missionRoot, 'runs', runId);
   return {
     missionRoot,
@@ -184,7 +185,7 @@ function buildRunId(missionSlug: string, runTag: string): string {
 }
 
 function activeRunStateFile(projectRoot: string): string {
-  return join(projectRoot, '.omc', 'state', 'autoresearch-state.json');
+  return join(getOmcRoot(projectRoot), 'state', 'autoresearch-state.json');
 }
 
 function trimContent(value: string, max = 4000): string {
@@ -722,12 +723,26 @@ export function decideAutoresearchOutcome(
     };
   }
   if (!comparableScore(manifest.last_kept_score, evaluation.score)) {
+    // Bootstrap case: there is no prior comparable score to improve over (first
+    // pass in the run, or the first pass after a fail-only stretch left
+    // last_kept_score=null). The candidate's pass IS the new comparison anchor.
+    // Discarding it would lose the only validated signal the loop has produced
+    // and pin score_improvement to null forever.
+    if (typeof evaluation.score === 'number') {
+      return {
+        decision: 'keep',
+        decisionReason: '[bootstrap] first comparable score in score_improvement run',
+        keep: true,
+        evaluator: evaluation,
+        notes: ['candidate kept because no prior comparable score existed; this becomes the new baseline'],
+      };
+    }
     return {
       decision: 'ambiguous',
-      decisionReason: 'evaluator pass without comparable score',
+      decisionReason: 'evaluator pass without numeric score',
       keep: false,
       evaluator: evaluation,
-      notes: ['candidate discarded because score_improvement policy requires comparable numeric scores'],
+      notes: ['candidate discarded because score_improvement policy requires a numeric score'],
     };
   }
   if ((evaluation.score as number) > (manifest.last_kept_score as number)) {
@@ -851,7 +866,7 @@ export async function materializeAutoresearchMissionToWorktree(
 }
 
 export async function loadAutoresearchRunManifest(projectRoot: string, runId: string): Promise<AutoresearchRunManifest> {
-  const manifestFile = join(projectRoot, '.omc', 'logs', 'autoresearch', runId, 'manifest.json');
+  const manifestFile = join(getOmcRoot(projectRoot), 'logs', 'autoresearch', runId, 'manifest.json');
   if (!existsSync(manifestFile)) {
     throw new Error(`autoresearch_resume_manifest_missing:${runId}`);
   }
@@ -943,7 +958,7 @@ export async function prepareAutoresearchRuntime(
   const runId = buildRunId(contract.missionSlug, runTag);
   const baselineCommit = readGitShortHead(worktreePath);
   const branchName = readGit(worktreePath, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
-  const runDir = join(projectRoot, '.omc', 'logs', 'autoresearch', runId);
+  const runDir = join(getOmcRoot(projectRoot), 'logs', 'autoresearch', runId);
   const stateFile = activeRunStateFile(projectRoot);
   const instructionsFile = join(runDir, 'bootstrap-instructions.md');
   const manifestFile = join(runDir, 'manifest.json');

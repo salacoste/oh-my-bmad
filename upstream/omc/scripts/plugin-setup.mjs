@@ -13,6 +13,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getClaudeConfigDir } from './lib/config-dir.mjs';
 import { buildHudWrapper } from './lib/hud-wrapper-template.mjs';
+import { hookPrefixForPlatform, normalizeHooksDataForPlatform } from './lib/hook-command-normalizer.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -21,11 +22,28 @@ const CLAUDE_DIR = getClaudeConfigDir();
 const HUD_DIR = join(CLAUDE_DIR, 'hud');
 const HUD_LIB_DIR = join(HUD_DIR, 'lib');
 const SETTINGS_FILE = join(CLAUDE_DIR, 'settings.json');
-// Use the absolute node binary path so nvm/fnm users don't get
-// "node not found" errors in non-interactive shells (issue #892).
+// Store the absolute node binary path so find-node.sh can resolve Node for
+// nvm/fnm users whose non-interactive hook shells do not include node on PATH
+// (issue #892).
 const nodeBin = process.execPath || 'node';
+const isPublishedPluginCache = !existsSync(join(__dirname, '..', '.git'));
+
 
 console.log('[OMC] Running post-install setup...');
+
+function checkRalphRubyDependency() {
+  try {
+    execFileSync('ruby', ['--version'], { stdio: 'ignore', timeout: 5000 });
+    console.log('[OMC] Ruby detected for Ralph workflows');
+  } catch {
+    console.log('[OMC] Warning: Ruby was not found on PATH. Ralph workflows require Ruby and may fail until it is installed.');
+    console.log('[OMC] Ubuntu/Debian: sudo apt update && sudo apt install ruby-full');
+    console.log('[OMC] macOS: brew install ruby');
+    console.log('[OMC] After installing Ruby, restart Claude Code and rerun /oh-my-claudecode:omc-setup if needed.');
+  }
+}
+
+checkRalphRubyDependency();
 
 // 1. Create HUD directory
 if (!existsSync(HUD_DIR)) {
@@ -36,6 +54,11 @@ if (!existsSync(HUD_LIB_DIR)) {
   mkdirSync(HUD_LIB_DIR, { recursive: true });
 }
 copyFileSync(join(__dirname, 'lib', 'config-dir.mjs'), join(HUD_LIB_DIR, 'config-dir.mjs'));
+copyFileSync(join(__dirname, 'lib', 'config-dir.sh'), join(HUD_LIB_DIR, 'config-dir.sh'));
+copyFileSync(join(__dirname, 'find-node.sh'), join(HUD_DIR, 'find-node.sh'));
+copyFileSync(join(__dirname, 'lib', 'hud-cache-wrapper.sh'), join(HUD_DIR, 'omc-hud-cache.sh'));
+try { chmodSync(join(HUD_DIR, 'find-node.sh'), 0o755); } catch { /* Windows doesn't need this */ }
+try { chmodSync(join(HUD_DIR, 'omc-hud-cache.sh'), 0o755); } catch { /* Windows doesn't need this */ }
 
 // 2. Create HUD wrapper script
 const hudScriptPath = join(HUD_DIR, 'omc-hud.mjs').replace(/\\/g, '/');
@@ -54,9 +77,13 @@ try {
     settings = JSON.parse(readFileSync(SETTINGS_FILE, 'utf-8'));
   }
 
+  const statusLineCommand = process.platform === 'win32'
+    ? `"${nodeBin}" "${hudScriptPath.replace(/\\/g, "/")}"`
+    : `sh "${join(HUD_DIR, 'omc-hud-cache.sh').replace(/\\/g, "/")}" "${hudScriptPath.replace(/\\/g, "/")}"`;
+
   settings.statusLine = {
     type: 'command',
-    command: `"${nodeBin}" "${hudScriptPath.replace(/\\/g, "/")}"`
+    command: statusLineCommand
   };
   writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
   console.log('[OMC] Configured HUD statusLine in settings.json');
@@ -80,81 +107,34 @@ try {
   console.log('[OMC] Warning: Could not configure settings.json:', e.message);
 }
 
-// Patch hooks.json to use the absolute node binary path so hooks work on all
-// platforms: Windows (no `sh`), nvm/fnm users (node not on PATH in hooks), etc.
+// Patch packaged plugin-cache hooks.json to keep plugin-provided hook commands
+// safe for the platform that is installing the plugin cache. Claude Code's
+// plugin loader reads hooks/hooks.json directly, so the source manifest remains
+// native Windows-spawnable (direct node -> run.cjs, no sh/find-node). During
+// setup from a published plugin cache on Unix/macOS, repair the cached manifest
+// back to the find-node.sh bootstrap so nvm/fnm users whose non-interactive hook
+// PATH lacks node keep working.
 //
-// The source hooks.json uses shell-expanded `$CLAUDE_PLUGIN_ROOT` path segments
-// so bash preserves spaces in Windows profile paths; this step only substitutes
-// the real process.execPath so Claude Code always invokes the same Node binary
-// that ran this setup script.
+// Keep stale cache self-healing for older manifests that used sh/find-node, an
+// accidentally baked absolute node path, or the Windows-safe direct node form.
 //
-// Two patterns are handled:
-//  1. New format  – node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs ... (all platforms)
-//  2. Old format  – sh  "${CLAUDE_PLUGIN_ROOT}/scripts/find-node.sh" ... (Windows
-//     backward-compat: migrates old installs to the new run.cjs chain)
+// Patterns handled:
+//  1. Current find-node.sh format – sh "$CLAUDE_PLUGIN_ROOT"/scripts/find-node.sh ...
+//  2. Legacy find-node.sh format – sh "${CLAUDE_PLUGIN_ROOT}/scripts/find-node.sh" ...
+//  3. Direct run.cjs format from the Windows-safe shipped manifest
+//  4. Absolute run.cjs format from older setup patches/publish mistakes
 //
-// Fixes issues #909, #899, #892, #869.
+// Fixes issues #909, #899, #892, #869, #3121.
 try {
-  const hooksJsonPath = join(__dirname, '..', 'hooks', 'hooks.json');
-  if (existsSync(hooksJsonPath)) {
+  const hooksJsonPath = isPublishedPluginCache ? join(__dirname, '..', 'hooks', 'hooks.json') : null;
+  if (hooksJsonPath && existsSync(hooksJsonPath)) {
     const data = JSON.parse(readFileSync(hooksJsonPath, 'utf-8'));
-    let patched = false;
-
-    // Pattern 2 (old, Windows backward-compat): sh find-node.sh <target> [args]
-    const findNodePattern =
-      /^sh "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/find-node\.sh" "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/([^"]+)"(.*)$/;
-
-    for (const groups of Object.values(data.hooks ?? {})) {
-      for (const group of groups) {
-        for (const hook of (group.hooks ?? [])) {
-          if (typeof hook.command !== 'string') continue;
-
-          // New run.cjs format — replace bare `node` with absolute path (all platforms)
-          if (hook.command.startsWith('node ') && hook.command.includes('/scripts/run.cjs')) {
-            hook.command = hook.command.replace(/^node\b/, `"${nodeBin}"`);
-            patched = true;
-            continue;
-          }
-
-          // Self-healing: if hooks.json already contains an absolute node path
-          // from a previous patch (possibly on a different machine, e.g. the
-          // GitHub Actions runner at publish time — see issue #2348), and that
-          // path is either missing on this machine or differs from the current
-          // node binary, rewrite it to the current `nodeBin`.  Without this
-          // users who install a tarball that was accidentally published with a
-          // stale absolute path (e.g. /opt/hostedtoolcache/node/.../bin/node)
-          // can never self-heal, because the bare-`node` branch above no longer
-          // matches.
-          const absNodeMatch = hook.command.match(
-            /^"([^"]*\/node|[A-Za-z]:\\[^"]*\\node(?:\.exe)?)"\s+.*\/scripts\/run\.cjs/,
-          );
-          if (absNodeMatch) {
-            const currentBin = absNodeMatch[1];
-            if (currentBin !== nodeBin && (!existsSync(currentBin) || currentBin.includes('/hostedtoolcache/'))) {
-              hook.command = hook.command.replace(
-                /^"[^"]*"/,
-                `"${nodeBin}"`,
-              );
-              patched = true;
-            }
-            continue;
-          }
-
-          // Old find-node.sh format — migrate to run.cjs + absolute path (Windows only)
-          if (process.platform === 'win32') {
-            const m2 = hook.command.match(findNodePattern);
-            if (m2) {
-              hook.command = `"${nodeBin}" "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/${m2[1]}${m2[2]}`;
-              patched = true;
-            }
-          }
-        }
-      }
-    }
+    const patched = normalizeHooksDataForPlatform(data);
 
     if (patched) {
       writeFileSync(hooksJsonPath, JSON.stringify(data, null, 2) + '\n');
-      console.log(`[OMC] Patched hooks.json with absolute node path (${nodeBin}), fixes issues #909, #899, #892`);
+      const platformLabel = hookPrefixForPlatform().startsWith('node ') ? 'direct node run.cjs' : 'find-node.sh run.cjs';
+      console.log(`[OMC] Patched hooks.json to use ${platformLabel} hook commands`);
     }
   }
 } catch (e) {

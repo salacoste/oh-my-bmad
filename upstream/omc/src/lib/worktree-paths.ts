@@ -11,10 +11,23 @@
 
 import { createHash } from 'crypto';
 import { execSync } from 'child_process';
-import { existsSync, mkdirSync, realpathSync, readdirSync } from 'fs';
-import { homedir } from 'os';
+import { existsSync, mkdirSync, readFileSync, realpathSync, readdirSync, writeFileSync, unlinkSync } from 'fs';
+import { homedir, tmpdir } from 'os';
 import { resolve, normalize, relative, sep, join, isAbsolute, basename, dirname } from 'path';
 import { getClaudeConfigDir } from '../utils/config-dir.js';
+import { encodeProjectPath } from '../utils/encode-project-path.js';
+
+/**
+ * Workspace marker filename. A directory containing this file is treated as
+ * the OMC anchor regardless of git status — enables multi-repo workspaces
+ * where the parent dir is not itself a git repo (issue: bidchex-repos style).
+ *
+ * The marker can be empty or a JSON file with optional fields:
+ *   { "id": "stable-workspace-identifier" }
+ *
+ * Resolution order in getOmcRoot(): OMC_STATE_DIR > workspace marker > git > cwd.
+ */
+export const WORKSPACE_MARKER = '.omc-workspace';
 
 /** Standard .omc subdirectories */
 export const OmcPaths = {
@@ -42,10 +55,193 @@ export const OmcPaths = {
  */
 const MAX_WORKTREE_CACHE_SIZE = 8;
 const worktreeCacheMap = new Map<string, string>();
+/** LRU cache for literal git-toplevel lookups (getGitTopLevel, no submodule climb). */
+const toplevelCacheMap = new Map<string, string>();
 
 /**
- * Get the git worktree root for the current or specified directory.
+ * LRU cache for workspace marker lookups.
+ */
+const workspaceCacheMap = new Map<string, string | null>();
+
+interface WorkspaceMarkerConfig {
+  id?: string;
+}
+
+/**
+ * Walk up from the given directory looking for a WORKSPACE_MARKER file.
+ * Returns the directory containing the marker, or null if none found before
+ * reaching the filesystem root or the user's home directory.
+ *
+ * Walking stops at the home directory to prevent accidentally treating a
+ * stray marker in $HOME or above as a workspace anchor.
+ */
+export function findWorkspaceRoot(startDir?: string): string | null {
+  if (process.env.OMC_DISABLE_MULTIREPO === '1') return null;
+  const effectiveStart = startDir || process.cwd();
+  let current: string;
+  try {
+    current = resolve(effectiveStart);
+  } catch {
+    return null;
+  }
+
+  if (workspaceCacheMap.has(current)) {
+    const cached = workspaceCacheMap.get(current) ?? null;
+    workspaceCacheMap.delete(current);
+    workspaceCacheMap.set(current, cached);
+    return cached;
+  }
+
+  const home = (() => {
+    try { return resolve(homedir()); } catch { return null; }
+  })();
+
+  let cursor = current;
+  let result: string | null = null;
+  while (true) {
+    // Stop before scanning $HOME (or above) so a stray ~/.omc-workspace does
+    // not collapse unrelated repos under home into one shared state root.
+    if (home && cursor === home) break;
+    if (existsSync(join(cursor, WORKSPACE_MARKER))) {
+      result = cursor;
+      break;
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+
+  if (workspaceCacheMap.size >= MAX_WORKTREE_CACHE_SIZE) {
+    const oldest = workspaceCacheMap.keys().next().value;
+    if (oldest !== undefined) workspaceCacheMap.delete(oldest);
+  }
+  workspaceCacheMap.set(current, result);
+  return result;
+}
+
+/**
+ * Read optional workspace marker config (id override). Returns {} when the
+ * marker is empty or unparseable — callers should not throw on config errors.
+ */
+export function readWorkspaceMarkerConfig(workspaceRoot: string): WorkspaceMarkerConfig {
+  try {
+    const raw = readFileSync(join(workspaceRoot, WORKSPACE_MARKER), 'utf-8').trim();
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as WorkspaceMarkerConfig;
+    }
+    return {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * If `cwd` is inside a git submodule, return the outermost superproject working
+ * tree; otherwise return null. A submodule is a full git repo, so
+ * `git rev-parse --show-toplevel` stops at the submodule and `.omc/` would be
+ * created there instead of at the monorepo root (#3349). Climbing via
+ * `--show-superproject-working-tree` anchors state to the superproject, walking
+ * up through nested submodules until no superproject remains.
+ */
+function resolveSuperprojectRoot(cwd: string): string | null {
+  let anchor: string | null = null;
+  let probeCwd = cwd;
+  // Bounded by submodule nesting depth; guard against pathological loops.
+  for (let depth = 0; depth < 32; depth++) {
+    let superRoot: string;
+    try {
+      superRoot = execSync('git rev-parse --show-superproject-working-tree', {
+        cwd: probeCwd,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: 5000,
+      }).trim();
+    } catch {
+      break;
+    }
+    if (!superRoot) break;
+    anchor = superRoot;
+    probeCwd = superRoot;
+  }
+  return anchor;
+}
+
+/**
+ * Resolve the state-anchor root for an optional worktreeRoot argument.
+ *
+ * Many callers pass a raw cwd as `worktreeRoot` (e.g. hooks forwarding
+ * `process.cwd()`). When that cwd is inside a git submodule we climb to the
+ * outermost superproject so `.omc/` anchors to the monorepo root rather than
+ * the submodule (#3349).
+ *
+ * Crucially, when the provided dir is NOT inside a submodule the path is used
+ * VERBATIM (the historical contract) — it is NOT resolved up to its git
+ * toplevel. Callers that pass an explicit directory (including tests that
+ * isolate state under a per-process subdir of the repo) rely on it being the
+ * literal `.omc` base; resolving such a subdir up to the repo root would
+ * collapse separately-scoped state dirs into one and corrupt them.
+ */
+function resolveStateAnchorRoot(worktreeRoot?: string): string {
+  if (worktreeRoot) return resolveSuperprojectRoot(worktreeRoot) || worktreeRoot;
+  return getWorktreeRoot() || process.cwd();
+}
+
+/**
+ * Get the literal git toplevel for a directory: `git rev-parse --show-toplevel`
+ * with NO submodule→superproject climb. Returns null if not in a git repository.
+ *
+ * SECURITY: this is the correct primitive for path-restriction / containment
+ * checks. A tool operating inside a submodule must be confined to that submodule
+ * working tree, not the parent superproject. Use this — NOT getWorktreeRoot() —
+ * for boundary validation (getWorktreeRoot climbs to the superproject for state
+ * anchoring and would widen the boundary across submodule borders; see #3349
+ * and the Codex review on PR #3350).
+ */
+export function getGitTopLevel(cwd?: string): string | null {
+  const effectiveCwd = cwd || process.cwd();
+
+  // Return cached value if present (LRU: move to end on access)
+  if (toplevelCacheMap.has(effectiveCwd)) {
+    const root = toplevelCacheMap.get(effectiveCwd)!;
+    toplevelCacheMap.delete(effectiveCwd);
+    toplevelCacheMap.set(effectiveCwd, root);
+    return root || null;
+  }
+
+  try {
+    const root = execSync('git rev-parse --show-toplevel', {
+      cwd: effectiveCwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5000,
+    }).trim();
+
+    if (toplevelCacheMap.size >= MAX_WORKTREE_CACHE_SIZE) {
+      const oldest = toplevelCacheMap.keys().next().value;
+      if (oldest !== undefined) toplevelCacheMap.delete(oldest);
+    }
+    toplevelCacheMap.set(effectiveCwd, root);
+    return root;
+  } catch {
+    // Not in a git repository - do NOT cache so a later git init re-detects.
+    return null;
+  }
+}
+
+/**
+ * Get the state-anchor "worktree root" for a directory.
+ *
+ * When cwd is inside a git submodule this climbs to the outermost superproject
+ * working tree so `.omc/` state anchors to the monorepo root rather than
+ * polluting the submodule working tree (#3349). For normal repos and linked
+ * worktrees (no superproject) it returns the literal git toplevel unchanged.
  * Returns null if not in a git repository.
+ *
+ * SECURITY: do NOT use this for path-restriction / containment checks — the
+ * submodule climb widens the boundary across submodule borders. Use
+ * getGitTopLevel() for confinement.
  */
 export function getWorktreeRoot(cwd?: string): string | null {
   const effectiveCwd = cwd || process.cwd();
@@ -59,28 +255,24 @@ export function getWorktreeRoot(cwd?: string): string | null {
     return root || null;
   }
 
-  try {
-    const root = execSync('git rev-parse --show-toplevel', {
-      cwd: effectiveCwd,
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 5000,
-    }).trim();
-
-    // Evict oldest entry when at capacity
-    if (worktreeCacheMap.size >= MAX_WORKTREE_CACHE_SIZE) {
-      const oldest = worktreeCacheMap.keys().next().value;
-      if (oldest !== undefined) {
-        worktreeCacheMap.delete(oldest);
-      }
-    }
-    worktreeCacheMap.set(effectiveCwd, root);
-    return root;
-  } catch {
+  // Prefer the superproject working tree when cwd is inside a submodule (#3349);
+  // otherwise the literal git toplevel.
+  const root = resolveSuperprojectRoot(effectiveCwd) || getGitTopLevel(effectiveCwd);
+  if (!root) {
     // Not in a git repository - do NOT cache fallback
     // so that if directory becomes a git repo later, we re-detect
     return null;
   }
+
+  // Evict oldest entry when at capacity
+  if (worktreeCacheMap.size >= MAX_WORKTREE_CACHE_SIZE) {
+    const oldest = worktreeCacheMap.keys().next().value;
+    if (oldest !== undefined) {
+      worktreeCacheMap.delete(oldest);
+    }
+  }
+  worktreeCacheMap.set(effectiveCwd, root);
+  return root;
 }
 
 /**
@@ -108,6 +300,98 @@ export function validatePath(inputPath: string): void {
 /** Track which dual-dir warnings have been logged to avoid repeated warnings */
 const dualDirWarnings = new Set<string>();
 
+/** Track which workspace anchors have already had sibling-scan warnings emitted (once per process) */
+const siblingRetrofitWarned = new Set<string>();
+
+/**
+ * Scan sibling subdirs of a workspace anchor for pre-existing .omc/state/ content.
+ * Deduplicated per session via a disk marker so repeated hook firings within the
+ * same session don't re-stat siblings or re-emit. A fresh session (new sessionId)
+ * will re-warn — intentional, since the user may not have seen the prior warning.
+ *
+ * Call this once per session (e.g. from session-start.mjs) rather than on every
+ * getOmcRoot() invocation to keep the hot path free of readdirSync calls.
+ */
+export function warnSiblingRetrofit(workspaceAnchor: string, sessionId?: string): void {
+  if (siblingRetrofitWarned.has(workspaceAnchor)) return;
+
+  // Persistent per-session disk dedupe
+  const sharedOmc = join(workspaceAnchor, OmcPaths.ROOT);
+  if (sessionId) {
+    const markerPath = join(sharedOmc, 'state', `sibling-retrofit-warned-${sessionId}.json`);
+    if (existsSync(markerPath)) {
+      siblingRetrofitWarned.add(workspaceAnchor);
+      return;
+    }
+  }
+
+  siblingRetrofitWarned.add(workspaceAnchor);
+
+  let entries: import('fs').Dirent<string>[];
+  try {
+    entries = readdirSync(workspaceAnchor, { withFileTypes: true, encoding: 'utf-8' }) as import('fs').Dirent<string>[];
+  } catch {
+    return;
+  }
+
+  const legacyDirs: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const entryName = entry.name as string;
+    const siblingStateDir = join(workspaceAnchor, entryName, OmcPaths.ROOT, 'state');
+    if (existsSync(siblingStateDir)) {
+      legacyDirs.push(join(workspaceAnchor, entryName, OmcPaths.ROOT));
+    }
+  }
+
+  if (legacyDirs.length === 0) return;
+
+  const dirList = legacyDirs.map(d => `  - ${d}`).join('\n');
+  process.stderr.write(
+    `[omc] workspace-retrofit warning: .omc-workspace anchor found at ${workspaceAnchor}\n` +
+    `  but sibling repos have pre-existing local .omc/state/ content:\n${dirList}\n` +
+    `  Shared state will go to: ${sharedOmc}\n` +
+    `  To migrate legacy state: OMC_MIGRATE_LEGACY_STATE=1 omc setup\n` +
+    `  Or manually copy state files to ${sharedOmc}/state/\n`
+  );
+
+  // Write disk marker so subsequent hook firings in the same session stay silent
+  if (sessionId) {
+    try {
+      const stateDir = join(sharedOmc, 'state');
+      if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
+      const markerPath = join(stateDir, `sibling-retrofit-warned-${sessionId}.json`);
+      writeFileSync(markerPath, JSON.stringify({ warnedAt: new Date().toISOString(), anchor: workspaceAnchor }));
+    } catch {
+      // Non-fatal — dedupe falls back to in-memory Set for this process
+    }
+  }
+}
+
+/**
+ * Clear the sibling retrofit warning cache (useful for testing).
+ * Also removes any disk markers under the given omcStateDir when provided.
+ * @internal
+ */
+export function clearSiblingRetrofitWarnings(omcStateDir?: string): void {
+  siblingRetrofitWarned.clear();
+  if (omcStateDir) {
+    try {
+      const stateDir = join(omcStateDir, 'state');
+      if (!existsSync(stateDir)) return;
+      const entries = readdirSync(stateDir, { withFileTypes: true, encoding: 'utf-8' }) as import('fs').Dirent<string>[];
+      for (const entry of entries) {
+        const name = entry.name as string;
+        if (name.startsWith('sibling-retrofit-warned-') && name.endsWith('.json')) {
+          try { unlinkSync(join(stateDir, name)); } catch { /* non-fatal */ }
+        }
+      }
+    } catch {
+      // Non-fatal
+    }
+  }
+}
+
 /**
  * Clear the dual-directory warning cache (useful for testing).
  * @internal
@@ -130,7 +414,33 @@ export function clearDualDirWarnings(): void {
  * @returns A stable project identifier string
  */
 export function getProjectIdentifier(worktreeRoot?: string): string {
-  const root = worktreeRoot || getWorktreeRoot() || process.cwd();
+  // NOTE: intentionally does NOT apply the submodule→superproject climb. The
+  // project identifier is a state *identity* (used for OMC_STATE_DIR centralized
+  // dirs, which never live inside the working tree), and a submodule must keep
+  // its OWN identity — see the "should not change identifier for submodules"
+  // test. The #3349 climb applies only to the on-disk `.omc/` *location*
+  // (getOmcRoot's default branch), not to identity. The no-arg fallback uses
+  // getGitTopLevel() (literal toplevel, no climb) so a process launched inside a
+  // submodule still resolves the submodule's own identity, and findWorkspaceRoot
+  // below sees the unclimbed root so an inner `.omc-workspace` marker is honored.
+  const root = worktreeRoot || getGitTopLevel() || process.cwd();
+
+  // Workspace marker can supply a stable, user-controlled identifier.
+  // This wins over git remote so multi-repo workspaces have one consistent ID.
+  const workspaceRoot = findWorkspaceRoot(root);
+  if (workspaceRoot) {
+    const cfg = readWorkspaceMarkerConfig(workspaceRoot);
+    if (cfg.id && typeof cfg.id === 'string' && cfg.id.trim()) {
+      const safeId = cfg.id.trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      const hash = createHash('sha256').update(safeId).digest('hex').slice(0, 16);
+      return `${safeId}-${hash}`;
+    }
+    // No explicit id — derive a stable identifier from the workspace path so
+    // sibling subrepos inside the same workspace share one ID.
+    const hash = createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
+    const dirName = basename(workspaceRoot).replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `${dirName}-${hash}`;
+  }
 
   let source: string;
   try {
@@ -193,7 +503,13 @@ export function getProjectIdentifier(worktreeRoot?: string): string {
 export function getOmcRoot(worktreeRoot?: string): string {
   const customDir = process.env.OMC_STATE_DIR;
   if (customDir) {
-    const root = worktreeRoot || getWorktreeRoot() || process.cwd();
+    // Centralized state lives at $OMC_STATE_DIR/{projectId} — outside the
+    // working tree — so the #3349 stray-`.omc`-in-submodule problem does not
+    // apply here. Identity must NOT climb: use the literal git toplevel
+    // (getGitTopLevel) for the no-arg fallback so a submodule launched without
+    // an explicit worktreeRoot keeps its own centralized id rather than merging
+    // into the parent project's (preserves submodule identity).
+    const root = worktreeRoot || getGitTopLevel() || process.cwd();
     const projectId = getProjectIdentifier(root);
     const centralizedPath = join(customDir, projectId);
 
@@ -210,7 +526,16 @@ export function getOmcRoot(worktreeRoot?: string): string {
 
     return centralizedPath;
   }
-  const root = worktreeRoot || getWorktreeRoot() || process.cwd();
+
+  // Workspace marker overrides git root resolution. This enables multi-repo
+  // workspaces where the parent dir is not itself a git repo: all sub-repos
+  // share the same .omc/ at the marker location.
+  const workspaceAnchor = findWorkspaceRoot(worktreeRoot);
+  if (workspaceAnchor) {
+    return join(workspaceAnchor, OmcPaths.ROOT);
+  }
+
+  const root = resolveStateAnchorRoot(worktreeRoot);
   return join(root, OmcPaths.ROOT);
 }
 
@@ -244,6 +569,7 @@ export function resolveOmcPath(relativePath: string, worktreeRoot?: string): str
  * State files follow the naming convention: {mode}-state.json
  * Examples: ralph-state.json, ultrawork-state.json, autopilot-state.json
  *
+ * @deprecated Use resolveSessionStatePaths instead.
  * @param stateName - State name (e.g., "ralph", "ultrawork", or "ralph-state")
  * @param worktreeRoot - Optional worktree root
  * @returns Absolute path to state file
@@ -364,6 +690,8 @@ export function ensureAllOmcDirs(worktreeRoot?: string): void {
  */
 export function clearWorktreeCache(): void {
   worktreeCacheMap.clear();
+  toplevelCacheMap.clear();
+  workspaceCacheMap.clear();
 }
 
 // ============================================================================
@@ -465,10 +793,11 @@ export function isValidTranscriptPath(transcriptPath: string): boolean {
   const normalized = normalize(expandedPath);
   const home = homedir();
 
-  // Allowed: [$CLAUDE_CONFIG_DIR|~/.claude], ~/.omc/..., /tmp/...
+  // Allowed: [$CLAUDE_CONFIG_DIR|~/.claude], ~/.omc/..., system temp dir
   const allowedPrefixes = [
     getClaudeConfigDir(),
     join(home, '.omc'),
+    tmpdir(), // honors $TMPDIR; covers /tmp and macOS /var/folders defaults
     '/tmp',
     '/var/folders', // macOS temp
   ];
@@ -484,6 +813,7 @@ export function isValidTranscriptPath(transcriptPath: string): boolean {
  * Resolve a session-scoped state file path.
  * Path: {omcRoot}/state/sessions/{sessionId}/{mode}-state.json
  *
+ * @deprecated Use resolveSessionStatePaths instead.
  * @param stateName - State name (e.g., "ralph", "ultrawork")
  * @param sessionId - Session identifier
  * @param worktreeRoot - Optional worktree root
@@ -494,6 +824,108 @@ export function resolveSessionStatePath(stateName: string, sessionId: string, wo
 
   const normalizedName = stateName.endsWith('-state') ? stateName : `${stateName}-state`;
   return resolveOmcPath(`state/sessions/${sessionId}/${normalizedName}.json`, worktreeRoot);
+}
+
+// ============================================================================
+// SessionStatePaths — branded struct return (multi-repo Wave A)
+// ============================================================================
+
+/**
+ * Branded path types prevent silently passing a read-only fallback path to a
+ * writer (or vice versa) across 19+ call sites. The brand is intentionally
+ * structural-only (no runtime cost) — TS-level discrimination.
+ *
+ * Producer of the brand: `resolveSessionStatePaths()` exclusively.
+ * Consumers (writeModeState / readModeState etc.) accept only the branded
+ * variant for their direction, so a hook that grabs `effectiveRead` when it
+ * meant `effectiveWrite` becomes a compile-time error.
+ */
+export type ReadPath = string & { readonly __brand: 'ReadPath' };
+export type WritePath = string & { readonly __brand: 'WritePath' };
+
+/**
+ * Resolved paths for a session-scoped state file. Use `effectiveRead` for
+ * reads (probes session-scoped first, then legacy fallback) and
+ * `effectiveWrite` for writes (always session-scoped when sessionId is
+ * provided; legacy root only when sessionId is absent — back-compat mode).
+ *
+ * Fields:
+ *  - `sessionScoped`: `.omc/state/sessions/{sessionId}/{name}.json` (or empty when no sid).
+ *  - `legacy`: `.omc/state/{name}.json` — preserved for backwards-compat reads.
+ *  - `effectiveRead`: brand-typed path the caller should READ from.
+ *    When sid is set and the session-scoped file exists, this is sessionScoped;
+ *    otherwise legacy.
+ *  - `effectiveWrite`: brand-typed path the caller should WRITE to.
+ *    When sid is set, always sessionScoped. When sid is absent, legacy.
+ */
+export interface SessionStatePaths {
+  sessionScoped: string;
+  legacy: string;
+  effectiveRead: ReadPath;
+  effectiveWrite: WritePath;
+}
+
+/**
+ * Options for resolveSessionStatePaths.
+ *
+ * `migrate`: opt-in one-shot legacy→session copy. Default: false (read-legacy-as-
+ * fallback, write session-only). When migrate=true OR `OMC_MIGRATE_LEGACY_STATE=1`
+ * is set, callers that wrap their write through a migration helper will copy the
+ * legacy file using a `.migrating` sentinel + atomic rename for crash recovery.
+ */
+export interface ResolveSessionStatePathsOptions {
+  migrate?: boolean;
+}
+
+/**
+ * Canonical session-scoped state path resolver. Returns a branded struct so
+ * callers cannot accidentally write to the read-fallback path. See
+ * `SessionStatePaths` for field semantics.
+ *
+ * When `sessionId` is undefined or empty, the function operates in legacy
+ * mode: `sessionScoped` is the empty string, both `effectiveRead` and
+ * `effectiveWrite` brand the legacy path. This preserves single-plan/single-
+ * session repos unchanged.
+ *
+ * @internal Internal-ish helpers (resolveStatePath, resolveSessionStatePath
+ * single-string variant) remain for back-compat but new code should prefer
+ * this helper.
+ */
+export function resolveSessionStatePaths(
+  stateName: string,
+  sessionId?: string,
+  worktreeRoot?: string,
+  _opts?: ResolveSessionStatePathsOptions,
+): SessionStatePaths {
+  const normalizedName = stateName.endsWith('-state') ? stateName : `${stateName}-state`;
+  const legacy = resolveStatePath(stateName, worktreeRoot);
+  if (!sessionId) {
+    return {
+      sessionScoped: '',
+      legacy,
+      effectiveRead: legacy as ReadPath,
+      effectiveWrite: legacy as WritePath,
+    };
+  }
+  validateSessionId(sessionId);
+  const sessionScoped = resolveOmcPath(`state/sessions/${sessionId}/${normalizedName}.json`, worktreeRoot);
+  // effectiveRead probes session-scoped first; fall back to legacy when the
+  // session-scoped file does not yet exist (first-read back-compat).
+  const effectiveRead = (existsSync(sessionScoped) ? sessionScoped : legacy) as ReadPath;
+  return {
+    sessionScoped,
+    legacy,
+    effectiveRead,
+    effectiveWrite: sessionScoped as WritePath,
+  };
+}
+
+/**
+ * Whether opt-in legacy→session migration is enabled for this process.
+ * Checked by writers that wrap migration around their write step.
+ */
+export function isLegacyStateMigrationEnabled(): boolean {
+  return process.env.OMC_MIGRATE_LEGACY_STATE === '1';
 }
 
 /**
@@ -568,9 +1000,21 @@ export function ensureSessionStateDir(sessionId: string, worktreeRoot?: string):
  * @returns The worktree root (never a subdirectory)
  */
 export function resolveToWorktreeRoot(directory?: string): string {
+  // The resolved root feeds BOTH on-disk `.omc/` placement AND, under
+  // OMC_STATE_DIR, the centralized-state *identity* (getProjectIdentifier).
+  // The #3349 submodule→superproject climb exists ONLY to place `.omc/` at the
+  // superproject working tree; it must NOT change a submodule's centralized
+  // identity (that contract is documented on getProjectIdentifier/getOmcRoot).
+  // So when OMC_STATE_DIR is set — where on-disk placement is moot and identity
+  // is all that matters — resolve to the literal git toplevel (no climb) so a
+  // hook/session launched inside a submodule keeps its own id instead of
+  // merging into the parent superproject's. Non-submodule repos and linked
+  // worktrees are unaffected: with no superproject the two resolvers are equal.
+  // See PR #3350 Codex review (hook normalization / submodule identity).
+  const resolveRoot = process.env.OMC_STATE_DIR ? getGitTopLevel : getWorktreeRoot;
   if (directory) {
     const resolved = resolve(directory);
-    const root = getWorktreeRoot(resolved);
+    const root = resolveRoot(resolved);
     if (root) return root;
 
     console.error('[worktree] non-git directory provided, falling back to process root', {
@@ -578,7 +1022,7 @@ export function resolveToWorktreeRoot(directory?: string): string {
     });
   }
   // Fallback: derive from process CWD (the MCP server / CLI entry point)
-  return getWorktreeRoot(process.cwd()) || process.cwd();
+  return resolveRoot(process.cwd()) || process.cwd();
 }
 
 // ============================================================================
@@ -624,29 +1068,29 @@ export function resolveTranscriptPath(transcriptPath: string | undefined, cwd?: 
   }
 
   // Strategy 2: Use CWD to detect worktree and reconstruct the path.
-  // When the CWD contains `/.claude/worktrees/`, we can derive the main
-  // project root and look for the transcript there.
+  // When the CWD contains `<sep>.claude<sep>worktrees<sep>`, we can derive the
+  // main project root and look for the transcript there. The marker is
+  // normalized so it matches the OS-native separator — on Windows the CWD uses
+  // `\`, so a hard-coded `/.claude/worktrees/` would never match.
   const effectiveCwd = cwd || process.cwd();
-  const worktreeMarker = '.claude/worktrees/';
-  const markerIdx = effectiveCwd.indexOf(worktreeMarker);
+  const normalizedCwd = normalize(effectiveCwd);
+  const worktreeMarker = normalize('/.claude/worktrees/');
+  const markerIdx = normalizedCwd.indexOf(worktreeMarker);
   if (markerIdx !== -1) {
-    // Adjust index to exclude the preceding path separator
-    const mainProjectRoot = effectiveCwd.substring(
-      0,
-      markerIdx > 0 && effectiveCwd[markerIdx - 1] === sep ? markerIdx - 1 : markerIdx,
-    );
+    // The marker includes its leading separator, so everything before it is
+    // the main project root.
+    const mainProjectRoot = normalizedCwd.substring(0, markerIdx);
 
-    // Extract session filename from the original path
-    const lastSep = transcriptPath.lastIndexOf('/');
-    const sessionFile = lastSep !== -1 ? transcriptPath.substring(lastSep + 1) : '';
+    // Extract the session filename. basename handles both separators on
+    // Windows (transcript_path arrives with `\`) and `/` on POSIX.
+    const sessionFile = basename(transcriptPath);
     if (sessionFile) {
       // The projects directory is under the Claude config dir
       const projectsDir = join(getClaudeConfigDir(), 'projects');
 
       if (existsSync(projectsDir)) {
-        // Encode the main project root the same way Claude Code does:
-        // replace path separators with `-`, replace dots with `-`.
-        const encodedMain = mainProjectRoot.replace(/[/\\.]/g, '-');
+        // Encode the main project root the same way Claude Code does.
+        const encodedMain = encodeProjectPath(mainProjectRoot);
         const resolvedPath = join(projectsDir, encodedMain, sessionFile);
         if (existsSync(resolvedPath)) return resolvedPath;
       }
@@ -683,12 +1127,12 @@ export function resolveTranscriptPath(transcriptPath: string | undefined, cwd?: 
     }).trim();
 
     if (mainRepoRoot !== worktreeTop) {
-      const lastSep = transcriptPath.lastIndexOf('/');
-      const sessionFile = lastSep !== -1 ? transcriptPath.substring(lastSep + 1) : '';
+      // basename handles `\` (Windows transcript_path) and `/` (POSIX).
+      const sessionFile = basename(transcriptPath);
       if (sessionFile) {
         const projectsDir = join(getClaudeConfigDir(), 'projects');
         if (existsSync(projectsDir)) {
-          const encodedMain = mainRepoRoot.replace(/[/\\.]/g, '-');
+          const encodedMain = encodeProjectPath(mainRepoRoot);
           const resolvedPath = join(projectsDir, encodedMain, sessionFile);
           if (existsSync(resolvedPath)) return resolvedPath;
         }
@@ -704,18 +1148,19 @@ export function resolveTranscriptPath(transcriptPath: string | undefined, cwd?: 
 }
 
 /**
- * Validate that a workingDirectory is within the trusted worktree root.
+ * Validate that a workingDirectory is within the trusted git top-level.
  * The trusted root is derived from process.cwd(), NOT from user input.
  *
- * Always returns a git worktree root — never a subdirectory.
- * This prevents .omc/state/ from being created in subdirectories (#576).
+ * Always returns a git top-level — never a subdirectory.
+ * This prevents .omc/state/ from being created in subdirectories (#576)
+ * without widening submodule launches to their superproject.
  *
  * @param workingDirectory - User-supplied working directory
  * @returns The validated worktree root
  * @throws Error if workingDirectory is outside trusted root
  */
 export function validateWorkingDirectory(workingDirectory?: string): string {
-  const trustedRoot = getWorktreeRoot(process.cwd()) || process.cwd();
+  const trustedRoot = getGitTopLevel(process.cwd()) || process.cwd();
 
   if (!workingDirectory) {
     return trustedRoot;
@@ -731,8 +1176,8 @@ export function validateWorkingDirectory(workingDirectory?: string): string {
     trustedRootReal = trustedRoot;
   }
 
-  // Try to resolve the provided directory to a git worktree root.
-  const providedRoot = getWorktreeRoot(resolved);
+  // Try to resolve the provided directory to its literal git top-level.
+  const providedRoot = getGitTopLevel(resolved);
 
   if (providedRoot) {
     // Git resolution succeeded — require exact worktree identity.
@@ -772,5 +1217,89 @@ export function validateWorkingDirectory(workingDirectory?: string): string {
 
   // Directory is under trusted root but git failed — return trusted root,
   // never the subdirectory, to prevent .omc/ creation in subdirs (#576).
+  return trustedRoot;
+}
+
+function getGitCommonDir(cwd: string): string | null {
+  try {
+    const commonDir = execSync('git rev-parse --path-format=absolute --git-common-dir', {
+      cwd,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5000,
+    }).trim();
+    return realpathSync(commonDir);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate a workingDirectory while permitting linked git worktrees for the
+ * same repository.
+ *
+ * This preserves validateWorkingDirectory's default cwd behavior and its
+ * same-root/subdirectory normalization, but allows a per-call directory to
+ * resolve to a sibling manual `git worktree` when both worktrees share the
+ * same git common directory. Other unrelated git repositories still fall back
+ * to the trusted startup cwd, and non-repo paths outside the trusted root are
+ * rejected.
+ */
+export function validateWorkingDirectoryOrLinkedWorktree(workingDirectory?: string): string {
+  const trustedRoot = getGitTopLevel(process.cwd()) || process.cwd();
+
+  if (!workingDirectory) {
+    return trustedRoot;
+  }
+
+  const resolved = resolve(workingDirectory);
+
+  let trustedRootReal: string;
+  try {
+    trustedRootReal = realpathSync(trustedRoot);
+  } catch {
+    trustedRootReal = trustedRoot;
+  }
+
+  const providedRoot = getGitTopLevel(resolved);
+
+  if (providedRoot) {
+    let providedRootReal: string;
+    try {
+      providedRootReal = realpathSync(providedRoot);
+    } catch {
+      throw new Error(`workingDirectory '${workingDirectory}' does not exist or is not accessible.`);
+    }
+
+    if (providedRootReal === trustedRootReal) {
+      return providedRoot;
+    }
+
+    const trustedCommonDir = getGitCommonDir(trustedRoot);
+    const providedCommonDir = getGitCommonDir(providedRoot);
+    if (trustedCommonDir && providedCommonDir && providedCommonDir === trustedCommonDir) {
+      return providedRoot;
+    }
+
+    console.error('[worktree] workingDirectory resolved to different git worktree root, using trusted root', {
+      workingDirectory: resolved,
+      providedRoot: providedRootReal,
+      trustedRoot: trustedRootReal,
+    });
+    return trustedRoot;
+  }
+
+  let resolvedReal: string;
+  try {
+    resolvedReal = realpathSync(resolved);
+  } catch {
+    throw new Error(`workingDirectory '${workingDirectory}' does not exist or is not accessible.`);
+  }
+
+  const rel = relative(trustedRootReal, resolvedReal);
+  if (rel.startsWith('..') || isAbsolute(rel)) {
+    throw new Error(`workingDirectory '${workingDirectory}' is outside the trusted worktree root '${trustedRoot}'.`);
+  }
+
   return trustedRoot;
 }

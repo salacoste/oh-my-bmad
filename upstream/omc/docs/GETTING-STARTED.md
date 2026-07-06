@@ -58,6 +58,13 @@ If you want `omc setup`, `omc update`, `omc team`, `omc ask`, etc. on your shell
 npm i -g oh-my-claude-sisyphus@latest
 ```
 
+> **Known npm warning:** npm may print `deprecated prebuild-install@7.1.3` during this CLI install.
+> The warning currently comes from the upstream `better-sqlite3` native-addon dependency
+> (`better-sqlite3 -> prebuild-install`); `prebuild-install@7.1.3` is still the latest
+> published version, so there is no safe repo-side dependency bump or override to remove it
+> yet. The warning is tracked in [#2913](https://github.com/Yeachan-Heo/oh-my-claudecode/issues/2913)
+> and does not by itself mean the OMC CLI install failed.
+
 Both can be installed at the same time. The CLI auto-detects the plugin install and will not double-register skills under `~/.claude/skills/` (if you previously hit the duplicate-skill bug, run `omc update` once on 4.11.2+ — it self-heals leftover standalone skills that the plugin now provides via `prunePluginDuplicateSkills`).
 
 ### Step 3: Run initial setup
@@ -140,7 +147,7 @@ This loads agents, skills, and commands directly from your checkout without copy
 | Linux | Claude Code Plugin | Bash (.sh) |
 | Windows | WSL2 recommended | Node.js (.mjs) |
 
-> ℹ️ **Note:** Native Windows support is experimental. OMC requires tmux, which is not available on native Windows. Use WSL2 instead.
+> ℹ️ **Note:** Native Windows support is experimental. For tmux-backed Team workers, OMC checks for a tmux-compatible binary first; native [psmux](https://github.com/psmux/psmux) is supported for PowerShell 7+ users who want visible Claude Code teammate panes in interactive team workflows. WSL2 remains the fallback when no compatible tmux is available or native Windows behavior is insufficient. psmux does not force worktree agents, non-interactive/print-mode agents, or model-selected in-process agents into visible panes.
 
 ### Updates
 
@@ -231,7 +238,7 @@ These keywords invoke a single appropriate agent directly, without running the f
 ### Next steps
 
 - [Configuration](#configuration) - Adjust agent models and features for your project
-- [Concepts](/docs/concepts) - Understand the relationship between agents, skills, and hooks
+- [Architecture](./ARCHITECTURE.md) - Understand the relationship between agents, skills, and hooks
 
 ---
 

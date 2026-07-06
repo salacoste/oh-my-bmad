@@ -12,6 +12,7 @@ import { join } from 'path';
 
 import { registerBeadsContext } from '../beads-context/index.js';
 import { getClaudeConfigDir } from '../../utils/config-dir.js';
+import { getOmcRoot } from '../../lib/worktree-paths.js';
 
 // ============================================================================
 // Types
@@ -135,7 +136,11 @@ export function setEnvironmentVariables(): string[] {
  * bug #17088, which mislabels every successful hook as an error.
  *
  * This function reads the plugin's hooks.json and rewrites every command of the
- * form:
+ * current form:
+ *   sh "$CLAUDE_PLUGIN_ROOT"/scripts/find-node.sh "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/X.mjs [args]
+ * or stale absolute-shell cache form:
+ *   "/bin/sh" "$CLAUDE_PLUGIN_ROOT"/scripts/find-node.sh "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/X.mjs [args]
+ * or legacy form:
  *   sh "${CLAUDE_PLUGIN_ROOT}/scripts/find-node.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/X.mjs" [args]
  * to:
  *   node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/X.mjs [args]
@@ -153,16 +158,23 @@ export function patchHooksJsonForWindows(pluginRoot: string): void {
       hooks?: Record<string, Array<{ hooks?: Array<{ command?: string }> }>>;
     };
 
-    // Matches: sh "${CLAUDE_PLUGIN_ROOT}/scripts/find-node.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/X.mjs" [optional args]
-    const pattern =
-      /^sh "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/find-node\.sh" "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/([^"]+)"(.*)$/;
+    // Matches current hooks.json:
+    // sh "$CLAUDE_PLUGIN_ROOT"/scripts/find-node.sh "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/X.mjs [optional args]
+    // Also matches older hotfix cache entries that hardcoded "/bin/sh".
+    const currentPattern =
+      /^(?:"\/bin\/sh"|sh) "\$CLAUDE_PLUGIN_ROOT"\/scripts\/find-node\.sh "\$CLAUDE_PLUGIN_ROOT"\/scripts\/run\.cjs "\$CLAUDE_PLUGIN_ROOT"\/scripts\/([^"\s]+)"?(.*)$/;
+
+    // Matches legacy hooks.json:
+    // sh "${CLAUDE_PLUGIN_ROOT}/scripts/find-node.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/X.mjs" [optional args]
+    const legacyPattern =
+      /^sh "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/find-node\.sh" "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/([^"\s]+)"?(.*)$/;
 
     let patched = false;
     for (const groups of Object.values(data.hooks ?? {})) {
       for (const group of groups) {
         for (const hook of group.hooks ?? []) {
           if (typeof hook.command === 'string') {
-            const m = hook.command.match(pattern);
+            const m = hook.command.match(currentPattern) ?? hook.command.match(legacyPattern);
             if (m) {
               hook.command = `node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/${m[1]}${m[2]}`;
               patched = true;
@@ -345,7 +357,7 @@ export async function processSetupInit(input: SetupInput): Promise<HookOutput> {
  * Prune old state files from .omc/state directory
  */
 export function pruneOldStateFiles(directory: string, maxAgeDays: number = DEFAULT_STATE_MAX_AGE_DAYS): number {
-  const stateDir = join(directory, '.omc/state');
+  const stateDir = join(getOmcRoot(directory), 'state');
   if (!existsSync(stateDir)) {
     return 0;
   }
@@ -408,7 +420,7 @@ export function pruneOldStateFiles(directory: string, maxAgeDays: number = DEFAU
  * Clean up orphaned state files (state files without corresponding active sessions)
  */
 export function cleanupOrphanedState(directory: string): number {
-  const stateDir = join(directory, '.omc/state');
+  const stateDir = join(getOmcRoot(directory), 'state');
   if (!existsSync(stateDir)) {
     return 0;
   }

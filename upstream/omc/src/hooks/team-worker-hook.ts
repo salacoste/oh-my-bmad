@@ -17,6 +17,7 @@ import { readFile, writeFile, mkdir, appendFile, rename, stat } from 'fs/promise
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { createSwallowedErrorLogger } from '../lib/swallowed-error.js';
+import { getOmcRoot } from '../lib/worktree-paths.js';
 
 // ── Env helpers ────────────────────────────────────────────────────────────
 
@@ -460,7 +461,7 @@ export async function handleWorkerTurn(
   cwd: string,
   tmux?: TmuxRunner,
 ): Promise<void> {
-  const stateDir = join(cwd, '.omc', 'state');
+  const stateDir = join(getOmcRoot(cwd), 'state');
   const parsedTeamWorker = { teamName, workerName };
 
   await updateWorkerHeartbeat(stateDir, teamName, workerName);

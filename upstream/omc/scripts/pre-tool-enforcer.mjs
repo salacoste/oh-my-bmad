@@ -7,13 +7,18 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'fs';
-import { dirname, join, resolve } from 'path';
+import { createHash } from 'crypto';
+import { dirname, join, resolve, basename } from 'path';
+import { homedir } from 'os';
 import { execSync } from 'child_process';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { getClaudeConfigDir } from './lib/config-dir.mjs';
+import { encodeProjectPath } from './lib/encode-project-path.mjs';
 import { evaluateAgentHeavyPreflight } from './lib/pre-tool-enforcer-preflight.mjs';
+import { evaluateForceAgentDelegation } from './lib/force-agent-delegation-preflight.mjs';
 import { resolveOmcStateRoot } from './lib/state-root.mjs';
 import { readStdin } from './lib/stdin.mjs';
+import { resolveConfiguredAgentModel } from './lib/agent-model-config.mjs';
 
 // Inlined from src/config/models.ts — avoids a dist/ import so the hook works
 // before a build and stays consistent with the TypeScript source.
@@ -29,7 +34,54 @@ function hasExtendedContextSuffix(modelId) {
 function isSubagentSafeModelId(modelId) {
   return isProviderSpecificModelId(modelId) && !hasExtendedContextSuffix(modelId);
 }
-const TIER_ALIASES = new Set(['sonnet', 'opus', 'haiku']);
+function isBedrockProviderEnv() {
+  if (process.env.CLAUDE_CODE_USE_BEDROCK === '1') return true;
+  const modelId = process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || '';
+  if (/^((us|eu|ap|global)\.anthropic\.|anthropic\.claude)/i.test(modelId)) return true;
+  if (
+    /^arn:aws(-[^:]+)?:bedrock:/i.test(modelId)
+    && /:(inference-profile|application-inference-profile)\//i.test(modelId)
+    && modelId.toLowerCase().includes('claude')
+  ) {
+    return true;
+  }
+  return false;
+}
+function isVertexProviderEnv() {
+  if (process.env.CLAUDE_CODE_USE_VERTEX === '1') return true;
+  const modelId = process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || '';
+  return !!modelId && modelId.toLowerCase().startsWith('vertex_ai/');
+}
+function getActiveModelIds() {
+  return [process.env.CLAUDE_MODEL || '', process.env.ANTHROPIC_MODEL || ''].filter(Boolean);
+}
+function isNormalClaudeModelId(modelId) {
+  const lower = (modelId || '').toLowerCase();
+  return Boolean(lower) && lower.includes('claude') && !isProviderSpecificModelId(modelId);
+}
+function hasNormalClaudeActiveModel() {
+  return getActiveModelIds().some(isNormalClaudeModelId);
+}
+function isConfigForceInheritProxyEnv() {
+  const config = loadOmcConfig();
+  return config.routing?.forceInherit === true && !hasNormalClaudeActiveModel();
+}
+function isNonClaudeProviderEnv() {
+  if (isBedrockProviderEnv() || isVertexProviderEnv()) return true;
+  const modelId = process.env.CLAUDE_MODEL || process.env.ANTHROPIC_MODEL || '';
+  if (modelId && !modelId.toLowerCase().includes('claude')) return true;
+  const baseUrl = process.env.ANTHROPIC_BASE_URL || '';
+  if (baseUrl && !baseUrl.includes('anthropic.com')) return true;
+  return isConfigForceInheritProxyEnv();
+}
+function acceptsProxyAnthropicDefaultTierValue(key, value) {
+  return key.startsWith('ANTHROPIC_DEFAULT_')
+    && Boolean(value)
+    && isNonClaudeProviderEnv()
+    && !isBedrockProviderEnv()
+    && !isVertexProviderEnv();
+}
+const TIER_ALIASES = new Set(['sonnet', 'opus', 'haiku', 'fable']);
 function isTierAlias(modelId) {
   return TIER_ALIASES.has((modelId || '').toLowerCase());
 }
@@ -45,6 +97,7 @@ const TIER_TO_DEFAULT_ENV_KEYS = {
   haiku:  ['OMC_SUBAGENT_MODEL', 'CLAUDE_CODE_BEDROCK_HAIKU_MODEL',  'ANTHROPIC_DEFAULT_HAIKU_MODEL'],
   sonnet: ['OMC_SUBAGENT_MODEL', 'CLAUDE_CODE_BEDROCK_SONNET_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL'],
   opus:   ['OMC_SUBAGENT_MODEL', 'CLAUDE_CODE_BEDROCK_OPUS_MODEL',   'ANTHROPIC_DEFAULT_OPUS_MODEL'],
+  fable:  ['OMC_SUBAGENT_MODEL', 'CLAUDE_CODE_BEDROCK_FABLE_MODEL',  'ANTHROPIC_DEFAULT_FABLE_MODEL'],
 };
 function resolveTierAliasToSafeModel(tierAlias) {
   const keys = TIER_TO_DEFAULT_ENV_KEYS[(tierAlias || '').toLowerCase()];
@@ -55,19 +108,21 @@ function resolveTierAliasToSafeModel(tierAlias) {
     // model resolution, which handles [1m] suffixes correctly for explicit model= calls.
     // OMC-internal vars (OMC_SUBAGENT_MODEL, OMC_MODEL_*) are not read by CC, so a [1m]
     // value there is not a valid routing proof — keep the stricter isSubagentSafeModelId check.
-    const isNativeCcVar = key.startsWith('ANTHROPIC_DEFAULT_') || key.startsWith('CLAUDE_CODE_BEDROCK_');
+    const isAnthropicDefaultTierVar = key.startsWith('ANTHROPIC_DEFAULT_');
+    const isNativeCcVar = isAnthropicDefaultTierVar || key.startsWith('CLAUDE_CODE_BEDROCK_');
     const validator = isNativeCcVar ? isProviderSpecificModelId : isSubagentSafeModelId;
-    if (value && validator(value)) return value;
+    if (value && (validator(value) || acceptsProxyAnthropicDefaultTierValue(key, value))) return value;
   }
   return '';
 }
-/** Map a bare Anthropic model ID to its CC tier alias (sonnet/opus/haiku), or null if unrecognised. */
+/** Map a bare Anthropic model ID to its CC tier alias (sonnet/opus/haiku/fable), or null if unrecognised. */
 function normalizeToCcAlias(model) {
   if (!model) return null;
   const lower = model.toLowerCase();
   if (lower.includes('opus'))   return 'opus';
   if (lower.includes('sonnet')) return 'sonnet';
   if (lower.includes('haiku'))  return 'haiku';
+  if (lower.includes('fable'))  return 'fable';
   return null;
 }
 /**
@@ -109,11 +164,251 @@ function readAgentDefinitionModel(subagentType) {
   }
 }
 
+
+const SLOP_RISK_TOOL_NAMES = new Set([
+  'Task',
+  'TaskCreate',
+  'TaskUpdate',
+  'Agent',
+  'Bash',
+  'Edit',
+  'MultiEdit',
+  'Write',
+  'NotebookEdit',
+]);
+// Keep the SLOP trigger tied to actual fallback/workaround semantics.
+// Primary-path domain names and comments often use neutral qualifiers such as
+// "extra" or "additional"; those words alone must not enter this gate.
+const SLOP_FALLBACK_LANGUAGE_PATTERN = /\b(?:fallback|fall\s+back|workaround|work\s+around)\b/i;
+const SLOP_FALLBACK_ACTION_PATTERNS = [
+  /\b(?:add|build|create|implement|introduce|make|patch|use|using|write)\s+(?:an?\s+|the\s+)?(?:fallback|workaround)\b/i,
+  /\b(?:fallback|workaround)\s+(?:layer|path|handler|shim|patch|implementation|mechanism|mode)\b/i,
+  /\bworkaround\s+(?:it|this|that|the|a|an)\b/i,
+  /\b(?:fall\s+back|fallback)\s+(?:to|on|onto)\b/i,
+  /\bwork\s+around\s+(?:it|this|that|the|a|an)\b/i,
+  /\bwork\s+around\s+(?!(?:it|this|that|the|a|an)\b)(?:[a-z0-9][\w-]*\s+){0,5}[a-z0-9][\w-]*\b/i,
+  /(?:^|[\s"'`=:/\\])[\w.-]*(?:fallback|workaround)[\w.-]*\.(?:cjs|js|mjs|py|sh|ts|tsx)\b/i,
+];
+const SLOP_BENIGN_TECHNICAL_PATTERNS = [
+  /\bfail[-\s]?soft\s+fallback(?:\s+(?:value|behavior|behaviour|result|semantics?))?\b/i,
+  /\bfallback\s+(?:value|variable|parameter|argument|option|setting|config(?:uration)?|default)\b/i,
+  /\bfallback\s+to\s+(?:the\s+)?default(?:\s+(?:config(?:uration)?|settings?|value|behavior|behaviour|option))?\b/i,
+  /\b(?:workaround|work\s+around)\s+for\s+(?:commit|change|issue|bug|regression|version|release|pr|pull\s+request|#[0-9]+|[a-f0-9]{7,40}\b)/i,
+  /\b(?:memory|sql|sqlite|mysql|postgres(?:ql)?|typescript|node|browser|runtime)\s+workaround\b/i,
+];
+const SLOP_DOC_CONTEXT_PATTERN = /(?:^|[/\\])(?:docs?|documentation|guides?|instructions?|prompts?|\.om[ctx])(?:[/\\]|$)|\.(?:md|mdx|txt|rst)$/i;
+const SLOP_SELF_REFERENCE_PATH_PATTERN = /(?:^|[/\\])(?:pre-tool-enforcer(?:\.mjs)?|pre-tool-enforcer\.test\.ts)(?:$|[/\\])/i;
+
+function collectStringValues(value, output = [], depth = 0) {
+  if (depth > 5 || output.length > 100) return output;
+  if (typeof value === 'string') {
+    output.push(value);
+    return output;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectStringValues(item, output, depth + 1);
+    return output;
+  }
+  if (value && typeof value === 'object') {
+    for (const [key, child] of Object.entries(value)) {
+      // Skip hook/runtime metadata so warnings are driven by user-authored tool intent.
+      if (/^(cwd|directory|session_?id|transcript_?path|hook_event_name)$/i.test(key)) continue;
+      collectStringValues(child, output, depth + 1);
+    }
+  }
+  return output;
+}
+
+function collectLikelyPathValues(value, output = [], depth = 0) {
+  if (depth > 5 || output.length > 100 || !value || typeof value !== 'object') return output;
+  if (Array.isArray(value)) {
+    for (const item of value) collectLikelyPathValues(item, output, depth + 1);
+    return output;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (typeof child === 'string' && /(?:^|_)(?:file_?path|path|filename|target|command)$/i.test(key)) {
+      output.push(child);
+      continue;
+    }
+    collectLikelyPathValues(child, output, depth + 1);
+  }
+  return output;
+}
+
+function stripSlopQuotedAndCodeContexts(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, '\n')
+    .replace(/`[^`\r\n]*`/g, ' ')
+    .replace(/(["'])(?:\\.|(?!\1)[^\\\r\n])*\1/g, ' ');
+}
+
+function splitSlopInspectionSegments(text) {
+  return text
+    .split(/[\r\n!?;]+/)
+    .map(segment => segment.trim())
+    .filter(Boolean);
+}
+
+function removeBenignTechnicalSlopFallbackSpans(text) {
+  return SLOP_BENIGN_TECHNICAL_PATTERNS.reduce(
+    (result, pattern) => {
+      const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
+      return result.replace(new RegExp(pattern.source, flags), ' ');
+    },
+    text,
+  );
+}
+
+function hasSlopFallbackActionShape(text) {
+  const strippedText = stripSlopQuotedAndCodeContexts(text);
+  return splitSlopInspectionSegments(strippedText).some(segment => (
+    SLOP_FALLBACK_ACTION_PATTERNS.some(pattern => (
+      pattern.test(removeBenignTechnicalSlopFallbackSpans(segment))
+    ))
+  ));
+}
+
+function isSelfReferentialSlopContext(toolInput) {
+  return collectLikelyPathValues(toolInput).some(value => SLOP_SELF_REFERENCE_PATH_PATTERN.test(value));
+}
+
+function isDocumentationSlopContext(toolInput) {
+  const pathLikeValues = collectLikelyPathValues(toolInput);
+  return pathLikeValues.some(value => SLOP_DOC_CONTEXT_PATTERN.test(value));
+}
+
+function shouldWarnForSlopFallbackLanguage(data, toolName, inspectedText) {
+  if (!SLOP_RISK_TOOL_NAMES.has(toolName)) return false;
+  if (!SLOP_FALLBACK_LANGUAGE_PATTERN.test(inspectedText)) return false;
+
+  const toolInput = data.toolInput || data.tool_input || {};
+  if (isSelfReferentialSlopContext(toolInput)) return false;
+  if (isDocumentationSlopContext(toolInput)) {
+    return false;
+  }
+
+  return hasSlopFallbackActionShape(inspectedText);
+}
+
+function generateSlopWarning(data, toolName) {
+  const toolInput = data.toolInput || data.tool_input || {};
+  const promptLikeFields = {
+    prompt: data.prompt,
+    userPrompt: data.userPrompt,
+    user_prompt: data.user_prompt,
+    message: data.message,
+  };
+  const inspectedText = collectStringValues(toolInput)
+    .concat(collectStringValues(promptLikeFields))
+    .join('\n');
+  if (!shouldWarnForSlopFallbackLanguage(data, toolName, inspectedText)) return '';
+
+  return '[SLOP WARNING] Detected fallback/workaround language in this tool input. ' +
+    'Do not make potential slop: avoid ad-hoc fallback layers, workaround shims, or environment-specific patches unless explicitly justified. ' +
+    'For architecture concerns, consult the architect for a concrete design first. ' +
+    'If this seems environment-specific, ask the user to confirm constraints before proceeding.';
+}
+
+function combineHookMessages(...messages) {
+  return messages.filter(Boolean).join('\n\n');
+}
+
+
+const ADVISORY_THROTTLE_STATE_FILE = 'pre-tool-advisory-throttle.json';
+const ADVISORY_THROTTLE_MAX_ENTRIES = 100;
+const ADVISORY_THROTTLE_DEFAULT_COOLDOWN_MS = 5 * 60 * 1000;
+const ADVISORY_THROTTLE_MIN_PRUNE_WINDOW_MS = 60 * 60 * 1000;
+
+function getAdvisoryThrottleCooldownMs() {
+  const raw = process.env.OMC_PRE_TOOL_ADVISORY_COOLDOWN_MS;
+  if (raw == null || raw === '') return ADVISORY_THROTTLE_DEFAULT_COOLDOWN_MS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return ADVISORY_THROTTLE_DEFAULT_COOLDOWN_MS;
+  return Math.max(0, parsed);
+}
+
+function getAdvisoryThrottleNowMs() {
+  const raw = process.env.OMC_PRE_TOOL_ADVISORY_NOW_MS;
+  if (raw != null && raw !== '') {
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Date.now();
+}
+
+function getAdvisoryThrottlePath(stateDir, sessionId) {
+  const safeSessionId = isValidSessionId(sessionId) ? sessionId : '';
+  return safeSessionId
+    ? join(stateDir, 'sessions', safeSessionId, ADVISORY_THROTTLE_STATE_FILE)
+    : join(stateDir, ADVISORY_THROTTLE_STATE_FILE);
+}
+
+function advisoryThrottleKey(message) {
+  return createHash('sha256').update(message).digest('hex');
+}
+
+function normalizeAdvisoryThrottleState(state) {
+  if (!state || typeof state !== 'object' || !state.entries || typeof state.entries !== 'object') {
+    return { version: 1, entries: {} };
+  }
+  return { ...state, version: 1, entries: state.entries };
+}
+
+function pruneAdvisoryThrottleEntries(entries, nowMs, cooldownMs) {
+  const pruneWindowMs = Math.max(cooldownMs * 2, ADVISORY_THROTTLE_MIN_PRUNE_WINDOW_MS);
+  const freshEntries = Object.entries(entries)
+    .filter(([, entry]) => {
+      const last = Number(entry?.last_emitted_at_ms);
+      return Number.isFinite(last) && last <= nowMs && nowMs - last <= pruneWindowMs;
+    })
+    .sort(([, a], [, b]) => Number(b?.last_emitted_at_ms || 0) - Number(a?.last_emitted_at_ms || 0))
+    .slice(0, ADVISORY_THROTTLE_MAX_ENTRIES);
+  return Object.fromEntries(freshEntries);
+}
+
+function shouldEmitAdvisoryMessage(stateDir, sessionId, message) {
+  const cooldownMs = getAdvisoryThrottleCooldownMs();
+  if (!message || cooldownMs <= 0) return true;
+
+  const nowMs = getAdvisoryThrottleNowMs();
+  const throttlePath = getAdvisoryThrottlePath(stateDir, sessionId);
+  const key = advisoryThrottleKey(message);
+
+  try {
+    const state = normalizeAdvisoryThrottleState(readJsonFile(throttlePath));
+    state.entries = pruneAdvisoryThrottleEntries(state.entries, nowMs, cooldownMs);
+
+    const previous = state.entries[key];
+    const previousMs = Number(previous?.last_emitted_at_ms);
+    const shouldEmit = !Number.isFinite(previousMs) || previousMs > nowMs || nowMs - previousMs >= cooldownMs;
+
+    if (shouldEmit) {
+      state.entries[key] = {
+        last_emitted_at_ms: nowMs,
+        message,
+      };
+      state.entries = pruneAdvisoryThrottleEntries(state.entries, nowMs, cooldownMs);
+      state.updated_at = new Date(nowMs).toISOString();
+      mkdirSync(dirname(throttlePath), { recursive: true });
+      const tmpPath = `${throttlePath}.tmp`;
+      writeFileSync(tmpPath, JSON.stringify(state, null, 2), { mode: 0o600 });
+      renameSync(tmpPath, throttlePath);
+    }
+
+    return shouldEmit;
+  } catch {
+    // Fail open: advisory throttling must never silence safety output because
+    // state IO failed. The hook may repeat a nudge rather than risk hiding it.
+    return true;
+  }
+}
+
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/;
 const MODE_STATE_FILES = [
   'autopilot-state.json',
   'ultrapilot-state.json',
   'ralph-state.json',
+  'ultragoal-state.json',
   'ultrawork-state.json',
   'ultraqa-state.json',
   'pipeline-state.json',
@@ -121,12 +416,82 @@ const MODE_STATE_FILES = [
   'omc-teams-state.json',
 ];
 const QUIET_LEVEL = getQuietLevel();
+const BUILT_IN_TASK_LIST_TOOL_NAMES = new Set([
+  'TaskCreate',
+  'TaskUpdate',
+  'TaskList',
+  'TaskGet',
+  'TaskOutput',
+  'TaskStop',
+]);
 
 function getQuietLevel() {
   const parsed = Number.parseInt(process.env.OMC_QUIET || '0', 10);
   if (Number.isNaN(parsed)) return 0;
   return Math.max(0, parsed);
 }
+
+/**
+ * Resolve the .omc root directory for a given starting directory.
+ *
+ * Resolution order (mirrors src/lib/worktree-paths.ts getOmcRoot):
+ *   1) OMC_STATE_DIR env — log a warning and fall through (full project-id
+ *      derivation lives in the TS layer; use resolveOmcStateRoot() for async
+ *      TS-backed OMC_STATE_DIR support in main()).
+ *   2) Walk up from startDir looking for a .omc-workspace marker file.
+ *      The first directory containing that file is the workspace anchor.
+ *   3) git rev-parse --show-toplevel from startDir.
+ *   4) Fallback to startDir itself.
+ *
+ * @param {string} startDir - Directory to resolve from (usually cwd from hook payload)
+ * @returns {string} Absolute path to the .omc root directory
+ */
+function resolveOmcRoot(startDir) {
+  const dir = startDir || process.cwd();
+
+  // 1) OMC_STATE_DIR: full project-id derivation is TS-only; warn and fall through.
+  if (process.env.OMC_STATE_DIR) {
+    process.stderr.write(
+      '[omc] OMC_STATE_DIR is set; resolveOmcRoot() falling through to workspace-marker ' +
+      'resolution. Use resolveOmcStateRoot() for full OMC_STATE_DIR support.\n'
+    );
+  }
+
+  // 2) Walk up looking for .omc-workspace marker
+  try {
+    let cursor = resolve(dir);
+    const home = (() => { try { return resolve(homedir()); } catch { return null; } })();
+    while (true) {
+      if (existsSync(join(cursor, '.omc-workspace'))) {
+        return join(cursor, '.omc');
+      }
+      const parent = dirname(cursor);
+      if (parent === cursor) break;
+      if (home && cursor === home) break;
+      cursor = parent;
+    }
+  } catch {
+    // walk failed — continue to git fallback
+  }
+
+  // 3) git rev-parse --show-toplevel
+  try {
+    const top = execSync('git rev-parse --show-toplevel', {
+      cwd: dir,
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      timeout: 5000,
+      windowsHide: true,
+    }).trim();
+    if (top) return join(top, '.omc');
+  } catch {
+    // not in a git repo — fall through
+  }
+
+  // 4) Fallback to startDir
+  return join(dir, '.omc');
+}
+
 
 /**
  * Resolve transcript path in worktree environments.
@@ -152,6 +517,7 @@ function resolveTranscriptPath(transcriptPath, cwd) {
       cwd: effectiveCwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     }).trim();
 
     const absoluteCommonDir = resolve(effectiveCwd, gitCommonDir);
@@ -161,16 +527,16 @@ function resolveTranscriptPath(transcriptPath, cwd) {
       cwd: effectiveCwd,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
     }).trim();
 
     if (mainRepoRoot !== worktreeTop) {
-      const lastSep = transcriptPath.lastIndexOf('/');
-      const sessionFile = lastSep !== -1 ? transcriptPath.substring(lastSep + 1) : '';
+      const sessionFile = basename(transcriptPath);
       if (sessionFile) {
         const configDir = getClaudeConfigDir();
         const projectsDir = join(configDir, 'projects');
         if (existsSync(projectsDir)) {
-          const encodedMain = mainRepoRoot.replace(/[/\\]/g, '-');
+          const encodedMain = encodeProjectPath(mainRepoRoot);
           const resolvedPath = join(projectsDir, encodedMain, sessionFile);
           try {
             if (existsSync(resolvedPath)) return resolvedPath;
@@ -209,13 +575,14 @@ function getAgentTrackingInfo(stateDir) {
 }
 
 // Get todo status from project-local todos only
-function getTodoStatus(directory) {
+async function getTodoStatus(directory) {
   let pending = 0;
   let inProgress = 0;
 
   // Check project-local todos
+  const omcRoot = await resolveOmcStateRoot(directory);
   const localPaths = [
-    join(directory, '.omc', 'todos.json'),
+    join(omcRoot, 'todos.json'),
     join(directory, '.claude', 'todos.json')
   ];
 
@@ -258,6 +625,181 @@ function readJsonFile(filePath) {
   } catch {
     return null;
   }
+}
+
+const STATE_STALE_MS = 2 * 60 * 60 * 1000;
+const ULTRAGOAL_TERMINAL_PHASES = new Set([
+  'complete',
+  'completed',
+  'done',
+  'all-done',
+  'all_done',
+  'failed',
+  'cancelled',
+  'canceled',
+  'aborted',
+]);
+
+function isStaleModeState(state) {
+  if (!state || typeof state !== 'object') return true;
+  const timestamps = [state.last_checked_at, state.updated_at, state.started_at]
+    .filter(value => typeof value === 'string' && value.length > 0)
+    .map(value => new Date(value).getTime())
+    .filter(value => Number.isFinite(value));
+  if (timestamps.length === 0) return true;
+  return Date.now() - Math.max(...timestamps) > STATE_STALE_MS;
+}
+
+function normalizeText(value) {
+  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').toLowerCase() : '';
+}
+
+function normalizePhase(value) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim().toLowerCase() : '';
+}
+
+function isUltragoalTerminalState(state, directory) {
+  if (!state || typeof state !== 'object') return true;
+  if (state.active === false) return true;
+  if (typeof state.completed_at === 'string' && state.completed_at.length > 0) return true;
+  if (state.all_done === true || state.done === true) return true;
+
+  const phase = normalizePhase(state.current_phase ?? state.phase ?? state.status);
+  if (phase && ULTRAGOAL_TERMINAL_PHASES.has(phase)) return true;
+
+  const plan = readJsonFile(join(directory, '.omc', 'ultragoal', 'goals.json'));
+  if (!plan || typeof plan !== 'object') return false;
+  if (plan.aggregateCompletion?.status === 'complete') return true;
+  if (!Array.isArray(plan.goals) || plan.goals.length === 0) return false;
+  return plan.goals.every(goal => {
+    const status = normalizePhase(goal?.status);
+    return status === 'complete' || status === 'review_blocked';
+  });
+}
+
+function readSessionModeState(stateDir, mode, sessionId) {
+  const filename = `${mode}-state.json`;
+  const safeSessionId = isValidSessionId(sessionId) ? sessionId : '';
+  const candidates = safeSessionId
+    ? [join(stateDir, 'sessions', safeSessionId, filename), join(stateDir, filename)]
+    : [join(stateDir, filename)];
+  for (const statePath of candidates) {
+    const state = readJsonFile(statePath);
+    if (!state) continue;
+    if (safeSessionId && state.session_id && state.session_id !== safeSessionId) continue;
+    return { state, path: statePath };
+  }
+  return { state: null, path: '' };
+}
+
+function getExpectedUltragoalObjective(state, directory) {
+  const candidates = [
+    state?.claude_goal_objective,
+    state?.claudeGoalObjective,
+    state?.codex_objective,
+    state?.codexObjective,
+    state?.goal_objective,
+    state?.goalObjective,
+    state?.objective,
+  ];
+  for (const value of candidates) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+
+  const plan = readJsonFile(join(directory, '.omc', 'ultragoal', 'goals.json'));
+  if (typeof plan?.claudeObjective === 'string' && plan.claudeObjective.trim()) return plan.claudeObjective.trim();
+  if (typeof plan?.aggregateCompletion?.objective === 'string' && plan.aggregateCompletion.objective.trim()) {
+    return plan.aggregateCompletion.objective.trim();
+  }
+  const activeGoal = Array.isArray(plan?.goals) ? plan.goals.find(goal => goal?.status === 'in_progress') : null;
+  if (typeof activeGoal?.objective === 'string' && activeGoal.objective.trim()) return activeGoal.objective.trim();
+  return '';
+}
+
+function extractClaudeGoalSnapshot(data) {
+  const candidates = [
+    data.goal,
+    data.claude_goal,
+    data.claudeGoal,
+    data.goal_state,
+    data.goalState,
+    data.codex_goal,
+    data.codexGoal,
+    data.context?.goal,
+    data.context?.claude_goal,
+  ];
+  for (const candidate of candidates) {
+    const goal = candidate?.goal && typeof candidate.goal === 'object' ? candidate.goal : candidate;
+    if (goal && typeof goal === 'object') {
+      const objective = goal.objective ?? goal.condition ?? goal.prompt ?? goal.description;
+      const status = goal.status ?? goal.state;
+      if (typeof objective === 'string' || typeof status === 'string') {
+        return { objective: typeof objective === 'string' ? objective : '', status: typeof status === 'string' ? status : '' };
+      }
+    }
+  }
+  return null;
+}
+
+
+function isCancelSkillBootstrapTool(toolName, toolInput) {
+  const skillName = extractSkillName(toolInput);
+  if (toolName === 'Skill' && skillName === 'cancel') return true;
+  if (toolName === 'ToolSearch') return true;
+
+  if (toolName === 'Read') {
+    const filePath = typeof toolInput.file_path === 'string'
+      ? toolInput.file_path
+      : typeof toolInput.path === 'string'
+        ? toolInput.path
+        : '';
+    const normalized = filePath.replace(/\\/g, '/');
+    if (/(?:^|\/)(?:skills|skill-bodies)\/cancel\/SKILL\.md$/i.test(normalized)) return true;
+  }
+
+  if (/state_(?:clear|read|write|list_active|get_status)$/i.test(toolName)) return true;
+  if (/^mcp__.*__state_(?:clear|read|write|list_active|get_status)$/i.test(toolName)) return true;
+
+  if (toolName !== 'Bash') return false;
+  const command = typeof toolInput.command === 'string' ? toolInput.command : '';
+  return /(?:^|[;&|\s])(?:omc|oh-my-claudecode|gjc)\s+(?:state\s+(?:clear|read|write|list-active|get-status)|cancel)\b/.test(command);
+}
+
+function isUltragoalBootstrapTool(toolName, toolInput) {
+  if (toolName === 'Skill' && extractSkillName(toolInput) === 'ultragoal') return true;
+  if (toolName !== 'Bash') return false;
+  const command = typeof toolInput.command === 'string' ? toolInput.command : '';
+  return /(?:^|[;&|\s])(?:omc|oh-my-claudecode)\s+ultragoal\s+(?:create(?:-goals)?|create-goals|complete(?:-goals)?|complete-goals|next|start-next|status)\b/.test(command);
+}
+
+function evaluateUltragoalPreToolEnforcement(stateDir, directory, sessionId, data) {
+  if (process.env.ALLOW_ULTRAGOAL_WITHOUT_GOAL === '1') return null;
+  const toolName = data.tool_name || data.toolName || '';
+  const toolInput = data.toolInput || data.tool_input || {};
+  if (isUltragoalBootstrapTool(toolName, toolInput)) return null;
+  if (isCancelSkillBootstrapTool(toolName, toolInput)) return null;
+  const loaded = readSessionModeState(stateDir, 'ultragoal', sessionId);
+  const state = loaded.state;
+  if (!state?.active) return null;
+  if (isStaleModeState(state)) return null;
+  if (state.project_path && resolve(String(state.project_path)) !== resolve(directory)) return null;
+  if (isUltragoalTerminalState(state, directory)) return null;
+
+  const expected = getExpectedUltragoalObjective(state, directory);
+  const actual = extractClaudeGoalSnapshot(data);
+  const actualObjective = normalizeText(actual?.objective);
+  const expectedObjective = normalizeText(expected);
+  const status = normalizePhase(actual?.status);
+  const objectiveMatches = Boolean(actualObjective && expectedObjective && actualObjective === expectedObjective);
+  const activeStatus = status === '' || status === 'active' || status === 'in_progress' || status === 'running';
+
+  if (!expectedObjective && actualObjective && activeStatus) return null;
+  if (objectiveMatches && activeStatus) return null;
+
+  const mismatch = actualObjective
+    ? `current Claude /goal appears unrelated: "${actual.objective}".`
+    : 'no active Claude /goal snapshot was visible to the hook.';
+  return `[ULTRAGOAL /GOAL REQUIRED] Active ultragoal state requires the matching Claude /goal before tools run; ${mismatch} Activate /goal with the ultragoal objective, or set ALLOW_ULTRAGOAL_WITHOUT_GOAL=1 to bypass this guard intentionally. Expected objective: ${expected || '<record one in ultragoal-state.json or .omc/ultragoal/goals.json>'}`;
 }
 
 function hasActiveJsonMode(stateDir, { allowSessionTagged = false } = {}) {
@@ -414,18 +956,18 @@ function generateAgentSpawnMessage(toolInput, stateDir, todoStatus, sessionId) {
   const bg = toolInput.run_in_background ? ' [BACKGROUND]' : '';
   const tracking = getAgentTrackingInfo(stateDir);
 
-  // Team-routing enforcement (issue #1006):
-  // When team state is active and Task is called WITHOUT team_name,
-  // inject a redirect message to use team agents instead of subagents.
+  // Team-routing guidance:
+  // Claude Code 2.1.178+ removed TeamCreate/TeamDelete. When OMC team state is
+  // active, teammates should be spawned into the session's implicit agent team by
+  // giving each Agent/Task call a distinct name. team_name is ignored by native
+  // Claude Code and should only be treated as legacy metadata.
   const teamState = getActiveTeamState(stateDir, sessionId);
-  if (teamState && !toolInput.team_name) {
+  if (teamState && !toolInput.name) {
     const teamName = teamState.team_name || teamState.teamName || 'team';
-    return `[TEAM ROUTING REQUIRED] Team "${teamName}" is active but you are spawning a regular subagent ` +
-      `without team_name. You MUST use TeamCreate first (if not already created), then spawn teammates with ` +
-      `Task(team_name="${teamName}", name="worker-N", subagent_type="${agentType}"). ` +
-      `Do NOT use Task without team_name during an active team session. ` +
-      `If TeamCreate is not available in your tools, tell the user to verify ` +
-      'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 is set in [$CLAUDE_CONFIG_DIR|~/.claude]/settings.json. Restart Claude Code.';
+    return `[TEAM ROUTING REQUIRED] Team "${teamName}" is active but you are spawning an unnamed subagent. ` +
+      `Claude Code 2.1.178+ uses the session's implicit native agent team; TeamCreate and TeamDelete are removed. ` +
+      `Spawn teammates directly with Agent/Task name="worker-N" and subagent_type="${agentType}". ` +
+      `Do NOT rely on team_name for routing; native Claude Code accepts it only as ignored legacy metadata.`;
   }
 
   if (QUIET_LEVEL >= 2) return '';
@@ -476,7 +1018,7 @@ const SKILL_PROTECTION_CONFIGS = {
 
 const SKILL_PROTECTION_MAP = {
   // === Already have mode state → no additional protection ===
-  autopilot: 'none', ralph: 'none', ultrawork: 'none', team: 'none',
+  autopilot: 'none', ralph: 'none', ultragoal: 'none', ultrawork: 'none', team: 'none',
   'omc-teams': 'none', ultraqa: 'none', cancel: 'none',
 
   // === Instant / read-only → no protection needed ===
@@ -636,6 +1178,9 @@ function confirmSkillModeStates(stateDir, skillName, sessionId) {
       clearAwaitingConfirmationFlag(stateDir, 'ralph', sessionId);
       clearAwaitingConfirmationFlag(stateDir, 'ultrawork', sessionId);
       break;
+    case 'ultragoal':
+      clearAwaitingConfirmationFlag(stateDir, 'ultragoal', sessionId);
+      break;
     case 'ultrawork':
       clearAwaitingConfirmationFlag(stateDir, 'ultrawork', sessionId);
       break;
@@ -715,7 +1260,25 @@ async function main() {
         : typeof data.sessionId === 'string'
           ? data.sessionId
           : '';
+
+    const ultragoalDenyReason = evaluateUltragoalPreToolEnforcement(stateDir, directory, sessionId, data);
+    if (ultragoalDenyReason) {
+      console.log(JSON.stringify({
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: ultragoalDenyReason
+        }
+      }));
+      return;
+    }
+
     const modeActive = hasActiveMode(stateDir, sessionId);
+
+    // When set, replaces the Task/Agent tool input via hookSpecificOutput.updatedInput
+    // so a configured per-agent model (agents.<name>.model) is applied (issue #3242).
+    let updatedToolInput = null;
 
     // Force-inherit check: deny Task/Agent calls with invalid model param when forceInherit is
     // enabled (Bedrock, Vertex, CC Switch, etc.) - issues #1135, #1201, #1767, #1868
@@ -768,7 +1331,7 @@ async function main() {
         } else if (sessionHasLmSuffix) {
           // No model param, but the session model has a [1m] context-window suffix.
           // Sub-agents would inherit it and fail — the runtime strips [1m] to a bare
-          // Anthropic model ID (e.g. claude-sonnet-4-6) which is invalid on Bedrock.
+          // Anthropic model ID (e.g. claude-sonnet-5) which is invalid on Bedrock.
           // Fix: pass a tier alias (sonnet/haiku/opus). The Agent tool schema only accepts
           // tier aliases for the model param — full Bedrock IDs are rejected by the schema.
           const tierAlias = normalizeToCcAlias(sessionModel) || 'sonnet';
@@ -816,6 +1379,19 @@ async function main() {
         }
         // else: no model param and no [1m] on session model → normal forceInherit,
         // agents inherit the parent session's model cleanly.
+      } else if (!toolModel && toolInput.subagent_type) {
+        // Non-forceInherit: honor agents.<name>.model from config.jsonc for native
+        // Task/Agent calls without an explicit model param. Without this, Claude Code
+        // reads the static agents/*.md frontmatter and silently ignores the user's
+        // per-agent override (issue #3242). Inject the resolved tier alias via
+        // updatedInput so the spawned subagent runs on the configured model.
+        const configuredModel = resolveConfiguredAgentModel(toolInput.subagent_type, directory);
+        if (configuredModel && configuredModel !== 'inherit') {
+          const normalizedModel = normalizeToCcAlias(configuredModel);
+          if (normalizedModel) {
+            updatedToolInput = { ...toolInput, model: normalizedModel };
+          }
+        }
       }
     }
 
@@ -844,9 +1420,34 @@ async function main() {
       }
     }
 
-    const todoStatus = getTodoStatus(directory);
+    const todoStatus = await getTodoStatus(directory);
 
-    if (toolName === 'Task' || toolName === 'TaskCreate' || toolName === 'TaskUpdate') {
+    // Force-agent-delegation: symmetric to evaluateAgentHeavyPreflight. Where
+    // preflight blocks Task/Agent spawning when context is exhausted, this
+    // evaluator blocks raw Read/Edit/Write/Grep/Glob when configured rules
+    // indicate the work should be delegated to a specialised agent. Default OFF
+    // — only fires when `.omc/config.json` has `routing.forceDelegation.enforce`.
+    const delegationBlock = evaluateForceAgentDelegation({
+      toolName,
+      stateDir,
+      loadOmcConfig,
+    });
+    if (delegationBlock) {
+      // Force-delegation preflight returns `{ decision: 'block', reason }` to
+      // match the agent-heavy preflight contract. Translate to the
+      // Claude Code hookSpecificOutput shape (`permissionDecision: 'deny'`).
+      console.log(JSON.stringify({
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: delegationBlock.reason,
+        },
+      }));
+      return;
+    }
+
+    if (toolName === 'Task' || toolName === 'Agent') {
       const rawTranscriptPath = data.transcript_path || data.transcriptPath || '';
       const transcriptPath = resolveTranscriptPath(rawTranscriptPath, directory);
       const preflightBlock = evaluateAgentHeavyPreflight({
@@ -859,16 +1460,43 @@ async function main() {
       }
     }
 
+    const slopWarning = generateSlopWarning(data, toolName);
     let message;
-    if (toolName === 'Task' || toolName === 'TaskCreate' || toolName === 'TaskUpdate') {
+    if (BUILT_IN_TASK_LIST_TOOL_NAMES.has(toolName)) {
+      console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+      return;
+    }
+
+    if (toolName === 'Task' || toolName === 'Agent') {
       const toolInput = data.toolInput || data.tool_input || null;
-      message = generateAgentSpawnMessage(toolInput, stateDir, todoStatus, sessionId);
+      // Reflect any injected per-agent model (issue #3242) in the advisory label.
+      message = generateAgentSpawnMessage(updatedToolInput || toolInput, stateDir, todoStatus, sessionId);
     } else {
       message = generateMessage(toolName, todoStatus, modeActive);
     }
+    message = combineHookMessages(slopWarning, message);
+
+    // Carry any per-agent model injection (issue #3242) even when the advisory
+    // message is empty or throttled, so the configured model is always applied.
+    const modelInjection = updatedToolInput
+      ? { hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: updatedToolInput } }
+      : null;
 
     if (!message) {
-      console.log(JSON.stringify({ continue: true, suppressOutput: true }));
+      console.log(JSON.stringify(
+        modelInjection
+          ? { continue: true, suppressOutput: true, ...modelInjection }
+          : { continue: true, suppressOutput: true }
+      ));
+      return;
+    }
+
+    if (!shouldEmitAdvisoryMessage(stateDir, sessionId, message)) {
+      console.log(JSON.stringify(
+        modelInjection
+          ? { continue: true, suppressOutput: true, ...modelInjection }
+          : { continue: true, suppressOutput: true }
+      ));
       return;
     }
 
@@ -876,7 +1504,8 @@ async function main() {
       continue: true,
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
-        additionalContext: message
+        additionalContext: message,
+        ...(updatedToolInput ? { updatedInput: updatedToolInput } : {})
       }
     }, null, 2));
   } catch (error) {

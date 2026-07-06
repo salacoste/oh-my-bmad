@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
 const originalPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
@@ -13,6 +14,48 @@ let testHomeDir: string;
 async function loadInstaller() {
   vi.resetModules();
   return import('../index.js');
+}
+
+function writePluginFile(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content);
+}
+
+function writeCompletePluginPayload(root: string): void {
+  writePluginFile(join(root, 'dist', 'hooks', 'skill-bridge.cjs'), 'console.log("skill bridge");\n');
+  writePluginFile(join(root, 'bridge', 'cli.cjs'), 'console.log("bridge");\n');
+  writePluginFile(join(root, 'hooks', 'hooks.json'), JSON.stringify({
+    hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'node test.mjs' }] }] },
+  }));
+  writePluginFile(join(root, 'skills', 'plan', 'SKILL.md'), '# plan\n');
+  writePluginFile(join(root, 'commands', 'omc-setup.md'), 'Read skills/omc-setup/SKILL.md and pass $ARGUMENTS.\n');
+  writePluginFile(join(root, '.claude-plugin', 'plugin.json'), JSON.stringify({
+    name: 'oh-my-claudecode',
+    commands: './commands/',
+    skills: ['./skills/plan/'],
+  }, null, 2));
+  writePluginFile(join(root, 'package.json'), JSON.stringify({ name: 'oh-my-claude-sisyphus', version: '9.9.9' }, null, 2));
+}
+
+function shippedStandaloneHookPayload(filename: string, location: 'hooks' | 'hooks/lib'): string {
+  if (location === 'hooks') {
+    if (filename === 'find-node.sh') {
+      return readFileSync(join(process.cwd(), 'scripts', filename), 'utf-8');
+    }
+    return readFileSync(join(process.cwd(), 'templates', 'hooks', filename), 'utf-8');
+  }
+
+  if (filename === 'config-dir.mjs' || filename === 'config-dir.sh') {
+    return readFileSync(join(process.cwd(), 'scripts', 'lib', filename), 'utf-8');
+  }
+  return readFileSync(join(process.cwd(), 'templates', 'hooks', 'lib', filename), 'utf-8');
+}
+
+function listTemplateHookLibPayload(): string[] {
+  const templatesLibDir = join(process.cwd(), 'templates', 'hooks', 'lib');
+  return readdirSync(templatesLibDir)
+    .filter(filename => statSync(join(templatesLibDir, filename)).isFile())
+    .sort();
 }
 
 describe('install() standalone hook reconciliation', () => {
@@ -72,6 +115,8 @@ describe('install() standalone hook reconciliation', () => {
     expect((writtenSettings as { statusLine?: { command?: string } }).statusLine?.command).toContain(
       `${join(testClaudeDir, 'hud', 'omc-hud.mjs').replace(/\\/g, '/')}`,
     );
+    expect((writtenSettings as { statusLine?: { command?: string } }).statusLine?.command).toContain('omc-hud-cache.sh');
+    expect(readFileSync(join(testClaudeDir, 'hud', 'omc-hud-cache.sh'), 'utf-8')).toContain('HUD cached statusLine launcher');
     expect(readFileSync(join(testClaudeDir, 'hud', 'omc-hud.mjs'), 'utf-8')).toContain(
       'const { getClaudeConfigDir } = await import(pathToFileURL(join(__dirname, "lib", "config-dir.mjs")).href);',
     );
@@ -84,6 +129,96 @@ describe('install() standalone hook reconciliation', () => {
     expect(readFileSync(join(testClaudeDir, 'hooks', 'keyword-detector.mjs'), 'utf-8')).toContain('Ralph keywords');
     expect(readFileSync(join(testClaudeDir, 'hooks', 'pre-tool-use.mjs'), 'utf-8')).toContain('PreToolUse');
     expect(readFileSync(join(testClaudeDir, 'hooks', 'code-simplifier.mjs'), 'utf-8')).toContain('Code Simplifier');
+  });
+
+  it('mirrors the complete standalone templates/hooks/lib payload', async () => {
+    const templatesLibDir = join(process.cwd(), 'templates', 'hooks', 'lib');
+    const futureHelper = `future-helper-${process.pid}.mjs`;
+    const futureHelperPath = join(templatesLibDir, futureHelper);
+
+    writeFileSync(futureHelperPath, 'export const futureHelper = true;\n');
+    try {
+      const { install } = await loadInstaller();
+      const result = install({
+        force: true,
+        skipClaudeCheck: true,
+      });
+
+      expect(result.success).toBe(true);
+      for (const filename of listTemplateHookLibPayload()) {
+        expect(existsSync(join(testClaudeDir, 'hooks', 'lib', filename)), filename).toBe(true);
+      }
+      expect(readFileSync(join(testClaudeDir, 'hooks', 'lib', futureHelper), 'utf-8')).toBe('export const futureHelper = true;\n');
+    } finally {
+      rmSync(futureHelperPath, { force: true });
+    }
+  });
+
+  it('installs standalone hooks with all runtime helper imports', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'omc-standalone-hook-project-'));
+    try {
+      mkdirSync(join(projectDir, '.git'), { recursive: true });
+
+      const { install } = await loadInstaller();
+      const result = install({
+        force: true,
+        skipClaudeCheck: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(existsSync(join(testClaudeDir, 'hooks', 'lib', 'state-root.mjs'))).toBe(true);
+      expect(existsSync(join(testClaudeDir, 'hooks', 'lib', 'model-routing-override-message.mjs'))).toBe(true);
+
+      const hookInputs: Array<{ file: string; input: Record<string, unknown> }> = [
+        {
+          file: 'session-start.mjs',
+          input: { hook_event_name: 'SessionStart', session_id: 'ci-upgrade-test', cwd: projectDir },
+        },
+        {
+          file: 'keyword-detector.mjs',
+          input: { hook_event_name: 'UserPromptSubmit', session_id: 'ci-upgrade-test', cwd: projectDir, prompt: 'hello' },
+        },
+        {
+          file: 'pre-tool-use.mjs',
+          input: { hook_event_name: 'PreToolUse', session_id: 'ci-upgrade-test', cwd: projectDir, tool_name: 'Read', tool_input: {} },
+        },
+        {
+          file: 'post-tool-use.mjs',
+          input: { hook_event_name: 'PostToolUse', session_id: 'ci-upgrade-test', cwd: projectDir, tool_name: 'Read', tool_input: {}, tool_response: 'ok' },
+        },
+        {
+          file: 'post-tool-use-failure.mjs',
+          input: { hook_event_name: 'PostToolUseFailure', session_id: 'ci-upgrade-test', cwd: projectDir, tool_name: 'Read', tool_input: {}, error: 'synthetic failure' },
+        },
+        {
+          file: 'persistent-mode.mjs',
+          input: { hook_event_name: 'Stop', session_id: 'ci-upgrade-test', cwd: projectDir },
+        },
+        {
+          file: 'code-simplifier.mjs',
+          input: { hook_event_name: 'Stop', session_id: 'ci-upgrade-test', cwd: projectDir },
+        },
+      ];
+
+      for (const { file, input } of hookInputs) {
+        const raw = execFileSync(process.execPath, [join(testClaudeDir, 'hooks', file)], {
+          input: JSON.stringify(input),
+          encoding: 'utf-8',
+          env: {
+            ...process.env,
+            CLAUDE_CONFIG_DIR: testClaudeDir,
+            HOME: testHomeDir,
+            USERPROFILE: testHomeDir,
+          },
+          timeout: 15000,
+        }).trim();
+
+        const parsed = JSON.parse(raw) as { continue?: boolean };
+        expect(parsed.continue, file).toBe(true);
+      }
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('preserves non-OMC ~/.claude/hooks commands while adding standalone OMC hooks', async () => {
@@ -222,13 +357,10 @@ describe('install() plugin-provided hook deduplication (#2252)', () => {
   });
 
   function setupPluginWithHooks() {
-    // Create a fake plugin root with hooks/hooks.json
+    // Create a fake plugin root with the complete runtime payload required
+    // before installer code may trust plugin-provided hooks.
     fakePluginRoot = mkdtempSync(join(tmpdir(), 'omc-fake-plugin-'));
-    const hooksDir = join(fakePluginRoot, 'hooks');
-    mkdirSync(hooksDir, { recursive: true });
-    writeFileSync(join(hooksDir, 'hooks.json'), JSON.stringify({
-      hooks: { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'node test.mjs' }] }] },
-    }));
+    writeCompletePluginPayload(fakePluginRoot);
 
     // Register plugin in installed_plugins.json
     const pluginsDir = join(testClaudeDir, 'plugins');
@@ -320,6 +452,85 @@ describe('install() plugin-provided hook deduplication (#2252)', () => {
     // Stale OMC hook entries should be cleaned up by legacy cleanup,
     // and NOT re-added because plugin provides hooks
     expect(writtenSettings.hooks).toBeUndefined();
+  });
+
+  it('prunes legacy standalone OMC hook files when plugin handles hooks', async () => {
+    setupPluginWithHooks();
+
+    const hooksDir = join(testClaudeDir, 'hooks');
+    const hooksLibDir = join(hooksDir, 'lib');
+    mkdirSync(hooksLibDir, { recursive: true });
+    mkdirSync(join(hooksDir, 'attention'), { recursive: true });
+
+    const legacyFiles = [
+      'keyword-detector.mjs',
+      'session-start.mjs',
+      'pre-tool-use.mjs',
+      'post-tool-use.mjs',
+      'post-tool-use-failure.mjs',
+      'persistent-mode.mjs',
+      'code-simplifier.mjs',
+      'stop-continuation.mjs',
+      'workflow-drift-guard.mjs',
+      'find-node.sh',
+    ];
+    for (const filename of legacyFiles) {
+      writeFileSync(join(hooksDir, filename), shippedStandaloneHookPayload(filename, 'hooks'));
+    }
+    for (const filename of ['atomic-write.mjs', 'config-dir.mjs', 'config-dir.sh', 'model-routing-override-message.mjs', 'state-root.mjs', 'stdin.mjs']) {
+      writeFileSync(join(hooksLibDir, filename), shippedStandaloneHookPayload(filename, 'hooks/lib'));
+    }
+
+    writeFileSync(join(hooksDir, 'notify-mac.sh'), 'user hook');
+    writeFileSync(join(hooksLibDir, 'user-helper.mjs'), 'user helper');
+    writeFileSync(join(hooksDir, 'attention', 'notify.mjs'), 'user nested hook');
+
+    const { install } = await loadInstaller();
+    const result = install({ force: true, skipClaudeCheck: true });
+
+    expect(result.success).toBe(true);
+    for (const filename of legacyFiles) {
+      expect(existsSync(join(hooksDir, filename)), filename).toBe(false);
+    }
+    expect(existsSync(join(hooksLibDir, 'atomic-write.mjs'))).toBe(false);
+    expect(existsSync(join(hooksLibDir, 'config-dir.sh'))).toBe(false);
+    expect(readFileSync(join(hooksDir, 'notify-mac.sh'), 'utf-8')).toBe('user hook');
+    expect(readFileSync(join(hooksLibDir, 'user-helper.mjs'), 'utf-8')).toBe('user helper');
+    expect(readFileSync(join(hooksDir, 'attention', 'notify.mjs'), 'utf-8')).toBe('user nested hook');
+  });
+
+  it('preserves same-basename non-OMC hook files while pruning shipped OMC payloads', async () => {
+    setupPluginWithHooks();
+
+    const hooksDir = join(testClaudeDir, 'hooks');
+    const hooksLibDir = join(hooksDir, 'lib');
+    mkdirSync(hooksLibDir, { recursive: true });
+
+    writeFileSync(join(hooksDir, 'keyword-detector.mjs'), 'console.log("user-owned keyword detector");\n');
+    writeFileSync(join(hooksDir, 'session-start.mjs'), shippedStandaloneHookPayload('session-start.mjs', 'hooks'));
+    writeFileSync(join(hooksLibDir, 'config-dir.mjs'), 'export function getClaudeConfigDir() { return "/user"; }\n');
+    writeFileSync(join(hooksLibDir, 'state-root.mjs'), shippedStandaloneHookPayload('state-root.mjs', 'hooks/lib'));
+
+    const { install } = await loadInstaller();
+    const result = install({ force: true, skipClaudeCheck: true });
+
+    expect(result.success).toBe(true);
+    expect(readFileSync(join(hooksDir, 'keyword-detector.mjs'), 'utf-8')).toBe('console.log("user-owned keyword detector");\n');
+    expect(existsSync(join(hooksDir, 'session-start.mjs'))).toBe(false);
+    expect(readFileSync(join(hooksLibDir, 'config-dir.mjs'), 'utf-8')).toBe('export function getClaudeConfigDir() { return "/user"; }\n');
+    expect(existsSync(join(hooksLibDir, 'state-root.mjs'))).toBe(false);
+  });
+
+  it('does not prune standalone hook files when plugin is not handling hooks', async () => {
+    const hooksDir = join(testClaudeDir, 'hooks');
+    mkdirSync(hooksDir, { recursive: true });
+    writeFileSync(join(hooksDir, 'keyword-detector.mjs'), 'legacy omc payload');
+
+    const { install } = await loadInstaller();
+    const result = install({ force: true, skipClaudeCheck: true });
+
+    expect(result.success).toBe(true);
+    expect(readFileSync(join(hooksDir, 'keyword-detector.mjs'), 'utf-8')).toContain('Ralph keywords');
   });
 
   it('preserves non-OMC hooks in settings.json when pruning plugin duplicates', async () => {

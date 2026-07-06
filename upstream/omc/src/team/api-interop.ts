@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve as resolvePath } from 'node:path';
+import { getOmcRoot } from '../lib/worktree-paths.js';
 import {
   TEAM_NAME_SAFE_PATTERN,
   WORKER_NAME_SAFE_PATTERN,
@@ -48,9 +49,11 @@ import { listDispatchRequests, markDispatchRequestDelivered, markDispatchRequest
 import { generateMailboxTriggerMessage } from './worker-bootstrap.js';
 import { shutdownTeam } from './runtime.js';
 import { shutdownTeamV2 } from './runtime-v2.js';
+import { inspectTeamWorktreeCleanupSafety } from './git-worktree.js';
 import { createSwallowedErrorLogger } from '../lib/swallowed-error.js';
+import type { TeamTaskDelegationPlan } from './types.js';
 
-const TEAM_UPDATE_TASK_MUTABLE_FIELDS = new Set(['subject', 'description', 'blocked_by', 'requires_code_change']);
+const TEAM_UPDATE_TASK_MUTABLE_FIELDS = new Set(['subject', 'description', 'blocked_by', 'requires_code_change', 'delegation']);
 const TEAM_UPDATE_TASK_REQUEST_FIELDS = new Set(['team_name', 'task_id', 'workingDirectory', ...TEAM_UPDATE_TASK_MUTABLE_FIELDS]);
 
 export const LEGACY_TEAM_MCP_TOOLS = [
@@ -144,9 +147,64 @@ function parseValidatedTaskIdArray(value: unknown, fieldName: string): string[] 
   return taskIds;
 }
 
+function parseTaskDelegationPlan(value: unknown): TeamTaskDelegationPlan {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('delegation must be an object');
+  }
+  const raw = value as Record<string, unknown>;
+  const mode = raw.mode;
+  if (mode !== 'none' && mode !== 'optional' && mode !== 'auto' && mode !== 'required') {
+    throw new Error('delegation.mode must be one of: none, optional, auto, required');
+  }
+  const plan: TeamTaskDelegationPlan = { mode };
+  if ('max_parallel_subtasks' in raw) {
+    if (!isFiniteInteger(raw.max_parallel_subtasks) || raw.max_parallel_subtasks < 1) {
+      throw new Error('delegation.max_parallel_subtasks must be a positive integer when provided');
+    }
+    plan.max_parallel_subtasks = raw.max_parallel_subtasks;
+  }
+  if ('required_parallel_probe' in raw) {
+    if (typeof raw.required_parallel_probe !== 'boolean') throw new Error('delegation.required_parallel_probe must be a boolean when provided');
+    plan.required_parallel_probe = raw.required_parallel_probe;
+  }
+  if ('spawn_before_serial_search_threshold' in raw) {
+    if (!isFiniteInteger(raw.spawn_before_serial_search_threshold) || raw.spawn_before_serial_search_threshold < 1) {
+      throw new Error('delegation.spawn_before_serial_search_threshold must be a positive integer when provided');
+    }
+    plan.spawn_before_serial_search_threshold = raw.spawn_before_serial_search_threshold;
+  }
+  if ('child_model_policy' in raw) {
+    const policy = raw.child_model_policy;
+    if (policy !== 'standard' && policy !== 'fast' && policy !== 'inherit' && policy !== 'frontier') {
+      throw new Error('delegation.child_model_policy must be one of: standard, fast, inherit, frontier');
+    }
+    plan.child_model_policy = policy;
+  }
+  if ('child_model' in raw) {
+    if (typeof raw.child_model !== 'string') throw new Error('delegation.child_model must be a string when provided');
+    plan.child_model = raw.child_model;
+  }
+  if ('subtask_candidates' in raw) {
+    if (!Array.isArray(raw.subtask_candidates) || !raw.subtask_candidates.every((item) => typeof item === 'string')) {
+      throw new Error('delegation.subtask_candidates must be an array of strings when provided');
+    }
+    plan.subtask_candidates = raw.subtask_candidates;
+  }
+  if ('child_report_format' in raw) {
+    const format = raw.child_report_format;
+    if (format !== 'bullets' && format !== 'json') throw new Error('delegation.child_report_format must be bullets or json when provided');
+    plan.child_report_format = format;
+  }
+  if ('skip_allowed_reason_required' in raw) {
+    if (typeof raw.skip_allowed_reason_required !== 'boolean') throw new Error('delegation.skip_allowed_reason_required must be a boolean when provided');
+    plan.skip_allowed_reason_required = raw.skip_allowed_reason_required;
+  }
+  return plan;
+}
+
 function teamStateExists(teamName: string, candidateCwd: string): boolean {
   if (!TEAM_NAME_SAFE_PATTERN.test(teamName)) return false;
-  const teamRoot = join(candidateCwd, '.omc', 'state', 'team', teamName);
+  const teamRoot = join(getOmcRoot(candidateCwd), 'state', 'team', teamName);
   return existsSync(join(teamRoot, 'config.json')) || existsSync(join(teamRoot, 'tasks')) || existsSync(teamRoot);
 }
 
@@ -194,10 +252,28 @@ function isLegacyRuntimeConfig(config: unknown): config is { tmuxSession?: strin
   return !!config && typeof config === 'object' && Array.isArray((config as { agentTypes?: unknown[] }).agentTypes);
 }
 
+function assertNoNativeWorktreeCleanupEvidence(teamName: string, cwd: string): void {
+  const safety = inspectTeamWorktreeCleanupSafety(teamName, cwd);
+  if (!safety.hasEvidence) return;
+
+  const evidence = safety.blockers.length > 0
+    ? safety.blockers
+    : safety.entries.map((entry) => ({
+      workerName: entry.workerName,
+      path: entry.path,
+      reason: 'worktree_cleanup_evidence_present',
+    }));
+  const details = evidence
+    .map((item) => `${item.workerName}:${item.reason}:${item.path}`)
+    .join(';');
+  throw new Error(`cleanup_blocked:worktree_cleanup_evidence_present:${details}`);
+}
+
 async function executeTeamCleanupViaRuntime(teamName: string, cwd: string): Promise<void> {
   const config = await teamReadConfig(teamName, cwd) as unknown;
 
   if (!config) {
+    assertNoNativeWorktreeCleanupEvidence(teamName, cwd);
     await teamCleanup(teamName, cwd);
     return;
   }
@@ -219,6 +295,7 @@ async function executeTeamCleanupViaRuntime(teamName: string, cwd: string): Prom
     return;
   }
 
+  assertNoNativeWorktreeCleanupEvidence(teamName, cwd);
   await teamCleanup(teamName, cwd);
 }
 
@@ -264,7 +341,7 @@ function resolveTeamWorkingDirectoryFromMetadata(
   candidateCwd: string,
   workerContext: { teamName: string; workerName: string } | null,
 ): string | null {
-  const teamRoot = join(candidateCwd, '.omc', 'state', 'team', teamName);
+  const teamRoot = join(getOmcRoot(candidateCwd), 'state', 'team', teamName);
   if (!existsSync(teamRoot)) return null;
 
   if (workerContext?.teamName === teamName) {
@@ -288,7 +365,10 @@ function resolveTeamWorkingDirectory(teamName: string, preferredCwd: string): st
   if (!normalizedTeamName) return preferredCwd;
   const envTeamStateRoot = readTeamStateRootFromEnv();
   if (typeof envTeamStateRoot === 'string' && envTeamStateRoot.trim() !== '') {
-    return stateRootToWorkingDirectory(envTeamStateRoot.trim());
+    const envWorkingDirectory = stateRootToWorkingDirectory(envTeamStateRoot.trim());
+    if (teamStateExists(normalizedTeamName, envWorkingDirectory)) {
+      return envWorkingDirectory;
+    }
   }
 
   const seeds: string[] = [];
@@ -629,8 +709,17 @@ export async function executeTeamApiOperation(
         const owner = args.owner as string | undefined;
         const blockedBy = args.blocked_by as string[] | undefined;
         const requiresCodeChange = args.requires_code_change as boolean | undefined;
+        let delegation: TeamTaskDelegationPlan | undefined;
+        if ('delegation' in args) {
+          try {
+            delegation = parseTaskDelegationPlan(args.delegation);
+          } catch (error) {
+            return { ok: false, operation, error: { code: 'invalid_input', message: (error as Error).message } };
+          }
+        }
         const task = await teamCreateTask(teamName, {
           subject, description, status: 'pending', owner: owner || undefined, blocked_by: blockedBy, requires_code_change: requiresCodeChange,
+          ...(delegation ? { delegation } : {}),
         }, cwd);
         return { ok: true, operation, data: { task } };
       }
@@ -694,6 +783,13 @@ export async function executeTeamApiOperation(
             return { ok: false, operation, error: { code: 'invalid_input', message: (error as Error).message } };
           }
         }
+        if ('delegation' in args) {
+          try {
+            updates.delegation = parseTaskDelegationPlan(args.delegation);
+          } catch (error) {
+            return { ok: false, operation, error: { code: 'invalid_input', message: (error as Error).message } };
+          }
+        }
         const task = await teamUpdateTask(teamName, taskId, updates, cwd);
         return task
           ? { ok: true, operation, data: { task } }
@@ -719,6 +815,8 @@ export async function executeTeamApiOperation(
         const from = String(args.from || '').trim();
         const to = String(args.to || '').trim();
         const claimToken = String(args.claim_token || '').trim();
+        const transitionResult = args.result;
+        const transitionError = args.error;
         if (!teamName || !taskId || !from || !to || !claimToken) {
           return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name, task_id, from, to, claim_token are required' } };
         }
@@ -726,7 +824,24 @@ export async function executeTeamApiOperation(
         if (!allowed.has(from) || !allowed.has(to)) {
           return { ok: false, operation, error: { code: 'invalid_input', message: 'from and to must be valid task statuses' } };
         }
-        const result = await teamTransitionTaskStatus(teamName, taskId, from as TeamTaskStatus, to as TeamTaskStatus, claimToken, cwd);
+        if (transitionResult !== undefined && typeof transitionResult !== 'string') {
+          return { ok: false, operation, error: { code: 'invalid_input', message: 'result must be a string when provided' } };
+        }
+        if (transitionError !== undefined && typeof transitionError !== 'string') {
+          return { ok: false, operation, error: { code: 'invalid_input', message: 'error must be a string when provided' } };
+        }
+        const result = await teamTransitionTaskStatus(
+          teamName,
+          taskId,
+          from as TeamTaskStatus,
+          to as TeamTaskStatus,
+          claimToken,
+          cwd,
+          {
+            result: typeof transitionResult === 'string' ? transitionResult : undefined,
+            error: typeof transitionError === 'string' ? transitionError : undefined,
+          },
+        );
         return { ok: true, operation, data: result as unknown as Record<string, unknown> };
       }
       case 'release-task-claim': {
@@ -808,9 +923,11 @@ export async function executeTeamApiOperation(
           pid: args.pid as number | undefined,
           pane_id: args.pane_id as string | undefined,
           working_dir: args.working_dir as string | undefined,
+          worktree_repo_root: args.worktree_repo_root as string | undefined,
           worktree_path: args.worktree_path as string | undefined,
           worktree_branch: args.worktree_branch as string | undefined,
           worktree_detached: args.worktree_detached as boolean | undefined,
+          worktree_created: args.worktree_created as boolean | undefined,
           team_state_root: args.team_state_root as string | undefined,
         }, cwd);
         return { ok: true, operation, data: { worker } };
@@ -849,9 +966,22 @@ export async function executeTeamApiOperation(
         return { ok: true, operation, data: { team_name: teamName } };
       }
       case 'orphan-cleanup': {
-        // Destructive escape hatch: always calls teamCleanup directly, bypasses shutdown orchestration
+        // Destructive escape hatch: calls teamCleanup directly, bypassing shutdown orchestration.
+        // Native worktree recovery metadata/root AGENTS backups are protected unless callers
+        // explicitly acknowledge that this force path may delete those recovery records.
         const teamName = String(args.team_name || '').trim();
         if (!teamName) return { ok: false, operation, error: { code: 'invalid_input', message: 'team_name is required' } };
+        const safety = inspectTeamWorktreeCleanupSafety(teamName, cwd);
+        if (safety.hasEvidence && args.acknowledge_lost_worktree_recovery !== true) {
+          return {
+            ok: false,
+            operation,
+            error: {
+              code: 'invalid_input',
+              message: 'orphan_cleanup_blocked:worktree_recovery_evidence_present; pass acknowledge_lost_worktree_recovery=true only after manually preserving or intentionally discarding worker worktrees and root AGENTS backups',
+            },
+          };
+        }
         await teamCleanup(teamName, cwd);
         return { ok: true, operation, data: { team_name: teamName } };
       }

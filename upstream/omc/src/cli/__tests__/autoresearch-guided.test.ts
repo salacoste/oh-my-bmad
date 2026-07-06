@@ -345,6 +345,9 @@ describe('spawnAutoresearchTmux', () => {
     });
     // tmux calls go through tmuxExec
     tmuxExecMock.mockImplementation((args: string[]) => {
+      if (args[0] === 'set-option' && args.includes('set-clipboard')) return '';
+      if (args[0] === 'show-options') return 'xterm*:clipboard:focus\n';
+      if (args[0] === 'set-option' && args.includes('terminal-features')) return '';
       if (args[0] === 'has-session') {
         hasSessionCalls += 1;
         if (hasSessionCalls === 1) {
@@ -365,6 +368,8 @@ describe('spawnAutoresearchTmux', () => {
     expect(buildTmuxShellCommandMock).toHaveBeenCalledWith(process.execPath, [expect.stringMatching(/bin\/omc\.js$/), 'autoresearch', '/repo/missions/demo']);
     expect(wrapWithLoginShellMock).toHaveBeenCalledWith(`${process.execPath} ${process.cwd()}/bin/omc.js autoresearch /repo/missions/demo`);
     expect(logSpy).toHaveBeenCalledWith('\nAutoresearch launched in background tmux session.');
+    expect(tmuxExecMock).toHaveBeenCalledWith(['set-option', '-t', 'omc-autoresearch-demo', 'set-clipboard', 'on'], { stripTmux: true, stdio: 'ignore' });
+    expect(tmuxExecMock).toHaveBeenCalledWith(['set-option', '-at', 'omc-autoresearch-demo', 'terminal-features', ',*:clipboard'], { stripTmux: true, stdio: 'ignore' });
     expect(logSpy).toHaveBeenCalledWith('  Attach:   tmux attach -t omc-autoresearch-demo');
   });
 });
@@ -430,6 +435,9 @@ describe('spawnAutoresearchSetupTmux', () => {
           expect(String(args[9])).toContain('--dangerously-skip-permissions');
           return '%42\n';
         }
+        if (args[0] === 'set-option' && args.includes('set-clipboard')) return '';
+        if (args[0] === 'show-options') return 'xterm*:clipboard:focus\n';
+        if (args[0] === 'set-option' && args.includes('terminal-features')) return '';
         if (args[0] === 'has-session') {
           hasSessionCalls += 1;
           expect(args).toEqual(['has-session', '-t', 'omc-autoresearch-setup-kf12oi']);
@@ -455,6 +463,8 @@ describe('spawnAutoresearchSetupTmux', () => {
         expect.objectContaining({ stripTmux: true }),
       );
       expect(logSpy).toHaveBeenCalledWith('\nAutoresearch setup launched in background Claude session.');
+      expect(tmuxExecMock).toHaveBeenCalledWith(['set-option', '-t', 'omc-autoresearch-setup-kf12oi', 'set-clipboard', 'on'], { stripTmux: true, stdio: 'ignore' });
+      expect(tmuxExecMock).toHaveBeenCalledWith(['set-option', '-at', 'omc-autoresearch-setup-kf12oi', 'terminal-features', ',*:clipboard'], { stripTmux: true, stdio: 'ignore' });
       expect(logSpy).toHaveBeenCalledWith('  Attach:   tmux attach -t omc-autoresearch-setup-kf12oi');
       expect(hasSessionCalls).toBe(1);
     } finally {
@@ -471,6 +481,9 @@ describe('spawnAutoresearchSetupTmux', () => {
     try {
       tmuxExecMock.mockImplementation((args: string[]) => {
         if (args[0] === 'new-session') return '%42\n';
+        if (args[0] === 'set-option' && args.includes('set-clipboard')) return '';
+        if (args[0] === 'show-options') return 'xterm*:clipboard:focus\n';
+        if (args[0] === 'set-option' && args.includes('terminal-features')) return '';
         if (args[0] === 'has-session' || args[0] === 'send-keys') return '';
         throw new Error(`unexpected tmuxExec call: ${String(args)}`);
       });

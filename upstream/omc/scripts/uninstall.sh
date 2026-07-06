@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Oh-My-ClaudeCode Uninstaller
 # Completely removes all OMC-installed files and configurations
 

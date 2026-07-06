@@ -83,7 +83,6 @@ describe('team api working-directory resolution', () => {
     expect(typeof (claimResult.data as { claimToken?: string }).claimToken).toBe('string');
   });
 
-
   it('claims tasks using config workers even when manifest workers are stale', async () => {
     const teamStateRoot = await seedTeamState();
     await writeFile(join(teamStateRoot, 'manifest.json'), JSON.stringify({
@@ -100,6 +99,31 @@ describe('team api working-directory resolution', () => {
       team_name: teamName,
       task_id: '1',
       worker: 'worker-1',
+    }, cwd);
+    expect(claimResult.ok).toBe(true);
+    if (!claimResult.ok) return;
+    expect((claimResult.data as { ok?: boolean }).ok).toBe(true);
+    expect(typeof (claimResult.data as { claimToken?: string }).claimToken).toBe('string');
+  });
+
+  it('recognizes workers implied by worker_count when workers array is temporarily empty', async () => {
+    const teamStateRoot = await seedTeamState();
+    await writeFile(join(teamStateRoot, 'config.json'), JSON.stringify({
+      name: teamName,
+      task: 'resolution test',
+      agent_type: 'claude',
+      worker_count: 2,
+      max_workers: 20,
+      workers: [],
+      created_at: '2026-03-06T00:00:00.000Z',
+      next_task_id: 2,
+      team_state_root: teamStateRoot,
+    }, null, 2));
+
+    const claimResult = await executeTeamApiOperation('claim-task', {
+      team_name: teamName,
+      task_id: '1',
+      worker: 'worker-2',
     }, cwd);
     expect(claimResult.ok).toBe(true);
     if (!claimResult.ok) return;

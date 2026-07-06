@@ -38,6 +38,7 @@ vi.mock('../tmux-session.js', () => ({
   paneHasActiveTask: vi.fn(() => false),
   paneLooksReady: vi.fn(() => true),
   applyMainVerticalLayout: mocks.applyMainVerticalLayout,
+  splitTeamWorkerPane: vi.fn(async () => '%2'),
 }));
 
 vi.mock('../model-contract.js', () => ({
@@ -48,6 +49,9 @@ vi.mock('../model-contract.js', () => ({
   isPromptModeAgent: modelContractMocks.isPromptModeAgent,
   getPromptModeArgs: modelContractMocks.getPromptModeArgs,
   resolveClaudeWorkerModel: modelContractMocks.resolveClaudeWorkerModel,
+  // gemini is supported on all platforms, so the preflight headless guard is a no-op here.
+  assertHeadlessSupported: () => {},
+  isHeadlessSupportedOnPlatform: () => true,
 }));
 
 vi.mock('../mcp-comm.js', () => ({

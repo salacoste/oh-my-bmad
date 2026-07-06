@@ -4,10 +4,12 @@
  * Renders git repository name and branch information.
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { resolve, basename } from 'node:path';
-import { dim, cyan, green, yellow, red } from '../colors.js';
+import { dim, cyan, green, red } from '../colors.js';
+import type { HudLabels } from '../types.js';
+import { DEFAULT_HUD_LABELS } from '../types.js';
 
 const CACHE_TTL_MS = 30_000;
 
@@ -33,6 +35,16 @@ const repoCache = new Map<string, CacheEntry<string | null>>();
 const branchCache = new Map<string, CacheEntry<string | null>>();
 const worktreeCache = new Map<string, CacheEntry<WorktreeDetection>>();
 const statusCache = new Map<string, CacheEntry<GitStatusCounts | null>>();
+
+function git(args: string[], cwd?: string): string {
+  return execFileSync('git', args, {
+    cwd,
+    encoding: 'utf-8',
+    timeout: 1000,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  }).trim();
+}
 
 /**
  * Clear all git caches. Call in tests beforeEach to ensure a clean slate.
@@ -62,13 +74,7 @@ export function getGitRepoName(cwd?: string): string | null {
 
   let result: string | null = null;
   try {
-    const url = execSync('git remote get-url origin', {
-      cwd,
-      encoding: 'utf-8',
-      timeout: 1000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: process.platform === 'win32' ? 'cmd.exe' : undefined,
-    }).trim();
+    const url = git(['remote', 'get-url', 'origin'], cwd);
 
     if (!url) {
       result = null;
@@ -101,13 +107,7 @@ export function getGitBranch(cwd?: string): string | null {
 
   let result: string | null = null;
   try {
-    const branch = execSync('git branch --show-current', {
-      cwd,
-      encoding: 'utf-8',
-      timeout: 1000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: process.platform === 'win32' ? 'cmd.exe' : undefined,
-    }).trim();
+    const branch = git(['branch', '--show-current'], cwd);
 
     result = branch || null;
   } catch {
@@ -133,18 +133,10 @@ export function getWorktreeInfo(cwd?: string): WorktreeDetection {
     return cached.value;
   }
 
-  const execOpts = {
-    cwd,
-    encoding: 'utf-8' as BufferEncoding,
-    timeout: 1000,
-    stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
-    shell: process.platform === 'win32' ? 'cmd.exe' : undefined,
-  };
-
   let result: WorktreeDetection = { isWorktree: false, worktreeName: null };
   try {
-    const gitDir = (execSync('git rev-parse --git-dir', execOpts) as string).trim();
-    const gitCommonDir = (execSync('git rev-parse --git-common-dir', execOpts) as string).trim();
+    const gitDir = git(['rev-parse', '--git-dir'], cwd);
+    const gitCommonDir = git(['rev-parse', '--git-common-dir'], cwd);
 
     // Canonicalize via realpathSync to handle symlinked repo paths
     let resolvedGitDir = resolve(key, gitDir);
@@ -213,13 +205,7 @@ export function getGitStatusCounts(cwd?: string): GitStatusCounts | null {
 
   let result: GitStatusCounts | null = null;
   try {
-    const output = execSync('git --no-optional-locks status --porcelain -b', {
-      cwd,
-      encoding: 'utf-8',
-      timeout: 1000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: process.platform === 'win32' ? 'cmd.exe' : undefined,
-    }).trim();
+    const output = git(['--no-optional-locks', 'status', '--porcelain', '-b'], cwd);
 
     let staged = 0, modified = 0, untracked = 0, ahead = 0, behind = 0;
 
@@ -264,7 +250,10 @@ export function getGitStatusCounts(cwd?: string): GitStatusCounts | null {
  * @param cwd - Working directory
  * @returns Formatted status or null if clean or not in a git repo
  */
-export function renderGitStatus(cwd?: string): string | null {
+export function renderGitStatus(
+  cwd?: string,
+  labels: Pick<HudLabels, 'staged' | 'modified' | 'untracked' | 'ahead' | 'behind'> = DEFAULT_HUD_LABELS,
+): string | null {
   const counts = getGitStatusCounts(cwd);
   if (!counts) return null;
 
@@ -274,11 +263,11 @@ export function renderGitStatus(cwd?: string): string | null {
   }
 
   const parts: string[] = [];
-  if (staged > 0) parts.push(`${green('+')}${staged}`);
-  if (modified > 0) parts.push(`${red('!')}${modified}`);
-  if (untracked > 0) parts.push(`${cyan('?')}${untracked}`);
-  if (ahead > 0) parts.push(`${green('⇡')}${ahead}`);
-  if (behind > 0) parts.push(`${red('⇣')}${behind}`);
+  if (staged > 0) parts.push(`${green(labels.staged)}${staged}`);
+  if (modified > 0) parts.push(`${red(labels.modified)}${modified}`);
+  if (untracked > 0) parts.push(`${cyan(labels.untracked)}${untracked}`);
+  if (ahead > 0) parts.push(`${green(labels.ahead)}${ahead}`);
+  if (behind > 0) parts.push(`${red(labels.behind)}${behind}`);
 
   return parts.join(' ');
 }

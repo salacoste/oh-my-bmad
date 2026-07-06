@@ -12,7 +12,7 @@ import { tmpdir } from 'os';
 
 // vi.hoisted runs before vi.mock hoisting — safe to reference in mock factories
 const { TEST_DIRS } = vi.hoisted(() => {
-  const TEST_DIRS = { claudeDir: '', projectDir: '', projectClaudeDir: '' };
+  const TEST_DIRS = { claudeDir: '', projectDir: '', projectClaudeDir: '', builtinSkillsDir: '' };
   return { TEST_DIRS };
 });
 
@@ -25,6 +25,21 @@ function resetTestDirs(): void {
   TEST_PROJECT_DIR = mkdtempSync(join(tmpdir(), 'omc-doctor-conflicts-project-'));
   TEST_PROJECT_CLAUDE_DIR = join(TEST_PROJECT_DIR, '.claude');
   TEST_DIRS.claudeDir = TEST_CLAUDE_DIR;
+  TEST_DIRS.builtinSkillsDir = join(TEST_PROJECT_DIR, 'builtin-skills');
+}
+
+function writeCanonicalOmcReferenceSkill(content = '# Canonical omc-reference skill\n'): string {
+  const skillPath = join(TEST_DIRS.builtinSkillsDir, 'omc-reference', 'SKILL.md');
+  mkdirSync(join(TEST_DIRS.builtinSkillsDir, 'omc-reference'), { recursive: true });
+  writeFileSync(skillPath, content);
+  return content;
+}
+
+function writePluginRoot(root: string, content: string): void {
+  mkdirSync(join(root, 'docs'), { recursive: true });
+  mkdirSync(join(root, 'skills', 'omc-reference'), { recursive: true });
+  writeFileSync(join(root, 'docs', 'CLAUDE.md'), '<!-- OMC:START -->\n# OMC\n<!-- OMC:END -->\n');
+  writeFileSync(join(root, 'skills', 'omc-reference', 'SKILL.md'), content);
 }
 
 // Mock getClaudeConfigDir before importing the module under test
@@ -34,8 +49,9 @@ vi.mock('../utils/config-dir.js', () => ({
 
 // Mock builtin skills to return a known list for testing
 vi.mock('../features/builtin-skills/skills.js', () => ({
+  getSkillsDir: () => TEST_DIRS.builtinSkillsDir,
   listBuiltinSkillNames: ({ includeAliases }: { includeAliases?: boolean } = {}) => {
-    const names = ['autopilot', 'ralph', 'ultrawork', 'plan', 'team', 'cancel', 'note'];
+    const names = ['autopilot', 'ralph', 'ultrawork', 'plan', 'team', 'cancel', 'note', 'omc-reference'];
     if (includeAliases) {
       return [...names, 'psm'];
     }
@@ -49,6 +65,8 @@ import {
   checkClaudeMdStatus,
   checkConfigIssues,
   checkLegacySkills,
+  checkWorkspaceMarker,
+  checkWindowsUnsafePluginHooks,
   runConflictCheck,
 } from '../cli/commands/doctor-conflicts.js';
 
@@ -65,6 +83,8 @@ describe('doctor-conflicts: hook ownership classification', () => {
     mkdirSync(TEST_PROJECT_CLAUDE_DIR, { recursive: true });
     process.env.CLAUDE_CONFIG_DIR = TEST_CLAUDE_DIR;
     process.env.CLAUDE_MCP_CONFIG_PATH = join(TEST_CLAUDE_DIR, '..', '.claude.json');
+    process.env.OMC_HOME = join(TEST_PROJECT_DIR, '.omc-home');
+    process.env.CODEX_HOME = join(TEST_PROJECT_DIR, '.codex');
     cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(TEST_PROJECT_DIR);
   });
 
@@ -145,6 +165,124 @@ describe('doctor-conflicts: hook ownership classification', () => {
 
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0].isOmc).toBe(true);
+  });
+
+  it('warns on native Windows when a plugin cache hooks manifest still contains sh/find-node commands', () => {
+    const pluginRoot = mkdtempSync(join(tmpdir(), 'omc-doctor-win-plugin-'));
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+
+    try {
+      mkdirSync(join(pluginRoot, 'hooks'), { recursive: true });
+      writeFileSync(join(pluginRoot, 'hooks', 'hooks.json'), JSON.stringify({
+        hooks: {
+          Stop: [{
+            hooks: [{
+              type: 'command',
+              command: 'sh "$CLAUDE_PLUGIN_ROOT"/scripts/find-node.sh "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/persistent-mode.mjs',
+            }],
+          }],
+          SessionEnd: [{
+            hooks: [{
+              type: 'command',
+              command: 'node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/session-end.mjs',
+            }],
+          }],
+        },
+      }));
+      process.env.CLAUDE_PLUGIN_ROOT = pluginRoot;
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+
+      const unsafe = checkWindowsUnsafePluginHooks();
+
+      expect(unsafe).toHaveLength(1);
+      expect(unsafe[0]).toMatchObject({ pluginRoot, event: 'Stop' });
+      expect(unsafe[0].command).toContain('find-node.sh');
+      expect(runConflictCheck().hasConflicts).toBe(true);
+    } finally {
+      delete process.env.CLAUDE_PLUGIN_ROOT;
+      if (originalPlatform) {
+        Object.defineProperty(process, 'platform', originalPlatform);
+      }
+      rmSync(pluginRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('warns on native Windows for stale installed plugin manifest even when settings hooks are clean', () => {
+    const pluginRoot = mkdtempSync(join(tmpdir(), 'omc-doctor-win-installed-plugin-'));
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+
+    try {
+      mkdirSync(join(pluginRoot, 'hooks'), { recursive: true });
+      writeFileSync(join(pluginRoot, 'hooks', 'hooks.json'), JSON.stringify({
+        hooks: {
+          PostToolUse: [{
+            hooks: [{
+              type: 'command',
+              command: 'sh "$CLAUDE_PLUGIN_ROOT"/scripts/find-node.sh "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/post-tool-verifier.mjs',
+            }],
+          }],
+        },
+      }));
+      writeFileSync(join(TEST_CLAUDE_DIR, 'settings.json'), JSON.stringify({
+        hooks: {
+          PostToolUse: [{
+            hooks: [{
+              type: 'command',
+              command: 'node "$HOME/.claude/hooks/post-tool-use.mjs"',
+            }],
+          }],
+        },
+      }));
+      mkdirSync(join(TEST_CLAUDE_DIR, 'plugins'), { recursive: true });
+      writeFileSync(join(TEST_CLAUDE_DIR, 'plugins', 'installed_plugins.json'), JSON.stringify({
+        plugins: {
+          'oh-my-claudecode': [{ installPath: pluginRoot }],
+        },
+      }));
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+
+      const unsafe = checkWindowsUnsafePluginHooks();
+
+      expect(unsafe).toHaveLength(1);
+      expect(unsafe[0]).toMatchObject({ pluginRoot, event: 'PostToolUse' });
+      expect(unsafe[0].command).toContain('find-node.sh');
+      expect(runConflictCheck().windowsUnsafePluginHooks).toHaveLength(1);
+      expect(runConflictCheck().hasConflicts).toBe(true);
+    } finally {
+      if (originalPlatform) {
+        Object.defineProperty(process, 'platform', originalPlatform);
+      }
+      rmSync(pluginRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not warn on native Windows when plugin hooks already use direct node run.cjs commands', () => {
+    const pluginRoot = mkdtempSync(join(tmpdir(), 'omc-doctor-win-plugin-clean-'));
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+
+    try {
+      mkdirSync(join(pluginRoot, 'hooks'), { recursive: true });
+      writeFileSync(join(pluginRoot, 'hooks', 'hooks.json'), JSON.stringify({
+        hooks: {
+          Stop: [{
+            hooks: [{
+              type: 'command',
+              command: 'node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs "$CLAUDE_PLUGIN_ROOT"/scripts/persistent-mode.mjs',
+            }],
+          }],
+        },
+      }));
+      process.env.CLAUDE_PLUGIN_ROOT = pluginRoot;
+      Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+
+      expect(checkWindowsUnsafePluginHooks()).toEqual([]);
+    } finally {
+      delete process.env.CLAUDE_PLUGIN_ROOT;
+      if (originalPlatform) {
+        Object.defineProperty(process, 'platform', originalPlatform);
+      }
+      rmSync(pluginRoot, { recursive: true, force: true });
+    }
   });
 
   it('classifies non-OMC hooks as not OMC-owned', () => {
@@ -458,6 +596,7 @@ describe('doctor-conflicts: legacy skills collision check (issue #1101)', () => 
 
   afterEach(() => {
     cwdSpy?.mockRestore();
+    delete process.env.CLAUDE_PLUGIN_ROOT;
     for (const dir of [TEST_CLAUDE_DIR, TEST_PROJECT_DIR]) {
       if (dir && existsSync(dir)) {
         rmSync(dir, { recursive: true, force: true });
@@ -511,6 +650,87 @@ describe('doctor-conflicts: legacy skills collision check (issue #1101)', () => 
     const collisions = checkLegacySkills();
     expect(collisions).toHaveLength(1);
     expect(collisions[0].name).toBe('team');
+  });
+
+  it('does NOT flag setup-installed omc-reference fallback when it matches the bundled skill (issue #2992)', () => {
+    const canonicalContent = writeCanonicalOmcReferenceSkill();
+    process.env.OMC_MCP_REGISTRY_PATH = join(TEST_PROJECT_DIR, 'no-mcp-registry.json');
+    const skillsDir = join(TEST_CLAUDE_DIR, 'skills');
+    mkdirSync(join(skillsDir, 'omc-reference'), { recursive: true });
+    writeFileSync(join(skillsDir, 'omc-reference', 'SKILL.md'), canonicalContent);
+
+    const collisions = checkLegacySkills();
+    expect(collisions).toHaveLength(0);
+  });
+
+  it('does NOT flag setup-installed omc-reference fallback when setup resolved a newer active cache root (issue #2992)', () => {
+    const oldContent = '# Old omc-reference skill\n';
+    const newerContent = '# Newer setup-installed omc-reference skill\n';
+    const cacheBase = join(TEST_PROJECT_DIR, 'plugin-cache', 'oh-my-claudecode');
+    const oldPluginRoot = join(cacheBase, '4.8.2');
+    const newerPluginRoot = join(cacheBase, '4.9.0');
+    TEST_DIRS.builtinSkillsDir = join(oldPluginRoot, 'skills');
+    writePluginRoot(oldPluginRoot, oldContent);
+    writePluginRoot(newerPluginRoot, newerContent);
+    mkdirSync(join(TEST_CLAUDE_DIR, 'plugins'), { recursive: true });
+    writeFileSync(join(TEST_CLAUDE_DIR, 'plugins', 'installed_plugins.json'), JSON.stringify({
+      'oh-my-claudecode@omc': [{ installPath: oldPluginRoot, version: '4.8.2' }],
+    }));
+    const skillsDir = join(TEST_CLAUDE_DIR, 'skills');
+    mkdirSync(join(skillsDir, 'omc-reference'), { recursive: true });
+    writeFileSync(join(skillsDir, 'omc-reference', 'SKILL.md'), newerContent);
+
+    const collisions = checkLegacySkills();
+    expect(collisions).toHaveLength(0);
+  });
+
+  it('does NOT flag setup-installed omc-reference fallback when it matches CLAUDE_PLUGIN_ROOT (issue #2992)', () => {
+    const currentContent = '# Current omc-reference skill\n';
+    const sessionContent = '# Session root omc-reference skill\n';
+    const sessionPluginRoot = join(TEST_PROJECT_DIR, 'session-plugin-root');
+    writeCanonicalOmcReferenceSkill(currentContent);
+    writePluginRoot(sessionPluginRoot, sessionContent);
+    process.env.CLAUDE_PLUGIN_ROOT = sessionPluginRoot;
+    const skillsDir = join(TEST_CLAUDE_DIR, 'skills');
+    mkdirSync(join(skillsDir, 'omc-reference'), { recursive: true });
+    writeFileSync(join(skillsDir, 'omc-reference', 'SKILL.md'), sessionContent);
+
+    const collisions = checkLegacySkills();
+    expect(collisions).toHaveLength(0);
+  });
+
+  it('flags user-modified omc-reference fallback content as a real collision (issue #2992)', () => {
+    writeCanonicalOmcReferenceSkill('# Canonical omc-reference skill\n');
+    const skillsDir = join(TEST_CLAUDE_DIR, 'skills');
+    mkdirSync(join(skillsDir, 'omc-reference'), { recursive: true });
+    writeFileSync(join(skillsDir, 'omc-reference', 'SKILL.md'), '# Modified omc-reference skill\n');
+
+    const collisions = checkLegacySkills();
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0].name).toBe('omc-reference');
+  });
+
+  it('still flags non-contract omc-reference.md legacy files (issue #2992)', () => {
+    writeCanonicalOmcReferenceSkill();
+    const skillsDir = join(TEST_CLAUDE_DIR, 'skills');
+    mkdirSync(skillsDir, { recursive: true });
+    writeFileSync(join(skillsDir, 'omc-reference.md'), '# Legacy omc-reference markdown file\n');
+
+    const collisions = checkLegacySkills();
+    expect(collisions).toHaveLength(1);
+    expect(collisions[0].name).toBe('omc-reference');
+  });
+
+  it('reports no conflicts for the setup-installed omc-reference fallback (issue #2992)', () => {
+    const canonicalContent = writeCanonicalOmcReferenceSkill();
+    const skillsDir = join(TEST_CLAUDE_DIR, 'skills');
+    mkdirSync(join(skillsDir, 'omc-reference'), { recursive: true });
+    writeFileSync(join(skillsDir, 'omc-reference', 'SKILL.md'), canonicalContent);
+    writeFileSync(join(TEST_CLAUDE_DIR, 'CLAUDE.md'), '<!-- OMC:START -->\n# OMC\n<!-- OMC:END -->\n');
+
+    const report = runConflictCheck();
+    expect(report.legacySkills).toHaveLength(0);
+    expect(report.hasConflicts).toBe(false);
   });
 
   it('reports hasConflicts when legacy skills collide (issue #1101)', () => {
@@ -603,5 +823,104 @@ describe('doctor-conflicts: config known fields (issue #1499)', () => {
 
     expect(checkConfigIssues().unknownFields).toEqual(['totallyMadeUpKey', 'anotherUnknown']);
     expect(runConflictCheck().hasConflicts).toBe(true);
+  });
+});
+
+describe('doctor-conflicts: workspace marker check (Wave F.2)', () => {
+  let cwdSpy: ReturnType<typeof vi.spyOn>;
+  let savedOmcStateDir: string | undefined;
+  let tempDir: string;
+
+  beforeEach(() => {
+    for (const dir of [TEST_CLAUDE_DIR, TEST_PROJECT_DIR]) {
+      if (dir && existsSync(dir)) {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    resetTestDirs();
+    mkdirSync(TEST_PROJECT_CLAUDE_DIR, { recursive: true });
+    process.env.CLAUDE_CONFIG_DIR = TEST_CLAUDE_DIR;
+    process.env.CLAUDE_MCP_CONFIG_PATH = join(TEST_CLAUDE_DIR, '..', '.claude.json');
+    cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(TEST_PROJECT_DIR);
+    savedOmcStateDir = process.env.OMC_STATE_DIR;
+    delete process.env.OMC_STATE_DIR;
+    tempDir = mkdtempSync(join(tmpdir(), 'omc-ws-marker-test-'));
+  });
+
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    delete process.env.CLAUDE_CONFIG_DIR;
+    delete process.env.CLAUDE_MCP_CONFIG_PATH;
+    if (savedOmcStateDir === undefined) {
+      delete process.env.OMC_STATE_DIR;
+    } else {
+      process.env.OMC_STATE_DIR = savedOmcStateDir;
+    }
+    for (const dir of [TEST_CLAUDE_DIR, TEST_PROJECT_DIR]) {
+      if (dir && existsSync(dir)) {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+    if (existsSync(tempDir)) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports markerRoot null when no .omc-workspace marker exists', () => {
+    cwdSpy.mockReturnValue(tempDir);
+    const status = checkWorkspaceMarker();
+    expect(status.markerRoot).toBeNull();
+    expect(status.stateDirEnvSet).toBe(false);
+    expect(status.precedenceConflict).toBe(false);
+  });
+
+  it('reports markerRoot when .omc-workspace marker is present', () => {
+    writeFileSync(join(tempDir, '.omc-workspace'), '{}');
+    cwdSpy.mockReturnValue(tempDir);
+    const status = checkWorkspaceMarker();
+    expect(status.markerRoot).toBe(tempDir);
+    expect(status.stateDirEnvSet).toBe(false);
+    expect(status.precedenceConflict).toBe(false);
+  });
+
+  it('reports stateDirEnvSet when OMC_STATE_DIR is set', () => {
+    process.env.OMC_STATE_DIR = '/some/centralized/state';
+    cwdSpy.mockReturnValue(tempDir);
+    const status = checkWorkspaceMarker();
+    expect(status.stateDirEnvSet).toBe(true);
+    expect(status.stateDirEnvValue).toBe('/some/centralized/state');
+    expect(status.markerRoot).toBeNull();
+    expect(status.precedenceConflict).toBe(false);
+  });
+
+  it('emits precedenceConflict when both OMC_STATE_DIR and .omc-workspace are active', () => {
+    writeFileSync(join(tempDir, '.omc-workspace'), '{}');
+    process.env.OMC_STATE_DIR = '/centralized/override';
+    cwdSpy.mockReturnValue(tempDir);
+    const status = checkWorkspaceMarker();
+    expect(status.markerRoot).toBe(tempDir);
+    expect(status.stateDirEnvSet).toBe(true);
+    expect(status.precedenceConflict).toBe(true);
+  });
+
+  it('precedenceConflict does NOT count as a hard hasConflicts flag in runConflictCheck', () => {
+    // precedenceConflict is a WARN, not a hard conflict — hasConflicts should stay false
+    writeFileSync(join(tempDir, '.omc-workspace'), '{}');
+    process.env.OMC_STATE_DIR = '/centralized/override';
+    cwdSpy.mockReturnValue(tempDir);
+    const report = runConflictCheck();
+    // workspaceMarker.precedenceConflict is true
+    expect(report.workspaceMarker.precedenceConflict).toBe(true);
+    // but hasConflicts only reflects hook/skill/env/config issues, not the workspace precedence warn
+    expect(report.hasConflicts).toBe(false);
+  });
+
+  it('runConflictCheck includes workspaceMarker in the report', () => {
+    cwdSpy.mockReturnValue(tempDir);
+    const report = runConflictCheck();
+    expect(report.workspaceMarker).toBeDefined();
+    expect(typeof report.workspaceMarker.markerRoot).toBe('object'); // null is valid
+    expect(typeof report.workspaceMarker.stateDirEnvSet).toBe('boolean');
+    expect(typeof report.workspaceMarker.precedenceConflict).toBe('boolean');
   });
 });

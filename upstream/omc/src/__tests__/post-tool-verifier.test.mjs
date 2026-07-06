@@ -9,7 +9,7 @@ import { join } from 'path';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import process from 'process';
-import { detectBashFailure, detectWriteFailure, isNonZeroExitWithOutput, summarizeAgentResult } from '../../scripts/post-tool-verifier.mjs';
+import { detectBashFailure, detectWriteFailure, isClaudeCodeWriteSuccess, isNonZeroExitWithOutput, summarizeAgentResult } from '../../scripts/post-tool-verifier.mjs';
 
 const SCRIPT_PATH = join(process.cwd(), 'scripts', 'post-tool-verifier.mjs');
 const TEMPLATE_HOOK_PATH = join(process.cwd(), 'templates', 'hooks', 'post-tool-use.mjs');
@@ -328,6 +328,30 @@ describe('isNonZeroExitWithOutput (issue #960)', () => {
   });
 });
 
+describe('isClaudeCodeWriteSuccess', () => {
+  it('detects canonical edit success output', () => {
+    expect(isClaudeCodeWriteSuccess('The file /tmp/doc.md has been updated successfully.')).toBe(true);
+  });
+
+  it('detects canonical write success output with location suffix', () => {
+    expect(isClaudeCodeWriteSuccess('File created successfully at: /tmp/doc.md')).toBe(true);
+  });
+
+  it('detects file-state confirmation output', () => {
+    expect(isClaudeCodeWriteSuccess('The file state is current in your context window.')).toBe(true);
+  });
+
+  it('ignores arbitrary markdown diagnostic prose without a success marker', () => {
+    const content = [
+      '## Example',
+      '',
+      '$ ls graphify-out',
+      'No such file or directory',
+    ].join('\n');
+    expect(isClaudeCodeWriteSuccess(content)).toBe(false);
+  });
+});
+
 describe('detectWriteFailure', () => {
   describe('Claude Code temp CWD false positives (issue #696)', () => {
     it('should not flag macOS temp CWD permission error as a write failure', () => {
@@ -382,6 +406,16 @@ describe('detectWriteFailure', () => {
 
     it('should return false for clean output', () => {
       expect(detectWriteFailure('File written successfully')).toBe(false);
+    });
+
+    it('should still report diagnostic-looking markdown as a raw failure signal without a tool success guard', () => {
+      const content = [
+        '## Example',
+        '',
+        '$ ls graphify-out',
+        'No such file or directory',
+      ].join('\n');
+      expect(detectWriteFailure(content)).toBe(true);
     });
   });
 
@@ -477,6 +511,69 @@ describe('agent output summarization / truncation (issue #1373)', () => {
 });
 
 describe('post-tool hook regression coverage (issue #2615)', () => {
+  it('prefers canonical edit success output over embedded markdown diagnostics', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Edit',
+      tool_response: [
+        'The file /tmp/doc.md has been updated successfully.',
+        '',
+        '## Example',
+        '',
+        '$ ls graphify-out',
+        'No such file or directory',
+      ].join('\n'),
+      session_id: 'issue-2792-edit',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Code modified.');
+    expect(out.hookSpecificOutput?.additionalContext).not.toContain('Edit operation failed');
+  });
+
+  it('prefers exact Claude Code edit success output over embedded diagnostics', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Edit',
+      tool_response: [
+        'The file has been updated successfully.',
+        '',
+        'diagnostic fixture: Error: failed to write',
+        'No such file or directory',
+      ].join('\n'),
+      session_id: 'issue-2876-exact-edit-success',
+      cwd: process.cwd(),
+    });
+
+    expect(isClaudeCodeWriteSuccess('The file has been updated successfully.')).toBe(true);
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Code modified.');
+    expect(out.hookSpecificOutput?.additionalContext).not.toContain('Edit operation failed');
+  });
+
+  it('keeps exact edit failure text classified as an Edit failure', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Edit',
+      tool_response: 'Error: failed to edit file',
+      session_id: 'issue-2876-edit-failure',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Edit operation failed');
+  });
+
+  it('prefers canonical write success output over serialized tool output with diagnostics', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Write',
+      tool_response: [
+        'File created successfully at: /tmp/doc.md',
+        '{"stdout":"No such file or directory","exitCode":1}',
+      ].join('\n'),
+      session_id: 'issue-2792-write',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('File written.');
+    expect(out.hookSpecificOutput?.additionalContext).not.toContain('Write operation failed');
+  });
+
   it('does not treat inline error-like strings in Edit output as an edit failure', () => {
     const out = runPostToolVerifier({
       tool_name: 'Edit',
@@ -498,6 +595,249 @@ describe('post-tool hook regression coverage (issue #2615)', () => {
     });
 
     expect(out).toEqual({ continue: true, suppressOutput: true });
+  });
+});
+
+describe('post-tool hook structured Write/Edit envelopes (issue #2840)', () => {
+  it('trusts real Edit success envelopes before scanning embedded source fields', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Edit',
+      tool_response: {
+        filePath: '/tmp/issue-2840-edit.ts',
+        oldString: 'throw new Error("old fixture")',
+        newString: 'expect(output).toContain("error: boom")',
+        originalFile: 'error: fixture prose\nfailed to write fixture',
+        structuredPatch: [
+          {
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: ['-throw new Error("old fixture")', '+expect(output).toContain("error: boom")'],
+          },
+        ],
+      },
+      session_id: 'issue-2840-edit-envelope',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Code modified.');
+    expect(out.hookSpecificOutput?.additionalContext).not.toContain('Edit operation failed');
+  });
+
+  it.each(['create', 'update'])('trusts real Write %s success envelopes before scanning content', type => {
+    const out = runPostToolVerifier({
+      tool_name: 'Write',
+      tool_response: {
+        type,
+        filePath: `/tmp/issue-2840-${type}.ts`,
+        content: 'const message = "error: fixture only";\n// failed to write appears in content',
+      },
+      session_id: `issue-2840-write-${type}-envelope`,
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('File written.');
+    expect(out.hookSpecificOutput?.additionalContext).not.toContain('Write operation failed');
+  });
+
+  it('trusts Write success envelopes with payload JSON containing error and failure keys', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Write',
+      tool_response: {
+        type: 'create',
+        filePath: '/tmp/issue-2841-write-payload.ts',
+        content: {
+          error: 'payload fixture key, not tool status',
+          failure: 'payload fixture key, not tool status',
+          nested: {
+            failedReason: 'payload fixture key, not tool status',
+          },
+        },
+      },
+      session_id: 'issue-2841-write-payload-keys-success',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('File written.');
+    expect(out.hookSpecificOutput?.additionalContext).not.toContain('Write operation failed');
+  });
+
+  it('trusts Edit success envelopes with payload fields containing error and failure keys', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Edit',
+      tool_response: {
+        filePath: '/tmp/issue-2841-edit-payload.ts',
+        oldString: '{"error":"old payload fixture","failure":"old payload fixture"}',
+        newString: '{"error":"new payload fixture","failure":"new payload fixture"}',
+        originalFile: '{"error":"original payload fixture","failure":"original payload fixture"}',
+        structuredPatch: [
+          {
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: [
+              { error: '-payload fixture key, not tool status' },
+              { failure: '+payload fixture key, not tool status' },
+            ],
+          },
+        ],
+      },
+      session_id: 'issue-2841-edit-payload-keys-success',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Code modified.');
+    expect(out.hookSpecificOutput?.additionalContext).not.toContain('Edit operation failed');
+  });
+
+  it.each(['message', 'output', 'stdout', 'stderr'])(
+    'does not trust Write-shaped envelopes with %s failure status text',
+    field => {
+      const out = runPostToolVerifier({
+        tool_name: 'Write',
+        tool_response: {
+          type: 'create',
+          filePath: `/tmp/issue-2841-write-${field}.ts`,
+          [field]: 'error: failed to write',
+          content: { error: 'payload key remains ignored' },
+        },
+        session_id: `issue-2841-write-${field}-status-failure`,
+        cwd: process.cwd(),
+      });
+
+      expect(out.hookSpecificOutput?.additionalContext).toContain('Write operation failed');
+    },
+  );
+
+  it.each(['message', 'output', 'stdout', 'stderr'])(
+    'does not trust Edit-shaped envelopes with %s failure status text',
+    field => {
+      const out = runPostToolVerifier({
+        tool_name: 'Edit',
+        tool_response: {
+          filePath: `/tmp/issue-2841-edit-${field}.ts`,
+          [field]: 'error: failed to edit',
+          oldString: '{"error":"payload fixture"}',
+          newString: '{"failure":"payload fixture"}',
+          originalFile: '{"error":"payload fixture","failure":"payload fixture"}',
+          structuredPatch: [
+            {
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              lines: [
+                { error: '-payload fixture key, not tool status' },
+                { failure: '+payload fixture key, not tool status' },
+              ],
+            },
+          ],
+        },
+        session_id: `issue-2841-edit-${field}-status-failure`,
+        cwd: process.cwd(),
+      });
+
+      expect(out.hookSpecificOutput?.additionalContext).toContain('Edit operation failed');
+    },
+  );
+
+  it('does not trust Write-shaped envelopes with explicit failure fields', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Write',
+      tool_response: {
+        type: 'create',
+        filePath: '/tmp/issue-2841-write.ts',
+        error: 'failed to write',
+        content: 'File content that would otherwise be valid.',
+      },
+      session_id: 'issue-2841-write-envelope-error',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Write operation failed');
+  });
+
+  it('does not trust nested Write-shaped envelopes with explicit failure fields', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Write',
+      tool_response: {
+        result: {
+          type: 'update',
+          filePath: '/tmp/issue-2841-nested-write.ts',
+          failure: 'operation failed',
+          content: 'File content that would otherwise be valid.',
+        },
+      },
+      session_id: 'issue-2841-nested-write-envelope-failure',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Write operation failed');
+  });
+
+  it('does not trust Edit-shaped envelopes with explicit error fields', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Edit',
+      tool_response: {
+        filePath: '/tmp/issue-2841-edit.ts',
+        error: 'failed to edit',
+        oldString: 'const before = true;',
+        newString: 'const after = true;',
+        structuredPatch: [
+          {
+            oldStart: 1,
+            oldLines: 1,
+            newStart: 1,
+            newLines: 1,
+            lines: ['-const before = true;', '+const after = true;'],
+          },
+        ],
+      },
+      session_id: 'issue-2841-edit-envelope-error',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Edit operation failed');
+  });
+
+  it('does not trust nested Edit-shaped envelopes with explicit failure fields', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Edit',
+      tool_response: {
+        data: {
+          filePath: '/tmp/issue-2841-nested-edit.ts',
+          failure: 'operation failed',
+          oldString: 'const before = true;',
+          newString: 'const after = true;',
+          structuredPatch: [
+            {
+              oldStart: 1,
+              oldLines: 1,
+              newStart: 1,
+              newLines: 1,
+              lines: ['-const before = true;', '+const after = true;'],
+            },
+          ],
+        },
+      },
+      session_id: 'issue-2841-nested-edit-envelope-failure',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Edit operation failed');
+  });
+
+  it('keeps plain string Write failure detection unchanged', () => {
+    const out = runPostToolVerifier({
+      tool_name: 'Write',
+      tool_response: 'error: failed to write file',
+      session_id: 'issue-2840-string-write-failure',
+      cwd: process.cwd(),
+    });
+
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Write operation failed');
   });
 });
 

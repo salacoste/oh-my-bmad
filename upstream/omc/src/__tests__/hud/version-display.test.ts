@@ -1,7 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render } from '../../hud/render.js';
 import { DEFAULT_HUD_CONFIG } from '../../hud/types.js';
 import type { HudRenderContext, HudConfig } from '../../hud/types.js';
+
+// The HUD banner appends an "L" suffix when running from a local/dev checkout
+// (isRuntimePackageLocal). Under test the package root has src/ and .git, so it
+// would always report local. Force false for deterministic banner assertions.
+vi.mock('../../lib/version.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/version.js')>()),
+  isRuntimePackageLocal: () => false,
+}));
 
 function createMinimalContext(overrides: Partial<HudRenderContext> = {}): HudRenderContext {
   return {
@@ -88,13 +96,22 @@ describe('HUD version display and update notification', () => {
   });
 
   describe('update notification', () => {
-    it('renders update notification when updateAvailable is set', async () => {
+    it('renders update notification by default when updateAvailable is set', async () => {
       const ctx = createMinimalContext({ omcVersion: '4.1.10', updateAvailable: '4.2.0' });
       const config = createMinimalConfig();
       const output = await render(ctx, config);
       expect(output).toContain('[OMC#4.1.10]');
       expect(output).toContain('-> 4.2.0');
       expect(output).toContain('omc update');
+    });
+
+    it('keeps OMC version label but hides update notification when updateNotification is false', async () => {
+      const ctx = createMinimalContext({ omcVersion: '4.1.10', updateAvailable: '4.2.0' });
+      const config = createMinimalConfig({ updateNotification: false });
+      const output = await render(ctx, config);
+      expect(output).toContain('[OMC#4.1.10]');
+      expect(output).not.toContain('-> 4.2.0');
+      expect(output).not.toContain('omc update');
     });
 
     it('renders update notification without version when omcVersion is null', async () => {

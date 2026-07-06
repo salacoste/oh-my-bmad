@@ -4,18 +4,15 @@
  * OMC Cross-platform hook runner (run.cjs)
  *
  * Uses process.execPath (the Node binary already running this script) to spawn
- * the target .mjs hook, bypassing PATH / shell discovery issues.
- *
- * Replaces the `sh + find-node.sh` chain that fails on Windows because
- * /usr/bin/sh is a PE32+ binary the OS refuses to execute natively.
+ * the target .mjs hook. The shipped plugin manifest launches this runner directly with
+ * `node ... run.cjs` so native Windows can spawn hooks without /bin/sh.
+ * Once Node has launched this runner, process.execPath is used for the
+ * hook-script handoff.
  * Fixes issues #909, #899, #892, #869.
  *
- * Usage (from hooks.json, after setup patches the absolute node path in):
- *   /abs/path/to/node "${CLAUDE_PLUGIN_ROOT}/scripts/run.cjs" \
+ * Manifest usage (from hooks.json):
+ *   node "${CLAUDE_PLUGIN_ROOT}/scripts/run.cjs" \
  *       "${CLAUDE_PLUGIN_ROOT}/scripts/<hook>.mjs" [args...]
- *
- * During post-install setup, the leading `node` token is replaced with
- * process.execPath so nvm/fnm users and Windows users all get the right binary.
  */
 
 const { spawnSync } = require('child_process');
@@ -102,6 +99,13 @@ function flattenHookEntries(rawHooks) {
   return Object.values(rawHooks).flatMap((entries) => Array.isArray(entries) ? entries : []);
 }
 
+const TIMEOUT_CUSHION_MS = 500;
+
+function resolveInnerTimeoutMs(manifestTimeoutMs) {
+  if (manifestTimeoutMs == null) return null;
+  return Math.max(1, manifestTimeoutMs - TIMEOUT_CUSHION_MS);
+}
+
 function resolveHookTimeoutMs(targetPath, extraArgs) {
   const pluginRoot = dirname(dirname(targetPath));
   const hooksJsonPath = join(pluginRoot, 'hooks', 'hooks.json');
@@ -138,7 +142,8 @@ if (!resolved) {
   process.exit(0);
 }
 
-const timeoutMs = resolveHookTimeoutMs(resolved, process.argv.slice(3));
+const manifestTimeoutMs = resolveHookTimeoutMs(resolved, process.argv.slice(3));
+const timeoutMs = resolveInnerTimeoutMs(manifestTimeoutMs);
 
 const result = spawnSync(
   process.execPath,

@@ -22,6 +22,7 @@ import {
   type AutoresearchSetupSessionInput,
 } from './autoresearch-setup-session.js';
 import { buildTmuxShellCommand, buildTmuxShellCommandWithEnv, isTmuxAvailable, quoteShellArg, tmuxExec, wrapWithLoginShell } from './tmux-utils.js';
+import { configureTmuxClipboardForSession } from './tmux-clipboard.js';
 
 const CLAUDE_BYPASS_FLAG = '--dangerously-skip-permissions';
 const AUTORESEARCH_SETUP_SLASH_COMMAND = '/deep-interview --autoresearch';
@@ -351,6 +352,9 @@ export function spawnAutoresearchTmux(missionDir: string, slug: string): void {
   const wrappedCommand = wrapWithLoginShell(command);
 
   tmuxExec(['new-session', '-d', '-s', sessionName, '-c', repoRoot, wrappedCommand], { stripTmux: true, stdio: 'ignore' });
+  try {
+    configureTmuxClipboardForSession(sessionName, { stripTmux: true, stdio: 'ignore' });
+  } catch { /* non-fatal — older tmux builds may not support these options */ }
   assertTmuxSessionAvailable(sessionName);
 
   console.log('\nAutoresearch launched in background tmux session.');
@@ -411,6 +415,9 @@ export function spawnAutoresearchSetupTmux(repoRoot: string): void {
     ['new-session', '-d', '-P', '-F', '#{pane_id}', '-s', sessionName, '-c', repoRoot, wrappedClaudeCommand],
     { stripTmux: true },
   ).trim();
+  try {
+    configureTmuxClipboardForSession(sessionName, { stripTmux: true, stdio: 'ignore' });
+  } catch { /* non-fatal — older tmux builds may not support these options */ }
 
   assertTmuxSessionAvailable(sessionName);
 

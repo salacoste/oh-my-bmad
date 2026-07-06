@@ -15,7 +15,7 @@
 
 *Não aprenda Claude Code. Só use OMC.*
 
-[Começar Rápido](#início-rápido) • [Documentação](https://yeachan-heo.github.io/oh-my-claudecode-website) • [Referência CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference) • [Workflows](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows) • [Guia de Migração](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
+[Começar Rápido](#início-rápido) • [Documentação](https://yeachan-heo.github.io/oh-my-claudecode-website) • [Referência CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference) • [Workflows](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows) • [Guia de Migração](docs/MIGRATION.md) • [Discord](https://discord.gg/PUwSMR9XNk)
 
 ---
 
@@ -146,7 +146,7 @@ Se você tiver problemas depois de atualizar, limpe o cache antigo do plugin:
 ## Recursos
 
 ### Modos de Orquestração
-Múltiplas estratégias para diferentes casos de uso — da orquestração com Team até refatoração com eficiência de tokens. [Saiba mais →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#execution-modes)
+Múltiplas estratégias para diferentes casos de uso — da orquestração com Team até refatoração com eficiência de tokens. [Saiba mais →](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#execution-modes)
 
 | Modo | O que é | Usar para |
 |------|---------|-----------|
@@ -203,7 +203,7 @@ Envolva o handler em server.py:42 com try/except ClientDisconnectedError...
 ```
 
 **Gerenciamento de skills:** `/skill list | add | remove | edit | search`
-**Auto-aprendizado:** `/learner` extrai padrões reutilizáveis com critérios de qualidade rigorosos
+**Auto-aprendizado:** `/skillify` extrai padrões reutilizáveis com critérios de qualidade rigorosos
 **Auto-injeção:** Skills correspondentes são carregadas no contexto automaticamente — sem necessidade de chamada manual
 
 [Lista completa de recursos →](docs/REFERENCE.md)
@@ -326,17 +326,17 @@ Encaminhe eventos de sessão do Claude Code para um gateway do [OpenClaw](https:
 | `OPENCLAW_REPLY_TARGET` | ID do canal |
 | `OPENCLAW_REPLY_THREAD` | ID da thread |
 
-Veja `scripts/openclaw-gateway-demo.mjs` para um gateway de referência que retransmite payloads OpenClaw para o Discord via ClawdBot.
+Veja `scripts/openclaw-gateway-demo.mjs` para um gateway de referência que retransmite payloads OpenClaw para um endpoint de automação HTTPS personalizado.
 
 ---
 
 ## Documentação
 
 - **[Referência Completa](docs/REFERENCE.md)** - Documentação completa de recursos
-- **[Referência CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#cli-reference)** - Todos os comandos, flags e ferramentas do `omc`
-- **[Guia de Notificações](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#notifications)** - Configuração de Discord, Telegram, Slack e webhooks
-- **[Workflows Recomendados](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#workflows)** - Cadeias de skills testadas em batalha para tarefas comuns
-- **[Notas de Lançamento](https://yeachan-heo.github.io/oh-my-claudecode-website/docs.html#release-notes)** - Novidades em cada versão
+- **[Referência CLI](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#cli-reference)** - Todos os comandos, flags e ferramentas do `omc`
+- **[Guia de Notificações](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#notifications)** - Configuração de Discord, Telegram, Slack e webhooks
+- **[Workflows Recomendados](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#workflows)** - Cadeias de skills testadas em batalha para tarefas comuns
+- **[Notas de Lançamento](https://yeachan-heo.github.io/oh-my-claudecode-website/docs/#release-notes)** - Novidades em cada versão
 - **[Website](https://yeachan-heo.github.io/oh-my-claudecode-website)** - Guias interativos e exemplos
 - **[Guia de Migração](docs/MIGRATION.md)** - Upgrade a partir da v2.x
 - **[Arquitetura](docs/ARCHITECTURE.md)** - Como funciona por baixo dos panos

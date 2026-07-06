@@ -152,10 +152,191 @@ Use the real docs file.
 
     const excludeContents = readFileSync(excludePath, 'utf-8');
     expect(excludeContents).toContain('# BEGIN OMC local artifacts');
+    expect(excludeContents).toContain('!.omc/');
     expect(excludeContents).toContain('.omc/*');
     expect(excludeContents).toContain('!.omc/skills/');
     expect(excludeContents).toContain('!.omc/skills/**');
+    expect(excludeContents).toContain('.omx/');
     expect(excludeContents).toContain('# END OMC local artifacts');
+  });
+
+  it('keeps the local git exclude block aligned with the tracked root .gitignore skill exceptions', () => {
+    const fixture = createPluginFixture(`<!-- OMC:START -->
+<!-- OMC:VERSION:9.9.9 -->
+
+# Canonical CLAUDE
+Use the real docs file.
+<!-- OMC:END -->
+`);
+
+    const repoGitignore = readFileSync(join(process.cwd(), '.gitignore'), 'utf-8');
+    expect(repoGitignore).toContain('!.omc/');
+    expect(repoGitignore).toContain('.omc/*');
+    expect(repoGitignore).toContain('!.omc/skills/');
+    expect(repoGitignore).toContain('!.omc/skills/**');
+    expect(repoGitignore).toContain('.omx/');
+
+    const gitInit = spawnSync('git', ['init'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+      },
+      encoding: 'utf-8',
+    });
+    expect(gitInit.status).toBe(0);
+
+    const result = spawnSync('bash', [fixture.scriptPath, 'local'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+      },
+      encoding: 'utf-8',
+    });
+    expect(result.status).toBe(0);
+
+    const excludePath = join(fixture.projectRoot, '.git', 'info', 'exclude');
+    const excludeContents = readFileSync(excludePath, 'utf-8');
+    expect(excludeContents).toContain('!.omc/');
+    expect(excludeContents).toContain('.omc/*');
+    expect(excludeContents).toContain('!.omc/skills/');
+    expect(excludeContents).toContain('!.omc/skills/**');
+    expect(excludeContents).toContain('.omx/');
+  });
+
+  it('local git exclude block keeps .omc/skills trackable while ignoring sibling .omc artifacts and .omx runtime cache', () => {
+    const fixture = createPluginFixture(`<!-- OMC:START -->
+<!-- OMC:VERSION:9.9.9 -->
+
+# Canonical CLAUDE
+Use the real docs file.
+<!-- OMC:END -->
+`);
+
+    const gitInit = spawnSync('git', ['init'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+      },
+      encoding: 'utf-8',
+    });
+    expect(gitInit.status).toBe(0);
+
+    const seedExclude = join(fixture.projectRoot, '.git', 'info', 'exclude');
+    writeFileSync(seedExclude, '.omc/\n');
+
+    const result = spawnSync('bash', [fixture.scriptPath, 'local'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+      },
+      encoding: 'utf-8',
+    });
+    expect(result.status).toBe(0);
+
+    const skillDir = join(fixture.projectRoot, '.omc', 'skills');
+    const stateDir = join(fixture.projectRoot, '.omc', 'state');
+    const omxStateDir = join(fixture.projectRoot, '.omx', 'state');
+    mkdirSync(skillDir, { recursive: true });
+    mkdirSync(stateDir, { recursive: true });
+    mkdirSync(omxStateDir, { recursive: true });
+    writeFileSync(join(skillDir, 'example.md'), 'skill');
+    writeFileSync(join(stateDir, 'example.json'), '{}');
+    writeFileSync(join(omxStateDir, 'runtime.json'), '{}');
+
+    const skillIgnore = spawnSync('git', ['check-ignore', '-v', '.omc/skills/example.md'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+      },
+      encoding: 'utf-8',
+    });
+    expect(skillIgnore.status).toBe(0);
+    expect(skillIgnore.stdout).toContain('!.omc/skills/**');
+
+    const stateIgnore = spawnSync('git', ['check-ignore', '-v', '.omc/state/example.json'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+      },
+      encoding: 'utf-8',
+    });
+    expect(stateIgnore.status).toBe(0);
+    expect(stateIgnore.stdout).toContain('.omc/*');
+
+    const omxStateIgnore = spawnSync('git', ['check-ignore', '-v', '.omx/state/runtime.json'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+      },
+      encoding: 'utf-8',
+    });
+    expect(omxStateIgnore.status).toBe(0);
+    expect(omxStateIgnore.stdout).toContain('.omx/');
+
+    const status = spawnSync('git', ['status', '--porcelain=v1', '-uall'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+      },
+      encoding: 'utf-8',
+    });
+    expect(status.status).toBe(0);
+    expect(status.stdout).not.toContain('.omx/');
+    expect(status.stdout).not.toContain('.omc/state/');
+    expect(status.stdout).toContain('.omc/skills/example.md');
+  });
+
+  it('updates an existing local git exclude block to ignore .omx runtime cache', () => {
+    const fixture = createPluginFixture(`<!-- OMC:START -->
+<!-- OMC:VERSION:9.9.9 -->
+
+# Canonical CLAUDE
+Use the real docs file.
+<!-- OMC:END -->
+`);
+
+    const gitInit = spawnSync('git', ['init'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+      },
+      encoding: 'utf-8',
+    });
+    expect(gitInit.status).toBe(0);
+
+    const excludePath = join(fixture.projectRoot, '.git', 'info', 'exclude');
+    writeFileSync(excludePath, `# BEGIN OMC local artifacts
+!.omc/
+.omc/*
+!.omc/skills/
+!.omc/skills/**
+# END OMC local artifacts
+`);
+
+    const result = spawnSync('bash', [fixture.scriptPath, 'local'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+      },
+      encoding: 'utf-8',
+    });
+    expect(result.status).toBe(0);
+
+    const excludeContents = readFileSync(excludePath, 'utf-8');
+    expect(excludeContents.match(/# BEGIN OMC local artifacts/g)).toHaveLength(1);
+    expect(excludeContents.match(/^\.omx\/$/gm)).toHaveLength(1);
+    expect(`${result.stdout}
+${result.stderr}`).toContain('Updated OMC git exclude for local OMX artifacts');
   });
 
   it('does not duplicate the local git exclude block on repeated local setup runs', () => {
@@ -230,6 +411,132 @@ Use the real docs file.
     expect(existsSync(join(configDir, 'skills', 'omc-reference', 'SKILL.md'))).toBe(true);
     expect(existsSync(join(configDir, 'hooks', 'keyword-detector.sh'))).toBe(false);
     expect(`${result.stdout}\n${result.stderr}`).toContain('Plugin verified');
+  });
+
+  it('does not warn for third-party-only settings hooks', () => {
+    const fixture = createPluginFixture(`<!-- OMC:START -->
+<!-- OMC:VERSION:9.9.9 -->
+
+# Canonical CLAUDE
+Use the real docs file.
+<!-- OMC:END -->
+`);
+
+    const configDir = join(fixture.homeRoot, 'custom-profile');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'settings.json'),
+      JSON.stringify({
+        plugins: ['oh-my-claudecode'],
+        hooks: {
+          Stop: [
+            {
+              matcher: '',
+              hooks: [{ type: 'command', command: 'node /opt/vendor/hooks/third-party-stop.js' }],
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = spawnSync('bash', [fixture.scriptPath, 'global'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+        CLAUDE_CONFIG_DIR: configDir,
+      },
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain('legacy OMC hook entries');
+  });
+
+  it('warns when settings hooks reference a legacy OMC hook command', () => {
+    const fixture = createPluginFixture(`<!-- OMC:START -->
+<!-- OMC:VERSION:9.9.9 -->
+
+# Canonical CLAUDE
+Use the real docs file.
+<!-- OMC:END -->
+`);
+
+    const configDir = join(fixture.homeRoot, 'custom-profile');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'settings.json'),
+      JSON.stringify({
+        plugins: ['oh-my-claudecode'],
+        hooks: {
+          UserPromptSubmit: [
+            {
+              matcher: '',
+              hooks: [{ type: 'command', command: '$HOME/.claude/hooks/keyword-detector.sh' }],
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = spawnSync('bash', [fixture.scriptPath, 'global'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+        CLAUDE_CONFIG_DIR: configDir,
+      },
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain('legacy OMC hook entries');
+  });
+
+  it('does not advise deleting the whole hooks section when hooks are mixed', () => {
+    const fixture = createPluginFixture(`<!-- OMC:START -->
+<!-- OMC:VERSION:9.9.9 -->
+
+# Canonical CLAUDE
+Use the real docs file.
+<!-- OMC:END -->
+`);
+
+    const configDir = join(fixture.homeRoot, 'custom-profile');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'settings.json'),
+      JSON.stringify({
+        plugins: ['oh-my-claudecode'],
+        hooks: {
+          Stop: [
+            {
+              matcher: '',
+              hooks: [
+                { type: 'command', command: 'node /opt/vendor/hooks/third-party-stop.js' },
+                { type: 'command', command: '$HOME/.claude/hooks/session-start.sh' },
+              ],
+            },
+          ],
+        },
+      }),
+    );
+
+    const result = spawnSync('bash', [fixture.scriptPath, 'global'], {
+      cwd: fixture.projectRoot,
+      env: {
+        ...process.env,
+        HOME: fixture.homeRoot,
+        CLAUDE_CONFIG_DIR: configDir,
+      },
+      encoding: 'utf-8',
+    });
+
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).toBe(0);
+    expect(output).toContain('legacy OMC hook entries');
+    expect(output).not.toContain('Remove the "hooks" section');
+    expect(output).toContain('third-party hook entries can remain');
   });
 
   it('overwrites an existing global CLAUDE.md by default when preserve mode is not requested', () => {

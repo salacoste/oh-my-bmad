@@ -9,6 +9,9 @@ import {
   shouldAttemptAdaptiveRetry,
   getDefaultShell,
   buildWorkerStartCommand,
+  paneLooksReady,
+  paneHasActiveTask,
+  paneHasTrustPrompt,
 } from '../tmux-session.js';
 
 afterEach(() => {
@@ -126,6 +129,142 @@ describe('buildWorkerStartCommand', () => {
       launchArgs: ['--full-auto'],
       cwd: 'C:\\repo'
     })).not.toThrow();
+  });
+
+  it('uses cmd.exe syntax for native Windows psmux worker start commands', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubEnv('PSMUX_SESSION', 'psmux-session-1');
+    vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+
+    const cmd = buildWorkerStartCommand({
+      teamName: 't',
+      workerName: 'w',
+      envVars: { OMC_TEAM_WORKER: 'team/worker-1' },
+      launchBinary: 'C:\\Users\\tester\\AppData\\Local\\Programs\\claude\\claude.exe',
+      launchArgs: ['--agent-id', 'worker-1'],
+      cwd: 'C:\\repo'
+    });
+
+    expect(cmd).toBe(
+      'C:\\Windows\\System32\\cmd.exe /d /s /c "set "OMC_TEAM_WORKER=team/worker-1" && ' +
+      '"C:\\Users\\tester\\AppData\\Local\\Programs\\claude\\claude.exe" "--agent-id" "worker-1""'
+    );
+    expect(cmd).not.toContain('$env:OMC_TEAM_WORKER');
+  });
+
+  it('escapes psmux cmd.exe env vars and quoted launch args without PowerShell syntax', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubEnv('PSMUX_SESSION', 'psmux-session-1');
+    vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+
+    const cmd = buildWorkerStartCommand({
+      teamName: 't',
+      workerName: 'w',
+      envVars: {
+        OMC_TEAM_WORKER: "team name/worker 'one'",
+        OMC_TEAM_STATE_ROOT: 'C:\\Users\\Test User\\AppData\\Local\\omc state',
+        CLAUDE_CODE_USE_BEDROCK: 'value with spaces & [brackets] "quotes"',
+      },
+      launchBinary: 'C:\\Program Files\\Claude Code\\claude.exe',
+      launchArgs: [
+        '--model',
+        'sonnet "quoted"',
+        "--label=worker 'one'",
+      ],
+      cwd: 'C:\\repo'
+    });
+
+    expect(cmd).toContain('set "OMC_TEAM_WORKER=team name/worker \'one\'"');
+    expect(cmd).toContain('set "OMC_TEAM_STATE_ROOT=C:\\Users\\Test User\\AppData\\Local\\omc state"');
+    expect(cmd).toContain('set "CLAUDE_CODE_USE_BEDROCK=value with spaces & [brackets] ""quotes"""');
+    expect(cmd).toContain('"C:\\Program Files\\Claude Code\\claude.exe" "--model" "sonnet ""quoted""" "--label=worker \'one\'"');
+    expect(cmd).not.toContain('$env:OMC_TEAM_WORKER');
+  });
+
+  it('escapes literal percent signs in native Windows cmd env values and launch args', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+
+    const cmd = buildWorkerStartCommand({
+      teamName: 't',
+      workerName: 'w',
+      envVars: {
+        OMC_TEAM_WORKER: 'team/worker-1',
+        OMC_TOKEN: 'literal%USERPROFILE%token%25',
+      },
+      launchBinary: 'C:\\Program Files\\Claude Code\\claude.exe',
+      launchArgs: ['--label', '100% ready %USERPROFILE%', '--token=abc%25'],
+      cwd: 'C:\\repo'
+    });
+
+    expect(cmd).toContain('set "OMC_TOKEN=literal%%USERPROFILE%%token%%25"');
+    expect(cmd).toContain('"100%% ready %%USERPROFILE%%"');
+    expect(cmd).toContain('"--token=abc%%25"');
+    expect(cmd).not.toContain('literal%USERPROFILE%token%25');
+  });
+
+  it('does not cmd-escape percent signs on MSYS Windows worker startup', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubEnv('PSMUX_SESSION', 'psmux-session-1');
+    vi.stubEnv('MSYSTEM', 'MINGW64');
+    vi.stubEnv('SHELL', '/usr/bin/bash');
+    vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+
+    const cmd = buildWorkerStartCommand({
+      teamName: 't',
+      workerName: 'w',
+      envVars: { OMC_TOKEN: 'literal%USERPROFILE%token%25' },
+      launchBinary: '/c/Program Files/Git/bin/bash.exe',
+      launchArgs: ['--label=100% ready'],
+      cwd: '/c/repo'
+    });
+
+    expect(cmd).toContain("OMC_TOKEN='literal%USERPROFILE%token%25'");
+    expect(cmd).toContain("'--label=100% ready'");
+    expect(cmd).not.toContain('%%USERPROFILE%%');
+  });
+
+
+  it('keeps cmd.exe worker startup syntax for native Windows without psmux', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+
+    const cmd = buildWorkerStartCommand({
+      teamName: 't',
+      workerName: 'w',
+      envVars: { OMC_TEAM_WORKER: 'team/worker-1' },
+      launchBinary: 'C:\\Program Files\\OpenAI\\Codex\\codex.exe',
+      launchArgs: ['--full-auto'],
+      cwd: 'C:\\repo'
+    });
+
+    expect(cmd).toBe(
+      'C:\\Windows\\System32\\cmd.exe /d /s /c "set "OMC_TEAM_WORKER=team/worker-1" && ' +
+      '"C:\\Program Files\\OpenAI\\Codex\\codex.exe" "--full-auto""'
+    );
+  });
+
+  it('keeps MSYS/Git Bash worker startup syntax even when psmux env is present', () => {
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    vi.stubEnv('PSMUX_SESSION', 'psmux-session-1');
+    vi.stubEnv('MSYSTEM', 'MINGW64');
+    vi.stubEnv('SHELL', '/usr/bin/bash');
+    vi.stubEnv('COMSPEC', 'C:\\Windows\\System32\\cmd.exe');
+
+    const cmd = buildWorkerStartCommand({
+      teamName: 't',
+      workerName: 'w',
+      envVars: { OMC_TEAM_WORKER: 'team/worker-1' },
+      launchBinary: '/c/Program Files/Git/bin/bash.exe',
+      launchArgs: ['--login'],
+      cwd: '/c/repo'
+    });
+
+    expect(cmd).toContain("'env' OMC_TEAM_WORKER='team/worker-1'");
+    expect(cmd).toContain("'/usr/bin/bash' '-lc'");
+    expect(cmd).toContain("'--' '/c/Program Files/Git/bin/bash.exe' '--login'");
+    expect(cmd).not.toContain('/d /s /c');
+    expect(cmd).not.toContain('$env:OMC_TEAM_WORKER');
   });
 
   it('uses exec \"$@\" for launchBinary with non-fish shells', () => {
@@ -300,6 +439,94 @@ describe('shouldAttemptAdaptiveRetry', () => {
       retriesAttempted: 0,
     })).toBe(false);
     delete process.env.OMC_TEAM_AUTO_INTERRUPT_RETRY;
+  });
+});
+
+describe('pane readiness startup banners', () => {
+  it('does not treat Claude bypass-permissions startup banner as ready', () => {
+    const capture = [
+      'Read .omc/state/team/example/workers/worker-1/inbox.md, execute now, report concrete progress.',
+      '─────────────────────────────────────────────',
+      '[OMC] Starting...',
+      '⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ].join('\n');
+
+    expect(paneLooksReady(capture)).toBe(false);
+  });
+
+  it('detects Codex CLI hook-trust review screen as a trust prompt', () => {
+    const capture = [
+      '  Hooks need review',
+      '  3 hooks are new or changed.',
+      '  Hooks can run outside the sandbox after you trust them.',
+      '',
+      '› 1. Review hooks',
+      '  2. Trust all and continue',
+      "  3. Continue without trusting (hooks won't run)",
+      '',
+      '  Press enter to confirm or esc to go back',
+    ].join('\n');
+
+    expect(paneHasTrustPrompt(capture)).toBe(true);
+    expect(paneLooksReady(capture)).toBe(true);
+    expect(paneHasActiveTask(capture)).toBe(false);
+  });
+
+  it('still treats actual prompt lines as ready', () => {
+    expect(paneLooksReady('Welcome\n❯ ')).toBe(true);
+    expect(paneLooksReady('Welcome\n> ')).toBe(true);
+    expect(paneLooksReady('⏵⏵ bypass permissions on (shift+tab to cycle)\nReady\n❯ ')).toBe(true);
+  });
+
+  it('treats Claude Code v2.1.x idle pane (prompt above persistent mode indicator) as ready', () => {
+    // Claude Code v2.1.142 renders the permission-mode indicator
+    // ("⏵⏵ bypass permissions on (shift+tab to cycle)") *below* the prompt
+    // as a persistent idle-state UI element. Before this fix, the pane was
+    // misread as still bootstrapping and OMC never dispatched the inbox to
+    // claude workers, leaving them hung with "[OMC] Starting..." forever.
+    const capture = [
+      '▐▛███▜▌   Claude Code v2.1.142',
+      '▝▜█████▛▘  Opus 4.7 (1M context) · Claude Max',
+      '  ▘▘ ▝▝    ~/some/repo',
+      '',
+      '───────────────────────────────────────',
+      '❯ ',
+      '───────────────────────────────────────',
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ].join('\n');
+
+    expect(paneLooksReady(capture)).toBe(true);
+    expect(paneHasActiveTask(capture)).toBe(false);
+  });
+
+  it('treats Claude idle prompt inside the TUI gutter as ready for initial dispatch', () => {
+    const capture = [
+      '╭────────────────────────────────────────────────────────╮',
+      '│ ✻ Welcome to Claude Code v2.1.142                      │',
+      '│                                                        │',
+      '│ ❯                                                      │',
+      '╰────────────────────────────────────────────────────────╯',
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ].join('\n');
+
+    expect(paneLooksReady(capture)).toBe(true);
+    expect(paneHasActiveTask(capture)).toBe(false);
+  });
+
+  it('still flags Claude Code v2.1.x mid-task panes via paneHasActiveTask', () => {
+    // Same v2.1.x pane shape with a spinner + "esc to interrupt" — paneLooksReady
+    // sees the prompt and reports ready, but waitForPaneReady's secondary
+    // paneHasActiveTask guard catches the in-flight task and keeps the worker
+    // from being treated as idle.
+    const capture = [
+      '❯ Run the migration',
+      '·  Thinking…',
+      '   esc to interrupt',
+      '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ].join('\n');
+
+    expect(paneLooksReady(capture)).toBe(true);
+    expect(paneHasActiveTask(capture)).toBe(true);
   });
 });
 

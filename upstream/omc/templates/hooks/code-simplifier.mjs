@@ -28,6 +28,7 @@ const __dirname = dirname(__filename);
 const { readStdin } = await import(
   pathToFileURL(join(__dirname, 'lib', 'stdin.mjs')).href
 );
+const { resolveOmcStateRoot } = await import(pathToFileURL(join(__dirname, 'lib', 'state-root.mjs')).href);
 
 const DEFAULT_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs'];
 const DEFAULT_MAX_FILES = 10;
@@ -95,7 +96,7 @@ async function main() {
     }
 
     const cwd = data.cwd || data.directory || process.cwd();
-    const stateDir = join(cwd, '.omc', 'state');
+    const stateDir = join(await resolveOmcStateRoot(cwd), 'state');
     const config = readOmcConfig();
 
     if (!isEnabled(config)) {

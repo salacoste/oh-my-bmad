@@ -17,6 +17,7 @@ import type {
 } from "../shared/types.js";
 import {
   CANONICAL_TEAM_ROLES,
+  CURSOR_EXECUTOR_TEAM_ROLES,
   KNOWN_AGENT_NAMES,
 } from "../shared/types.js";
 import { getConfigDir } from "../utils/paths.js";
@@ -24,9 +25,10 @@ import { parseJsonc } from "../utils/jsonc.js";
 import {
   getDefaultTierModels,
   BUILTIN_EXTERNAL_MODEL_DEFAULTS,
-  isNonClaudeProvider,
+  shouldAutoForceInherit,
 } from "./models.js";
 import { normalizeDelegationRole } from "../features/delegation-routing/types.js";
+import { isDeprecatedMcpProvider } from "../features/delegation-routing/index.js";
 
 /**
  * Default configuration.
@@ -146,6 +148,7 @@ export function buildDefaultConfig(): PluginConfig {
       defaults: {
         codexModel: BUILTIN_EXTERNAL_MODEL_DEFAULTS.codexModel,
         geminiModel: BUILTIN_EXTERNAL_MODEL_DEFAULTS.geminiModel,
+        antigravityModel: BUILTIN_EXTERNAL_MODEL_DEFAULTS.antigravityModel,
       },
       fallbackPolicy: {
         onModelFailure: "provider_chain",
@@ -164,6 +167,9 @@ export function buildDefaultConfig(): PluginConfig {
     team: {
       ops: {},
       roleRouting: {},
+    },
+    autopilot: {
+      execution: "solo",
     },
     planOutput: {
       directory: ".omc/plans",
@@ -359,7 +365,7 @@ export function loadEnvConfig(): Partial<PluginConfig> {
 
   if (process.env.OMC_EXTERNAL_MODELS_DEFAULT_PROVIDER) {
     const provider = process.env.OMC_EXTERNAL_MODELS_DEFAULT_PROVIDER;
-    if (provider === "codex" || provider === "gemini") {
+    if (provider === "codex" || provider === "gemini" || provider === "antigravity") {
       externalModelsDefaults.provider = provider;
     }
   }
@@ -378,6 +384,22 @@ export function loadEnvConfig(): Partial<PluginConfig> {
   } else if (process.env.OMC_GEMINI_DEFAULT_MODEL) {
     // Legacy fallback
     externalModelsDefaults.geminiModel = process.env.OMC_GEMINI_DEFAULT_MODEL;
+  }
+
+  if (process.env.OMC_EXTERNAL_MODELS_DEFAULT_GROK_MODEL) {
+    externalModelsDefaults.grokModel =
+      process.env.OMC_EXTERNAL_MODELS_DEFAULT_GROK_MODEL;
+  } else if (process.env.OMC_GROK_DEFAULT_MODEL) {
+    // Legacy fallback
+    externalModelsDefaults.grokModel = process.env.OMC_GROK_DEFAULT_MODEL;
+  }
+
+  if (process.env.OMC_EXTERNAL_MODELS_DEFAULT_ANTIGRAVITY_MODEL) {
+    externalModelsDefaults.antigravityModel =
+      process.env.OMC_EXTERNAL_MODELS_DEFAULT_ANTIGRAVITY_MODEL;
+  } else if (process.env.OMC_ANTIGRAVITY_DEFAULT_MODEL) {
+    // Legacy fallback
+    externalModelsDefaults.antigravityModel = process.env.OMC_ANTIGRAVITY_DEFAULT_MODEL;
   }
 
   const externalModelsFallback: ExternalModelsConfig["fallbackPolicy"] = {
@@ -446,14 +468,14 @@ export function loadEnvConfig(): Partial<PluginConfig> {
 function warnOnDeprecatedDelegationRouting(config: PluginConfig): void {
   const deprecatedProviders = new Set<DelegationProvider>();
   const defaultProvider = config.delegationRouting?.defaultProvider;
-  if (defaultProvider === "codex" || defaultProvider === "gemini") {
+  if (isDeprecatedMcpProvider(defaultProvider)) {
     deprecatedProviders.add(defaultProvider);
   }
 
   const roles = config.delegationRouting?.roles ?? {};
   for (const route of Object.values(roles)) {
     const provider = route?.provider;
-    if (provider === "codex" || provider === "gemini") {
+    if (isDeprecatedMcpProvider(provider)) {
       deprecatedProviders.add(provider);
     }
   }
@@ -474,8 +496,10 @@ function warnOnDeprecatedDelegationRouting(config: PluginConfig): void {
  * Throws a descriptive error naming offending key + allowed values.
  */
 const CANONICAL_TEAM_ROLE_SET = new Set<string>(CANONICAL_TEAM_ROLES);
+const CURSOR_EXECUTOR_TEAM_ROLE_SET = new Set<string>(CURSOR_EXECUTOR_TEAM_ROLES);
 const KNOWN_AGENT_NAME_SET = new Set<string>(KNOWN_AGENT_NAMES);
-const TEAM_ROLE_PROVIDERS = new Set(["claude", "codex", "gemini"]);
+// /team CLI workers — codex/gemini/grok/cursor here are CLI integrations, NOT the deprecated MCP delegationRouting providers.
+const TEAM_ROLE_PROVIDERS = new Set(["claude", "codex", "gemini", "grok", "cursor", "antigravity"]);
 const TEAM_ROLE_TIERS = new Set(["HIGH", "MEDIUM", "LOW"]);
 
 export function validateTeamConfig(config: PluginConfig): void {
@@ -493,6 +517,14 @@ export function validateTeamConfig(config: PluginConfig): void {
       ) {
         throw new Error(
           `[OMC] team.ops.defaultAgentType: invalid value "${String(ops.defaultAgentType)}". Allowed: ${[...TEAM_ROLE_PROVIDERS].join(", ")}`,
+        );
+      }
+    }
+    if (ops.worktreeMode !== undefined) {
+      const allowed = new Set(["disabled", "off", "detached", "branch", "named"]);
+      if (typeof ops.worktreeMode !== "string" || !allowed.has(ops.worktreeMode)) {
+        throw new Error(
+          `[OMC] team.ops.worktreeMode: invalid value "${String(ops.worktreeMode)}". Allowed: ${[...allowed].join(", ")}`,
         );
       }
     }
@@ -539,6 +571,11 @@ export function validateTeamConfig(config: PluginConfig): void {
           `[OMC] team.roleRouting.${rawRoleKey}.provider: invalid value "${String(spec.provider)}". Allowed: ${[...TEAM_ROLE_PROVIDERS].join(", ")}`,
         );
       }
+      if (spec.provider === "cursor" && !CURSOR_EXECUTOR_TEAM_ROLE_SET.has(normalized)) {
+        throw new Error(
+          `[OMC] team.roleRouting.${rawRoleKey}.provider: cursor is only supported for executor-style roles (${[...CURSOR_EXECUTOR_TEAM_ROLE_SET].join(", ")})`,
+        );
+      }
     }
 
     if (spec.model !== undefined && !isValidModelValue(spec.model)) {
@@ -551,6 +588,65 @@ export function validateTeamConfig(config: PluginConfig): void {
       if (typeof spec.agent !== "string" || !KNOWN_AGENT_NAME_SET.has(spec.agent)) {
         throw new Error(
           `[OMC] team.roleRouting.${rawRoleKey}.agent: unknown agent "${String(spec.agent)}". Allowed: ${[...KNOWN_AGENT_NAME_SET].join(", ")}`,
+        );
+      }
+    }
+  }
+}
+
+const AUTOPILOT_EXECUTION_BACKENDS = new Set(["team", "solo"]);
+const AUTOPILOT_PLANNING_MODES = new Set(["ralplan", "direct"]);
+const AUTOPILOT_TEAM_AGENT_TYPES = new Set([
+  "claude",
+  "codex",
+  "gemini",
+  "grok",
+  "cursor",
+  "antigravity",
+]);
+
+export function validateAutopilotConfig(config: PluginConfig): void {
+  const autopilot = (config as Record<string, unknown>).autopilot as
+    | Record<string, unknown>
+    | undefined;
+  if (!autopilot || typeof autopilot !== "object") return;
+
+  if (
+    autopilot.execution !== undefined &&
+    (typeof autopilot.execution !== "string" ||
+      !AUTOPILOT_EXECUTION_BACKENDS.has(autopilot.execution))
+  ) {
+    throw new Error(
+      `[OMC] autopilot.execution: invalid value "${String(autopilot.execution)}". Allowed: ${[...AUTOPILOT_EXECUTION_BACKENDS].join(", ")}`,
+    );
+  }
+
+  if (
+    autopilot.planning !== undefined &&
+    autopilot.planning !== false &&
+    (typeof autopilot.planning !== "string" ||
+      !AUTOPILOT_PLANNING_MODES.has(autopilot.planning))
+  ) {
+    throw new Error(
+      `[OMC] autopilot.planning: invalid value "${String(autopilot.planning)}". Allowed: ralplan, direct, false`,
+    );
+  }
+
+  const team = autopilot.team as Record<string, unknown> | undefined;
+  if (!team || typeof team !== "object") return;
+
+  if (team.agentTypes !== undefined) {
+    if (!Array.isArray(team.agentTypes)) {
+      throw new Error("[OMC] autopilot.team.agentTypes: must be an array");
+    }
+
+    for (const agentType of team.agentTypes) {
+      if (
+        typeof agentType !== "string" ||
+        !AUTOPILOT_TEAM_AGENT_TYPES.has(agentType)
+      ) {
+        throw new Error(
+          `[OMC] autopilot.team.agentTypes: invalid value "${String(agentType)}". Allowed: ${[...AUTOPILOT_TEAM_AGENT_TYPES].join(", ")}`,
         );
       }
     }
@@ -616,7 +712,7 @@ export function loadConfig(): PluginConfig {
   if (
     config.routing?.forceInherit !== true &&
     process.env.OMC_ROUTING_FORCE_INHERIT === undefined &&
-    isNonClaudeProvider()
+    shouldAutoForceInherit()
   ) {
     config.routing = {
       ...config.routing,
@@ -629,6 +725,7 @@ export function loadConfig(): PluginConfig {
   // Validate /team role routing post-merge. Throws on invalid shape,
   // walking the parsed object so deepMerge bypasses surface here.
   validateTeamConfig(config);
+  validateAutopilotConfig(config);
 
   return config;
 }
@@ -638,6 +735,16 @@ const OMC_STARTUP_COMPACTABLE_SECTIONS = [
   "skills",
   "team_compositions",
 ] as const;
+const OMC_STARTUP_GUIDANCE_MAX_CHARS = 8000;
+const OMC_CONTEXT_FILES_MAX_CHARS = 12000;
+
+function compactBudgetedText(text: string, maxChars: number): string {
+  if (!text || maxChars <= 0) return "";
+  const notice = "\n...[truncated to preserve startup context budget]";
+  if (text.length <= maxChars) return text;
+  if (maxChars <= notice.length) return notice.slice(0, maxChars);
+  return `${text.slice(0, maxChars - notice.length).trimEnd()}${notice}`;
+}
 
 function looksLikeOmcGuidance(content: string): boolean {
   return (
@@ -660,7 +767,7 @@ export function compactOmcStartupGuidance(content: string): string {
 
   for (const section of OMC_STARTUP_COMPACTABLE_SECTIONS) {
     const pattern = new RegExp(
-      `\n*<${section}>[\\s\\S]*?<\/${section}>\n*`,
+      `\n*<${section}>[\\s\\S]*?</${section}>\n*`,
       "g",
     );
     const next = compacted.replace(pattern, "\n\n");
@@ -668,14 +775,17 @@ export function compactOmcStartupGuidance(content: string): string {
     compacted = next;
   }
 
-  if (!removedAny) {
-    return content;
-  }
-
-  return compacted
+  const normalized = compacted
     .replace(/\n{3,}/g, "\n\n")
     .replace(/\n\n---\n\n---\n\n/g, "\n\n---\n\n")
     .trim();
+
+  if (normalized.length <= OMC_STARTUP_GUIDANCE_MAX_CHARS) {
+    return removedAny ? normalized : content;
+  }
+
+  const notice = "\n\n[OMC startup guidance truncated to preserve an 8000-character budget. Read the source file directly for the full document.]";
+  return `${normalized.slice(0, OMC_STARTUP_GUIDANCE_MAX_CHARS - notice.length).trimEnd()}${notice}`;
 }
 
 /**
@@ -720,17 +830,30 @@ export function findContextFiles(startDir?: string): string[] {
  */
 export function loadContextFromFiles(files: string[]): string {
   const contexts: string[] = [];
+  let used = 0;
+  const separator = "\n\n---\n\n";
 
   for (const file of files) {
     try {
       const content = compactOmcStartupGuidance(readFileSync(file, "utf-8"));
-      contexts.push(`## Context from ${file}\n\n${content}`);
+      const contextBlock = `## Context from ${file}\n\n${content}`;
+      const separatorLength = contexts.length > 0 ? separator.length : 0;
+      const remainingBudget = OMC_CONTEXT_FILES_MAX_CHARS - used - separatorLength;
+
+      if (remainingBudget <= 0) break;
+      if (contextBlock.length > remainingBudget) {
+        contexts.push(compactBudgetedText(contextBlock, remainingBudget));
+        break;
+      }
+
+      contexts.push(contextBlock);
+      used += separatorLength + contextBlock.length;
     } catch (error) {
       console.warn(`Warning: Could not read context file ${file}:`, error);
     }
   }
 
-  return contexts.join("\n\n---\n\n");
+  return contexts.join(separator);
 }
 
 /**
@@ -938,7 +1061,7 @@ export function generateConfigSchema(): object {
       },
       externalModels: {
         type: "object",
-        description: "External model provider configuration (Codex, Gemini)",
+        description: "External model provider configuration (Codex, Gemini, Grok, Antigravity)",
         properties: {
           defaults: {
             type: "object",
@@ -946,7 +1069,7 @@ export function generateConfigSchema(): object {
             properties: {
               provider: {
                 type: "string",
-                enum: ["codex", "gemini"],
+                enum: ["codex", "gemini", "antigravity"],
                 description: "Default external provider",
               },
               codexModel: {
@@ -959,6 +1082,15 @@ export function generateConfigSchema(): object {
                 default: BUILTIN_EXTERNAL_MODEL_DEFAULTS.geminiModel,
                 description: "Default Gemini model",
               },
+              grokModel: {
+                type: "string",
+                description: "Default Grok Build model",
+              },
+              antigravityModel: {
+                type: "string",
+                default: BUILTIN_EXTERNAL_MODEL_DEFAULTS.antigravityModel,
+                description: "Default Antigravity model",
+              },
             },
           },
           rolePreferences: {
@@ -967,7 +1099,7 @@ export function generateConfigSchema(): object {
             additionalProperties: {
               type: "object",
               properties: {
-                provider: { type: "string", enum: ["codex", "gemini"] },
+                provider: { type: "string", enum: ["codex", "gemini", "antigravity"] },
                 model: { type: "string" },
               },
               required: ["provider", "model"],
@@ -979,7 +1111,7 @@ export function generateConfigSchema(): object {
             additionalProperties: {
               type: "object",
               properties: {
-                provider: { type: "string", enum: ["codex", "gemini"] },
+                provider: { type: "string", enum: ["codex", "gemini", "antigravity"] },
                 model: { type: "string" },
               },
               required: ["provider", "model"],
@@ -1002,7 +1134,7 @@ export function generateConfigSchema(): object {
               },
               crossProviderOrder: {
                 type: "array",
-                items: { type: "string", enum: ["codex", "gemini"] },
+                items: { type: "string", enum: ["codex", "gemini", "antigravity"] },
                 default: ["codex", "gemini"],
                 description: "Order of providers for cross-provider fallback",
               },
@@ -1048,6 +1180,52 @@ export function generateConfigSchema(): object {
           },
         },
       },
+      autopilot: {
+        type: "object",
+        description: "/autopilot pipeline and team execution configuration",
+        properties: {
+          planning: {
+            anyOf: [
+              { type: "string", enum: ["ralplan", "direct"] },
+              { type: "boolean", enum: [false] },
+            ],
+            default: "ralplan",
+          },
+          execution: {
+            type: "string",
+            enum: ["team", "solo"],
+            default: "solo",
+          },
+          verification: {
+            anyOf: [
+              {
+                type: "object",
+                properties: {
+                  engine: { type: "string", enum: ["ralph"] },
+                  maxIterations: { type: "integer", minimum: 1 },
+                },
+                required: ["engine", "maxIterations"],
+              },
+              { type: "boolean", enum: [false] },
+            ],
+          },
+          qa: { type: "boolean", default: true },
+          team: {
+            type: "object",
+            properties: {
+              agentTypes: {
+                type: "array",
+                items: {
+                  type: "string",
+                  enum: ["claude", "codex", "gemini", "grok", "cursor", "antigravity"],
+                },
+                description:
+                  "Preferred CLI worker types for executor-style autopilot team execution tasks",
+              },
+            },
+          },
+        },
+      },
       team: {
         type: "object",
         description: "/team runtime configuration",
@@ -1058,7 +1236,7 @@ export function generateConfigSchema(): object {
               maxAgents: { type: "integer", minimum: 1 },
               defaultAgentType: {
                 type: "string",
-                enum: ["claude", "codex", "gemini"],
+                enum: ["claude", "codex", "gemini", "grok", "cursor", "antigravity"],
                 default: "claude",
               },
               monitorIntervalMs: { type: "integer", minimum: 1 },
@@ -1072,7 +1250,7 @@ export function generateConfigSchema(): object {
             additionalProperties: {
               type: "object",
               properties: {
-                provider: { type: "string", enum: ["claude", "codex", "gemini"] },
+                provider: { type: "string", enum: ["claude", "codex", "gemini", "grok", "cursor", "antigravity"] },
                 model: { type: "string" },
                 agent: { type: "string" },
               },

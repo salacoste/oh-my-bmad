@@ -3,11 +3,11 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { tmuxExecAsync } from '../cli/tmux-utils.js';
 import type { CliAgentType } from './model-contract.js';
-import { buildWorkerArgv, resolveValidatedBinaryPath, getWorkerEnv as getModelWorkerEnv, isPromptModeAgent, getPromptModeArgs, resolveClaudeWorkerModel } from './model-contract.js';
+import { buildWorkerArgv, resolveValidatedBinaryPath, getWorkerEnv as getModelWorkerEnv, isPromptModeAgent, getPromptModeArgs, resolveClaudeWorkerModel, assertHeadlessSupported } from './model-contract.js';
 import { validateTeamName } from './team-name.js';
 import {
   createTeamSession, spawnWorkerInPane, sendToWorker,
-  isWorkerAlive, killTeamSession, resolveSplitPaneWorkerPaneIds, waitForPaneReady, applyMainVerticalLayout,
+  isWorkerAlive, killTeamSession, resolveSplitPaneWorkerPaneIds, waitForPaneReady, applyMainVerticalLayout, killTeamPane, splitTeamWorkerPane,
   type TeamSession, type WorkerPaneConfig,
 } from './tmux-session.js';
 import {
@@ -374,8 +374,13 @@ export async function startTeam(config: TeamConfig): Promise<TeamRuntime> {
   validateTeamName(teamName);
 
   // Validate CLIs once and pin absolute binary paths for consistent spawn behavior.
+  // Reject headless-unsupported providers (e.g. antigravity on Windows) here in
+  // preflight — BEFORE writing any team state or creating the tmux session — so an
+  // unsupported provider can never leave stale `.omc/state/team` files or a leader
+  // session behind. (spawnWorkerForTask keeps its own guard for the watchdog path.)
   const resolvedBinaryPaths: Partial<Record<CliAgentType, string>> = {};
   for (const agentType of [...new Set(agentTypes)]) {
+    assertHeadlessSupported(agentType);
     resolvedBinaryPaths[agentType] = resolveValidatedBinaryPath(agentType);
   }
 
@@ -505,7 +510,7 @@ export async function monitorTeam(teamName: string, cwd: string, workerPaneIds: 
 
     workers.push(status);
     if (!alive) deadWorkers.push(wName);
-    // Note: CLI workers (codex/gemini) may not write heartbeat.json — stall is advisory only
+    // Note: CLI workers (codex/gemini/grok/cursor) may not write heartbeat.json — stall is advisory only
   }
   const workerScanMs = Date.now() - workerScanStartedAt;
 
@@ -680,19 +685,24 @@ export async function spawnWorkerForTask(
   const taskId = String(taskIndex + 1);
   const task = runtime.config.tasks[taskIndex];
   if (!task) return '';
+
+  const workerIndex = parseWorkerIndex(workerNameValue);
+  const agentType = runtime.config.agentTypes[workerIndex % runtime.config.agentTypes.length]
+    ?? runtime.config.agentTypes[0]
+    ?? 'claude';
+  // Guard headless-unsupported providers (e.g. antigravity on Windows) BEFORE any
+  // task-state mutation or pane split, so legacy v1 startup rejects cleanly instead
+  // of leaving a task stuck `in_progress` with a stray pane (parity with v2/scale-up).
+  assertHeadlessSupported(agentType);
+
   const marked = await markTaskInProgress(root, taskId, workerNameValue, runtime.teamName, runtime.cwd);
   if (!marked) return '';
 
   const splitTarget = runtime.workerPaneIds.length === 0
     ? runtime.leaderPaneId
     : runtime.workerPaneIds[runtime.workerPaneIds.length - 1];
-  const splitType = runtime.workerPaneIds.length === 0 ? '-h' : '-v';
-  const splitResult = await tmuxExecAsync([
-    'split-window', splitType, '-t', splitTarget,
-    '-d', '-P', '-F', '#{pane_id}',
-    '-c', runtime.cwd,
-  ]);
-  const paneId = splitResult.stdout.split('\n')[0]?.trim();
+  const splitDirection = runtime.workerPaneIds.length === 0 ? 'right' : 'down';
+  const paneId = await splitTeamWorkerPane(splitTarget, splitDirection, runtime.cwd);
   if (!paneId) {
     try {
       await resetTaskToPending(root, taskId, runtime.teamName, runtime.cwd);
@@ -702,10 +712,6 @@ export async function spawnWorkerForTask(
     return '';
   }
 
-  const workerIndex = parseWorkerIndex(workerNameValue);
-  const agentType = runtime.config.agentTypes[workerIndex % runtime.config.agentTypes.length]
-    ?? runtime.config.agentTypes[0]
-    ?? 'claude';
   const usePromptMode = isPromptModeAgent(agentType);
 
   // Build the initial task instruction and write inbox before spawn.
@@ -735,6 +741,19 @@ export async function spawnWorkerForTask(
         || process.env.OMC_GEMINI_DEFAULT_MODEL
         || undefined;
     }
+    if (agentType === 'antigravity') {
+      return process.env.OMC_EXTERNAL_MODELS_DEFAULT_ANTIGRAVITY_MODEL
+        || process.env.OMC_ANTIGRAVITY_DEFAULT_MODEL
+        || undefined;
+    }
+    if (agentType === 'grok') {
+      return process.env.OMC_EXTERNAL_MODELS_DEFAULT_GROK_MODEL
+        || process.env.OMC_GROK_DEFAULT_MODEL
+        || undefined;
+    }
+    if (agentType === 'cursor') {
+      return undefined;
+    }
     // Claude agents: resolve Bedrock/Vertex model when on those providers
     return resolveClaudeWorkerModel();
   })();
@@ -747,8 +766,11 @@ export async function spawnWorkerForTask(
     model: modelForAgent,
   });
 
-  // For prompt-mode agents (e.g. Gemini Ink TUI), pass instruction via CLI
-  // flag so tmux send-keys never needs to interact with the TUI input widget.
+  // For prompt-mode agents (e.g. Gemini Ink TUI, Antigravity --print), pass
+  // instruction via CLI flag so tmux send-keys never needs to interact with
+  // the TUI input widget.
+  // Codex and Claude team workers are persistent interactive panes and are
+  // nudged through the inbox transport instead of `codex exec`/print modes.
   if (usePromptMode) {
     const promptArgs = getPromptModeArgs(agentType, generateTriggerMessage(runtime.teamName, workerNameValue));
     launchArgs.push(...promptArgs);
@@ -799,7 +821,8 @@ export async function spawnWorkerForTask(
     const notified = await notifyPaneWithRetry(
       runtime.sessionName,
       paneId,
-      generateTriggerMessage(runtime.teamName, workerNameValue)
+      generateTriggerMessage(runtime.teamName, workerNameValue),
+      1
     );
     if (!notified) {
       await killWorkerPane(runtime, workerNameValue, paneId);
@@ -822,7 +845,7 @@ export async function killWorkerPane(
   paneId: string
 ): Promise<void> {
   try {
-    await tmuxExecAsync(['kill-pane', '-t', paneId]);
+    await killTeamPane(paneId);
   } catch {
     // idempotent: pane may already be gone
   }
@@ -919,11 +942,11 @@ export async function shutdownTeam(
 
   const configData = await readJsonSafe<TeamConfig>(join(root, 'config.json'));
 
-  // CLI workers (claude/codex/gemini tmux pane processes) never write shutdown-ack.json.
+  // CLI workers (claude/codex/gemini/grok/cursor tmux pane processes) never write shutdown-ack.json.
   // Polling for ACK files on CLI worker teams wastes the full timeoutMs on every shutdown.
   // Detect CLI worker teams by checking if all agent types are known CLI types, and skip
   // ACK polling — the tmux kill below handles process cleanup instead.
-  const CLI_AGENT_TYPES = new Set<string>(['claude', 'codex', 'gemini']);
+  const CLI_AGENT_TYPES = new Set<string>(['claude', 'codex', 'gemini', 'grok', 'cursor', 'antigravity']);
   const agentTypes: string[] = configData?.agentTypes ?? [];
   const isCliWorkerTeam = agentTypes.length > 0 && agentTypes.every(t => CLI_AGENT_TYPES.has(t));
 

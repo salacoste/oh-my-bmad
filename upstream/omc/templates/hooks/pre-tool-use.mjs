@@ -16,6 +16,7 @@ const __dirname = dirname(__filename);
 
 // Dynamic import for the shared stdin module
 const { readStdin } = await import(pathToFileURL(path.join(__dirname, 'lib', 'stdin.mjs')).href);
+const { resolveOmcStateRoot } = await import(pathToFileURL(path.join(__dirname, 'lib', 'state-root.mjs')).href);
 
 // ---------------------------------------------------------------------------
 // Skill Active State (issue #1033)
@@ -50,7 +51,7 @@ const SKILL_PROTECTION = {
   // Medium protection (5 reinforcements)
   'code-review': 'medium', 'security-review': 'medium', plan: 'medium',
   ralplan: 'medium', review: 'medium', 'external-context': 'medium',
-  sciomc: 'medium', learner: 'medium', 'omc-setup': 'medium',
+  sciomc: 'medium', skillify: 'medium', learner: 'medium', 'omc-setup': 'medium',
   'mcp-setup': 'medium', 'project-session-manager': 'medium',
   'writer-memory': 'medium', 'ralph-init': 'medium', ccg: 'medium',
   // Heavy protection (10 reinforcements)
@@ -72,7 +73,7 @@ function getInvokedSkillName(toolInput) {
 
 const SESSION_ID_ALLOWLIST = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/;
 
-function writeSkillActiveState(directory, skillName, sessionId) {
+async function writeSkillActiveState(directory, skillName, sessionId) {
   const protection = getSkillProtection(skillName);
   if (protection === 'none') return;
 
@@ -91,7 +92,7 @@ function writeSkillActiveState(directory, skillName, sessionId) {
     stale_ttl_ms: config.staleTtlMs,
   };
 
-  const stateDir = path.join(directory, '.omc', 'state');
+  const stateDir = path.join(await resolveOmcStateRoot(directory), 'state');
 
   // Write to session-scoped path when sessionId is available (must match persistent-mode.mjs reads)
   const safeSessionId = sessionId && SESSION_ID_ALLOWLIST.test(sessionId) ? sessionId : '';
@@ -113,8 +114,8 @@ function writeSkillActiveState(directory, skillName, sessionId) {
 }
 
 
-function clearAwaitingConfirmationFlag(directory, stateName, sessionId) {
-  const stateDir = path.join(directory, '.omc', 'state');
+async function clearAwaitingConfirmationFlag(directory, stateName, sessionId) {
+  const stateDir = path.join(await resolveOmcStateRoot(directory), 'state');
   const safeSessionId = sessionId && SESSION_ID_ALLOWLIST.test(sessionId) ? sessionId : '';
   const paths = [
     safeSessionId ? path.join(stateDir, 'sessions', safeSessionId, `${stateName}-state.json`) : null,
@@ -137,20 +138,20 @@ function clearAwaitingConfirmationFlag(directory, stateName, sessionId) {
   }
 }
 
-function confirmSkillModeStates(directory, skillName, sessionId) {
+async function confirmSkillModeStates(directory, skillName, sessionId) {
   switch (skillName) {
     case 'ralph':
-      clearAwaitingConfirmationFlag(directory, 'ralph', sessionId);
-      clearAwaitingConfirmationFlag(directory, 'ultrawork', sessionId);
+      await clearAwaitingConfirmationFlag(directory, 'ralph', sessionId);
+      await clearAwaitingConfirmationFlag(directory, 'ultrawork', sessionId);
       break;
     case 'ultrawork':
-      clearAwaitingConfirmationFlag(directory, 'ultrawork', sessionId);
+      await clearAwaitingConfirmationFlag(directory, 'ultrawork', sessionId);
       break;
     case 'autopilot':
-      clearAwaitingConfirmationFlag(directory, 'autopilot', sessionId);
+      await clearAwaitingConfirmationFlag(directory, 'autopilot', sessionId);
       break;
     case 'ralplan':
-      clearAwaitingConfirmationFlag(directory, 'ralplan', sessionId);
+      await clearAwaitingConfirmationFlag(directory, 'ralplan', sessionId);
       break;
     default:
       break;
@@ -323,7 +324,7 @@ async function main() {
     const toolInput = data.tool_input || data.toolInput || {};
     const skillName = getInvokedSkillName(toolInput);
     if (skillName) {
-      writeSkillActiveState(directory, skillName, sessionId);
+      await writeSkillActiveState(directory, skillName, sessionId);
     }
   }
 

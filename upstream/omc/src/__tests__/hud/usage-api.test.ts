@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import * as childProcess from 'child_process';
 import * as os from 'os';
 import { EventEmitter } from 'events';
-import { isZaiHost, parseZaiResponse, isMinimaxHost, parseMinimaxResponse, getUsage } from '../../hud/usage-api.js';
+import { isZaiHost, parseZaiResponse, isMinimaxHost, parseMinimaxResponse, getUsage, parseUsageResponse } from '../../hud/usage-api.js';
 
 // Mock file-lock so withFileLock always executes the callback (tests focus on routing, not locking)
 vi.mock('../../lib/file-lock.js', () => ({
@@ -58,6 +58,7 @@ describe('isZaiHost', () => {
   it('accepts subdomains of z.ai', () => {
     expect(isZaiHost('https://api.z.ai')).toBe(true);
     expect(isZaiHost('https://api.z.ai/v1/messages')).toBe(true);
+    expect(isZaiHost('https://api.z.ai/api/anthropic')).toBe(true);
     expect(isZaiHost('https://foo.bar.z.ai')).toBe(true);
   });
 
@@ -656,8 +657,130 @@ describe('getUsage routing', () => {
     expect(httpsModule.default.request.mock.calls[0][0].headers.Authorization).toBe('Bearer fresh-legacy-token');
   });
 
-  it('routes to z.ai when ANTHROPIC_BASE_URL is z.ai host', async () => {
-    process.env.ANTHROPIC_BASE_URL = 'https://api.z.ai/v1';
+  it('preserves model-specific rate limits when generic subscription windows are nullish', () => {
+    const result = parseUsageResponse({
+      five_hour: { utilization: 36, resets_at: '2026-04-24T13:00:00Z' },
+      seven_day: null,
+      seven_day_sonnet: { utilization: 8, resets_at: '2026-04-25T13:00:00Z' },
+    } as unknown as Parameters<typeof parseUsageResponse>[0]);
+
+    expect(result).not.toBeNull();
+    expect(result!.fiveHourPercent).toBe(36);
+    expect(result!.weeklyPercent).toBeUndefined();
+    expect(result!.sonnetWeeklyPercent).toBe(8);
+    expect(result!.sonnetWeeklyResetsAt).toBeInstanceOf(Date);
+  });
+
+  it('passes OAuth subscription metadata so Max used_credits overage stays extra usage', async () => {
+    const mockedExistsSync = vi.mocked(fs.existsSync);
+    const mockedReadFileSync = vi.mocked(fs.readFileSync);
+
+    mockedExistsSync.mockImplementation((path) => String(path).endsWith('.credentials.json'));
+    mockedReadFileSync.mockImplementation((path) => {
+      if (String(path).endsWith('.credentials.json')) {
+        return JSON.stringify({
+          claudeAiOauth: {
+            accessToken: 'valid-token',
+            refreshToken: 'refresh-token',
+            expiresAt: Date.now() + 60_000,
+            subscriptionType: 'max',
+            rateLimitTier: 'default_claude_max_20x',
+          },
+        });
+      }
+      return '{}';
+    });
+
+    httpsModule.default.request.mockImplementationOnce((_options, callback) => {
+      const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void; on: typeof EventEmitter.prototype.on };
+      req.destroy = vi.fn();
+      req.end = () => {
+        const res = new EventEmitter() as EventEmitter & { statusCode?: number };
+        res.statusCode = 200;
+        callback(res);
+        res.emit('data', JSON.stringify({
+          five_hour: { utilization: 3 },
+          seven_day: { utilization: 16 },
+          seven_day_sonnet: { utilization: 0 },
+          extra_usage: {
+            is_enabled: true,
+            used_credits: 2726,
+            monthly_limit: 5000,
+            currency: 'USD',
+          },
+        }));
+        res.emit('end');
+      };
+      return req;
+    });
+
+    const result = await getUsage();
+
+    expect(result.error).toBeUndefined();
+    expect(result.rateLimits).toMatchObject({
+      fiveHourPercent: 3,
+      weeklyPercent: 16,
+      sonnetWeeklyPercent: 0,
+      extraUsageSpentUsd: 27.26,
+      extraUsageLimitUsd: 50,
+      extraUsagePercent: 54.52,
+    });
+    expect(result.rateLimits!.enterpriseSpentUsd).toBeUndefined();
+    expect(result.rateLimits!.enterpriseLimitUsd).toBeUndefined();
+  });
+
+  it('returns getUsage rateLimits when OAuth credentials lack subscription metadata', async () => {
+    const mockedExistsSync = vi.mocked(fs.existsSync);
+    const mockedReadFileSync = vi.mocked(fs.readFileSync);
+
+    mockedExistsSync.mockImplementation((path) => String(path).endsWith('.credentials.json'));
+    mockedReadFileSync.mockImplementation((path) => {
+      if (String(path).endsWith('.credentials.json')) {
+        return JSON.stringify({
+          claudeAiOauth: {
+            accessToken: 'valid-token',
+            refreshToken: 'refresh-token',
+            expiresAt: Date.now() + 60_000,
+            subscriptionType: null,
+            rateLimitTier: null,
+          },
+        });
+      }
+      return '{}';
+    });
+
+    httpsModule.default.request.mockImplementationOnce((_options, callback) => {
+      const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void; on: typeof EventEmitter.prototype.on };
+      req.destroy = vi.fn();
+      req.end = () => {
+        const res = new EventEmitter() as EventEmitter & { statusCode?: number };
+        res.statusCode = 200;
+        callback(res);
+        res.emit('data', JSON.stringify({
+          five_hour: { utilization: 36, resets_at: '2026-04-24T13:00:00Z' },
+          seven_day: { utilization: 32, resets_at: '2026-04-25T13:00:00Z' },
+          seven_day_sonnet: { utilization: 8, resets_at: '2026-04-25T13:00:00Z' },
+        }));
+        res.emit('end');
+      };
+      return req;
+    });
+
+    const result = await getUsage();
+
+    expect(result.error).toBeUndefined();
+    expect(result.rateLimits).toMatchObject({
+      fiveHourPercent: 36,
+      weeklyPercent: 32,
+      sonnetWeeklyPercent: 8,
+    });
+    expect(result.rateLimits!.fiveHourResetsAt).toBeInstanceOf(Date);
+    expect(result.rateLimits!.weeklyResetsAt).toBeInstanceOf(Date);
+    expect(result.rateLimits!.sonnetWeeklyResetsAt).toBeInstanceOf(Date);
+  });
+
+  it('routes z.ai Anthropic Messages endpoint to the quota API', async () => {
+    process.env.ANTHROPIC_BASE_URL = 'https://api.z.ai/api/anthropic';
     process.env.ANTHROPIC_AUTH_TOKEN = 'test-token';
 
     // https.request mock not wired, so fetchUsageFromZai resolves to null (network error)
@@ -1361,5 +1484,213 @@ describe('getUsage routing - minimax', () => {
     const written = JSON.parse(String(writeCall![1]));
     expect(written.source).toBe('minimax');
     expect(written.data.fiveHourPercent).toBe(50);
+  });
+});
+describe('writeBackCredentials — Keychain vs file refresh', () => {
+  const originalPlatform = process.platform;
+
+  beforeAll(() => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+  });
+
+  afterAll(() => {
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.readFileSync).mockReturnValue('{}');
+    vi.mocked(childProcess.execFileSync).mockImplementation(() => { throw new Error('mock: no keychain'); });
+    delete process.env.ANTHROPIC_BASE_URL;
+    delete process.env.ANTHROPIC_AUTH_TOKEN;
+  });
+
+  it('writes refreshed token back to Keychain when source is keychain', async () => {
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    const execFileMock = vi.mocked(childProcess.execFileSync);
+    const httpsModule = await import('https') as unknown as { default: { request: ReturnType<typeof vi.fn> } };
+
+    // First call: read expired creds from keychain (username-scoped)
+    // Second call: token refresh HTTP (handled via httpsModule mock)
+    // Third call: read existing keychain entry for merge
+    // Fourth call: write updated creds back to keychain
+    let execCallCount = 0;
+    execFileMock.mockImplementation((_file, args) => {
+      const argsArr = args as string[];
+      execCallCount++;
+
+      if (argsArr.includes('find-generic-password') && argsArr.includes('-a')) {
+        // First read: return expired keychain creds
+        if (execCallCount === 1) {
+          return JSON.stringify({
+            claudeAiOauth: {
+              accessToken: 'expired-access-token',
+              refreshToken: 'valid-refresh-token',
+              expiresAt: oneHourAgo,
+            },
+          });
+        }
+        // Third call: re-read existing entry for merge before write
+        return JSON.stringify({
+          claudeAiOauth: {
+            accessToken: 'expired-access-token',
+            refreshToken: 'valid-refresh-token',
+            expiresAt: oneHourAgo,
+          },
+        });
+      }
+
+      if (argsArr.includes('add-generic-password')) {
+        // Write-back call: capture what was written
+        return '';
+      }
+
+      // service-only fallback: no entry
+      throw new Error('mock: no service-only entry');
+    });
+
+    // Token refresh returns new tokens
+    httpsModule.default.request.mockImplementationOnce((_options: unknown, callback: (res: EventEmitter & { statusCode?: number }) => void) => {
+      const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
+      req.destroy = vi.fn();
+      req.end = () => {
+        const res = new EventEmitter() as EventEmitter & { statusCode?: number };
+        res.statusCode = 200;
+        callback(res);
+        res.emit('data', JSON.stringify({
+          access_token: 'new-access-token',
+          refresh_token: 'new-refresh-token',
+          expires_in: 3600,
+        }));
+        res.emit('end');
+      };
+      return req;
+    });
+
+    // Usage API call
+    httpsModule.default.request.mockImplementationOnce((_options: unknown, callback: (res: EventEmitter & { statusCode?: number }) => void) => {
+      const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
+      req.destroy = vi.fn();
+      req.end = () => {
+        const res = new EventEmitter() as EventEmitter & { statusCode?: number };
+        res.statusCode = 200;
+        callback(res);
+        res.emit('data', JSON.stringify({
+          five_hour: { utilization: 30 },
+          seven_day: { utilization: 60 },
+        }));
+        res.emit('end');
+      };
+      return req;
+    });
+
+    const result = await getUsage();
+
+    expect(result.error).toBeUndefined();
+    expect(result.rateLimits?.fiveHourPercent).toBe(30);
+
+    // Verify Keychain write-back was called with add-generic-password
+    const writeBackCall = execFileMock.mock.calls.find(
+      c => Array.isArray(c[1]) && (c[1] as string[]).includes('add-generic-password')
+    );
+    expect(writeBackCall).toBeTruthy();
+
+    const writeArgs = writeBackCall![1] as string[];
+    // Should use -U flag (update) to replace existing entry
+    expect(writeArgs).toContain('-U');
+
+    // The written JSON should contain the new tokens
+    const writtenJson = writeArgs[writeArgs.indexOf('-w') + 1];
+    const written = JSON.parse(writtenJson);
+    const inner = written.claudeAiOauth ?? written;
+    expect(inner.accessToken).toBe('new-access-token');
+    expect(inner.refreshToken).toBe('new-refresh-token');
+
+    // File credential store should NOT have been written
+    const fileWriteCall = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => String(c[0]).endsWith('.credentials.json')
+    );
+    expect(fileWriteCall).toBeUndefined();
+  });
+
+  it('writes refreshed token back to file when source is file, not to Keychain', async () => {
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    const execFileMock = vi.mocked(childProcess.execFileSync);
+    const mockedExistsSync = vi.mocked(fs.existsSync);
+    const mockedReadFileSync = vi.mocked(fs.readFileSync);
+    const httpsModule = await import('https') as unknown as { default: { request: ReturnType<typeof vi.fn> } };
+
+    // Keychain has no entry — only file credentials
+    execFileMock.mockImplementation(() => { throw new Error('mock: no keychain'); });
+
+    mockedExistsSync.mockImplementation((path) => String(path).endsWith('.credentials.json'));
+    mockedReadFileSync.mockImplementation((path) => {
+      if (String(path).endsWith('.credentials.json')) {
+        return JSON.stringify({
+          claudeAiOauth: {
+            accessToken: 'expired-file-token',
+            refreshToken: 'file-refresh-token',
+            expiresAt: oneHourAgo,
+          },
+        });
+      }
+      return '{}';
+    });
+
+    // Token refresh returns new tokens
+    httpsModule.default.request.mockImplementationOnce((_options: unknown, callback: (res: EventEmitter & { statusCode?: number }) => void) => {
+      const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
+      req.destroy = vi.fn();
+      req.end = () => {
+        const res = new EventEmitter() as EventEmitter & { statusCode?: number };
+        res.statusCode = 200;
+        callback(res);
+        res.emit('data', JSON.stringify({
+          access_token: 'new-file-access-token',
+          refresh_token: 'new-file-refresh-token',
+          expires_in: 3600,
+        }));
+        res.emit('end');
+      };
+      return req;
+    });
+
+    // Usage API call
+    httpsModule.default.request.mockImplementationOnce((_options: unknown, callback: (res: EventEmitter & { statusCode?: number }) => void) => {
+      const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
+      req.destroy = vi.fn();
+      req.end = () => {
+        const res = new EventEmitter() as EventEmitter & { statusCode?: number };
+        res.statusCode = 200;
+        callback(res);
+        res.emit('data', JSON.stringify({
+          five_hour: { utilization: 20 },
+          seven_day: { utilization: 40 },
+        }));
+        res.emit('end');
+      };
+      return req;
+    });
+
+    const result = await getUsage();
+
+    expect(result.error).toBeUndefined();
+    expect(result.rateLimits?.fiveHourPercent).toBe(20);
+
+    // File should have been written with new tokens
+    const fileWriteCall = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => String(c[0]).endsWith('.credentials.json.tmp.' + process.pid)
+    );
+    expect(fileWriteCall).toBeTruthy();
+    const written = JSON.parse(String(fileWriteCall![1]));
+    expect(written.claudeAiOauth.accessToken).toBe('new-file-access-token');
+    expect(written.claudeAiOauth.refreshToken).toBe('new-file-refresh-token');
+
+    // Keychain write-back should NOT have been called with add-generic-password
+    const keychainWriteCall = execFileMock.mock.calls.find(
+      c => Array.isArray(c[1]) && (c[1] as string[]).includes('add-generic-password')
+    );
+    expect(keychainWriteCall).toBeUndefined();
   });
 });

@@ -6,7 +6,7 @@ Rationale: Architecture §Starter Template Evaluation — vendoring keeps the wo
 
 | Fork | Upstream URL | Pinned commit SHA | Sync date (UTC) | First real use |
 |---|---|---|---|---|
-| `omc` | https://github.com/Yeachan-Heo/oh-my-claudecode | `0ac52cdaa093d6c41763e47055e995adaa4f8987` | 2026-04-22 | Story 5.10 (orchestrator-adapter) |
+| `omc` | https://github.com/Yeachan-Heo/oh-my-claudecode | `d41f1730a71dfbb472424406a765efea5b5f10f0` | 2026-07-06 | Story 5.10 (orchestrator-adapter) |
 | `clawhip` | https://github.com/Yeachan-Heo/clawhip | `ff3ba32dc22a143d53bec40870d3b52b2fa11a2b` | 2026-04-22 | Story 2.8 (clawhip-bridge MCP server) |
 
 **How to update:** run `just sync-upstream <name>`. The recipe fetches the upstream repo at its current HEAD, copies into `upstream/<name>/`, and rewrites this file's SHA + sync-date cell in-place.

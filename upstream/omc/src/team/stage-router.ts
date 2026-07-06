@@ -20,7 +20,7 @@ import type {
   TeamRoleProvider,
   TeamRoleTier,
 } from '../shared/types.js';
-import { CANONICAL_TEAM_ROLES } from '../shared/types.js';
+import { CANONICAL_TEAM_ROLES, CURSOR_EXECUTOR_TEAM_ROLES } from '../shared/types.js';
 import { normalizeDelegationRole } from '../features/delegation-routing/types.js';
 import {
   BUILTIN_EXTERNAL_MODEL_DEFAULTS,
@@ -66,6 +66,7 @@ const ROLE_DEFAULT_TIER: Record<CanonicalTeamRole, TeamRoleTier> = {
 };
 
 const TIER_SET: ReadonlySet<string> = new Set<TeamRoleTier>(['HIGH', 'MEDIUM', 'LOW']);
+const CURSOR_EXECUTOR_TEAM_ROLE_SET: ReadonlySet<string> = new Set(CURSOR_EXECUTOR_TEAM_ROLES);
 
 function isTier(value: string): value is TeamRoleTier {
   return TIER_SET.has(value);
@@ -127,12 +128,12 @@ function resolveClaudeModel(
 /**
  * Resolve a user-supplied `model` value for an external provider worker.
  *
- * Tier names are Claude-centric and not meaningful for codex/gemini, so tier
- * input (or absent input) maps to the provider's builtin default. Only an
- * explicit non-tier model ID is passed through.
+ * Tier names are Claude-centric and not meaningful for codex/gemini/grok/cursor/antigravity,
+ * so tier input (or absent input) maps to the provider's builtin default. Only
+ * an explicit non-tier model ID is passed through.
  */
 function resolveExternalModel(
-  provider: 'codex' | 'gemini',
+  provider: 'codex' | 'gemini' | 'grok' | 'cursor' | 'antigravity',
   raw: string | undefined,
   cfg: PluginConfig,
 ): string {
@@ -142,6 +143,15 @@ function resolveExternalModel(
   const defaults = cfg.externalModels?.defaults;
   if (provider === 'codex') {
     return defaults?.codexModel ?? BUILTIN_EXTERNAL_MODEL_DEFAULTS.codexModel;
+  }
+  if (provider === 'grok') {
+    return defaults?.grokModel ?? '';
+  }
+  if (provider === 'cursor') {
+    return '';
+  }
+  if (provider === 'antigravity') {
+    return defaults?.antigravityModel ?? BUILTIN_EXTERNAL_MODEL_DEFAULTS.antigravityModel;
   }
   return defaults?.geminiModel ?? BUILTIN_EXTERNAL_MODEL_DEFAULTS.geminiModel;
 }
@@ -174,6 +184,11 @@ export function resolveRoleAssignment(
   const provider: TeamRoleProvider = isOrchestrator
     ? 'claude'
     : (spec?.provider ?? 'claude');
+  if (provider === 'cursor' && !CURSOR_EXECUTOR_TEAM_ROLE_SET.has(canonical)) {
+    throw new Error(
+      `team.roleRouting.${canonical}.provider: cursor is only supported for executor-style roles (${[...CURSOR_EXECUTOR_TEAM_ROLE_SET].join(', ')})`,
+    );
+  }
 
   const model = provider === 'claude'
     ? resolveClaudeModel(canonical, spec?.model, cfg)

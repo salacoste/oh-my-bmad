@@ -8,7 +8,7 @@
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,16 +32,18 @@ vi.mock('../tmux-utils.js', () => ({
   wrapWithLoginShell: vi.fn((cmd: string) => cmd),
   quoteShellArg: vi.fn((s: string) => s),
   isClaudeAvailable: vi.fn(() => true),
+  isTmuxAvailable: vi.fn(() => true),
   tmuxExec: vi.fn(),
 }));
 
-import { runClaude, launchCommand, extractNotifyFlag, extractOpenClawFlag, extractTelegramFlag, extractDiscordFlag, extractSlackFlag, extractWebhookFlag, normalizeClaudeLaunchArgs, isPrintMode, prepareOmcLaunchConfigDir, buildEnvExportPrefix, TMUX_ENV_FORWARD } from '../launch.js';
+import { runClaude, launchCommand, extractNotifyFlag, extractOpenClawFlag, extractTelegramFlag, extractDiscordFlag, extractSlackFlag, extractWebhookFlag, normalizeClaudeLaunchArgs, isPrintMode, prepareOmcLaunchConfigDir, buildEnvExportPrefix, hasMadmaxFlag, TMUX_ENV_FORWARD } from '../launch.js';
 import {
   resolveLaunchPolicy,
   buildTmuxShellCommand,
   buildTmuxShellCommandWithEnv,
   isNativeWindowsShell,
   wrapWithLoginShell,
+  isTmuxAvailable,
   tmuxExec,
 } from '../tmux-utils.js';
 
@@ -327,7 +329,7 @@ describe('runClaude outside-tmux — mouse scrolling (issue #890)', () => {
     runClaude('/tmp', [], 'sid');
 
     const tmuxCalls = vi.mocked(tmuxExec).mock.calls;
-    const tmuxCall = tmuxCalls.find(([args]) => args[0] === 'set-option');
+    const tmuxCall = tmuxCalls.find(([args]) => args[0] === 'set-option' && args.includes('mouse'));
     expect(tmuxCall).toBeDefined();
 
     const tmuxArgs = tmuxCall![0];
@@ -355,11 +357,27 @@ describe('runClaude outside-tmux — mouse scrolling (issue #890)', () => {
     runClaude('/tmp', [], 'sid');
 
     const tmuxCalls = vi.mocked(tmuxExec).mock.calls.map(([args]) => args);
-    const mouseIdx = tmuxCalls.findIndex((args) => args[0] === 'set-option');
+    const mouseIdx = tmuxCalls.findIndex((args) => args[0] === 'set-option' && args.includes('mouse'));
     const attachIdx = tmuxCalls.findIndex((args) => args[0] === 'attach-session');
     expect(mouseIdx).toBeGreaterThanOrEqual(0);
     expect(attachIdx).toBeGreaterThanOrEqual(0);
     expect(mouseIdx).toBeLessThan(attachIdx);
+  });
+
+
+  it('applies session-scoped OSC 52 clipboard options before attach-session', () => {
+    runClaude('/tmp', [], 'sid');
+
+    const tmuxCalls = vi.mocked(tmuxExec).mock.calls.map(([args]) => args);
+    expect(tmuxCalls).toContainEqual(['set-option', '-t', 'test-session', 'set-clipboard', 'on']);
+    expect(tmuxCalls).toContainEqual(['show-options', '-t', 'test-session', '-v', 'terminal-features']);
+    expect(tmuxCalls).toContainEqual(['set-option', '-at', 'test-session', 'terminal-features', ',*:clipboard']);
+    expect(tmuxCalls.find((args) => args.includes('set-clipboard'))).not.toContain('-g');
+
+    const clipboardIdx = tmuxCalls.findIndex((args) => args.includes('set-clipboard'));
+    const attachIdx = tmuxCalls.findIndex((args) => args[0] === 'attach-session');
+    expect(clipboardIdx).toBeGreaterThanOrEqual(0);
+    expect(attachIdx).toBeGreaterThan(clipboardIdx);
   });
 
   it('preserves a valid detached session when attach-session is interrupted', () => {
@@ -375,6 +393,9 @@ describe('runClaude outside-tmux — mouse scrolling (issue #890)', () => {
     const tmuxCalls = vi.mocked(tmuxExec).mock.calls.map(([args]) => args);
     expect(tmuxCalls.map((args) => args[0])).toEqual([
       'new-session',
+      'set-option',
+      'show-options',
+      'set-option',
       'set-option',
       'attach-session',
       'has-session',
@@ -421,8 +442,8 @@ describe('runClaude inside-tmux — mouse configuration (issue #890)', () => {
 
     // tmuxExec should have been called for mouse config
     const tmuxCalls = vi.mocked(tmuxExec).mock.calls;
-    expect(tmuxCalls.length).toBeGreaterThanOrEqual(1);
-    expect(tmuxCalls[0][0]).toEqual(['set-option', 'mouse', 'on']);
+    const mouseCall = tmuxCalls.find(([args]) => args[0] === 'set-option' && args.includes('mouse'));
+    expect(mouseCall?.[0]).toEqual(['set-option', 'mouse', 'on']);
 
     // execFileSync should have been called for claude
     const claudeCalls = vi.mocked(execFileSync).mock.calls;
@@ -970,17 +991,193 @@ describe('prepareOmcLaunchConfigDir / launchCommand OMC companion loading', () =
     expect(runtimeSettings.mcpServers?.exa).toBeDefined();
   });
 
-  it('mirrors keybindings.json and rules/ into the runtime config dir', () => {
+  it('mirrors keybindings.json, rules/, and themes/ into the runtime config dir', () => {
     const configDir = join(tempRoot!, '.claude');
     mkdirSync(join(configDir, 'rules'), { recursive: true });
+    mkdirSync(join(configDir, 'themes'), { recursive: true });
     writeFileSync(join(configDir, 'CLAUDE-omc.md'), '<!-- OMC:START -->\n# OMC\n<!-- OMC:END -->\n');
     writeFileSync(join(configDir, 'keybindings.json'), '{"bindings":[]}');
     writeFileSync(join(configDir, 'rules', 'my-rule.md'), '# Rule');
+    writeFileSync(join(configDir, 'themes', 'custom-theme.json'), '{"name":"custom"}');
 
     const runtimeDir = prepareOmcLaunchConfigDir(configDir);
     expect(runtimeDir).not.toBe(configDir);
     expect(existsSync(join(runtimeDir, 'keybindings.json'))).toBe(true);
     expect(existsSync(join(runtimeDir, 'rules'))).toBe(true);
+    expect(existsSync(join(runtimeDir, 'themes'))).toBe(true);
+    expect(readFileSync(join(runtimeDir, 'themes', 'custom-theme.json'), 'utf-8')).toBe('{"name":"custom"}');
+  });
+
+  it('mirrors Linux credential file as a symlink without copying credential content', () => {
+    const configDir = join(tempRoot!, '.claude');
+    mkdirSync(configDir, { recursive: true });
+    const credentialsPath = join(configDir, '.credentials.json');
+    const credentialContent = '{"accessToken":"test-only-token"}';
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    writeFileSync(join(configDir, 'CLAUDE-omc.md'), '<!-- OMC:START -->\n# OMC\n<!-- OMC:END -->\n');
+    writeFileSync(credentialsPath, credentialContent);
+
+    try {
+      const runtimeDir = prepareOmcLaunchConfigDir(configDir);
+      const runtimeCredentialsPath = join(runtimeDir, '.credentials.json');
+
+      expect(existsSync(runtimeCredentialsPath)).toBe(true);
+      expect(lstatSync(runtimeCredentialsPath).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(runtimeCredentialsPath)).toBe(credentialsPath);
+      const consoleOutput = [...logSpy.mock.calls, ...warnSpy.mock.calls, ...errorSpy.mock.calls].flat().join('\n');
+      expect(consoleOutput).not.toContain(credentialContent);
+    } finally {
+      logSpy.mockRestore();
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('does not copy credential content when credential symlink creation fails', async () => {
+    vi.resetModules();
+    const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const copyFileSyncSpy = vi.fn(actualFs.copyFileSync);
+    vi.doMock('fs', () => ({
+      ...actualFs,
+      copyFileSync: copyFileSyncSpy,
+      symlinkSync: vi.fn(() => {
+        throw new Error('symlink unavailable');
+      }),
+    }));
+
+    try {
+      const { prepareOmcLaunchConfigDir: prepareWithFailedSymlink } = await import('../launch.js');
+      const configDir = join(tempRoot!, '.claude');
+      mkdirSync(configDir, { recursive: true });
+      const credentialsPath = join(configDir, '.credentials.json');
+      writeFileSync(join(configDir, 'CLAUDE-omc.md'), '<!-- OMC:START -->\n# OMC\n<!-- OMC:END -->\n');
+      writeFileSync(credentialsPath, '{"accessToken":"test-only-token"}');
+
+      const runtimeDir = prepareWithFailedSymlink(configDir);
+      const runtimeCredentialsPath = join(runtimeDir, '.credentials.json');
+
+      expect(existsSync(runtimeCredentialsPath)).toBe(false);
+      expect(copyFileSyncSpy).not.toHaveBeenCalledWith(credentialsPath, runtimeCredentialsPath);
+    } finally {
+      vi.doUnmock('fs');
+      vi.resetModules();
+    }
+  });
+
+  it('preserves runtime .claude.json across runtime config dir rebuilds', () => {
+    const configDir = join(tempRoot!, '.claude');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'CLAUDE-omc.md'), '<!-- OMC:START -->\n# OMC\n<!-- OMC:END -->\n');
+
+    const runtimeDir = prepareOmcLaunchConfigDir(configDir);
+    writeFileSync(join(runtimeDir, '.claude.json'), '{"session":"keep-me"}');
+
+    const rebuiltRuntimeDir = prepareOmcLaunchConfigDir(configDir);
+
+    expect(rebuiltRuntimeDir).toBe(runtimeDir);
+    expect(readFileSync(join(rebuiltRuntimeDir, '.claude.json'), 'utf-8')).toBe('{"session":"keep-me"}');
+  });
+
+  it('seeds missing runtime .claude.json mcpServers from source .claude.json', () => {
+    const configDir = join(tempRoot!, '.claude');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'CLAUDE-omc.md'), '<!-- OMC:START -->\n# OMC\n<!-- OMC:END -->\n');
+    writeFileSync(join(tempRoot!, '.claude.json'), JSON.stringify({
+      mcpServers: {
+        github: { command: 'node', args: ['github-mcp.js'] },
+      },
+      sourceOnly: true,
+    }, null, 2));
+
+    const runtimeDir = prepareOmcLaunchConfigDir(configDir);
+    const runtimeClaudeJson = JSON.parse(readFileSync(join(runtimeDir, '.claude.json'), 'utf-8')) as Record<string, unknown>;
+
+    expect(runtimeClaudeJson).toEqual({
+      mcpServers: {
+        github: { command: 'node', args: ['github-mcp.js'] },
+      },
+    });
+  });
+
+  it('refreshes runtime mcpServers from source while preserving runtime metadata', () => {
+    const configDir = join(tempRoot!, '.claude');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'CLAUDE-omc.md'), '<!-- OMC:START -->\n# OMC\n<!-- OMC:END -->\n');
+    writeFileSync(join(tempRoot!, '.claude.json'), JSON.stringify({
+      mcpServers: {
+        exa: { command: 'node', args: ['old-exa.js'] },
+      },
+    }, null, 2));
+
+    const runtimeDir = prepareOmcLaunchConfigDir(configDir);
+    writeFileSync(join(runtimeDir, '.claude.json'), JSON.stringify({
+      session: 'keep-me',
+      projects: { '/repo': { history: ['keep'] } },
+      mcpServers: {
+        exa: { command: 'node', args: ['stale-exa.js'] },
+      },
+    }, null, 2));
+    writeFileSync(join(tempRoot!, '.claude.json'), JSON.stringify({
+      mcpServers: {
+        exa: { command: 'node', args: ['new-exa.js'] },
+        playwright: { command: 'npx', args: ['@playwright/mcp'] },
+      },
+      sourceOnly: 'not copied',
+    }, null, 2));
+
+    const rebuiltRuntimeDir = prepareOmcLaunchConfigDir(configDir);
+    const runtimeClaudeJson = JSON.parse(readFileSync(join(rebuiltRuntimeDir, '.claude.json'), 'utf-8')) as Record<string, unknown>;
+
+    expect(runtimeClaudeJson).toEqual({
+      session: 'keep-me',
+      projects: { '/repo': { history: ['keep'] } },
+      mcpServers: {
+        exa: { command: 'node', args: ['new-exa.js'] },
+        playwright: { command: 'npx', args: ['@playwright/mcp'] },
+      },
+    });
+  });
+
+  it('preserves runtime .claude.json when source .claude.json is absent, invalid, or has no mcpServers', () => {
+    const configDir = join(tempRoot!, '.claude');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'CLAUDE-omc.md'), '<!-- OMC:START -->\n# OMC\n<!-- OMC:END -->\n');
+
+    const runtimeDir = prepareOmcLaunchConfigDir(configDir);
+    const runtimeClaudeJsonPath = join(runtimeDir, '.claude.json');
+    writeFileSync(runtimeClaudeJsonPath, '{"session":"keep-absent"}');
+
+    prepareOmcLaunchConfigDir(configDir);
+    expect(readFileSync(runtimeClaudeJsonPath, 'utf-8')).toBe('{"session":"keep-absent"}');
+
+    writeFileSync(join(tempRoot!, '.claude.json'), '{not json');
+    writeFileSync(runtimeClaudeJsonPath, '{"session":"keep-invalid"}');
+    prepareOmcLaunchConfigDir(configDir);
+    expect(readFileSync(runtimeClaudeJsonPath, 'utf-8')).toBe('{"session":"keep-invalid"}');
+
+    writeFileSync(join(tempRoot!, '.claude.json'), JSON.stringify({ projects: {} }, null, 2));
+    writeFileSync(runtimeClaudeJsonPath, '{"session":"keep-no-mcp"}');
+    prepareOmcLaunchConfigDir(configDir);
+    expect(readFileSync(runtimeClaudeJsonPath, 'utf-8')).toBe('{"session":"keep-no-mcp"}');
+  });
+
+  it('removes non-mirrored runtime junk across runtime config dir rebuilds', () => {
+    const configDir = join(tempRoot!, '.claude');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'CLAUDE-omc.md'), '<!-- OMC:START -->\n# OMC\n<!-- OMC:END -->\n');
+
+    const runtimeDir = prepareOmcLaunchConfigDir(configDir);
+    writeFileSync(join(runtimeDir, 'junk.txt'), 'remove me');
+    mkdirSync(join(runtimeDir, 'junk-dir'), { recursive: true });
+    writeFileSync(join(runtimeDir, 'junk-dir', 'nested.txt'), 'remove me too');
+
+    const rebuiltRuntimeDir = prepareOmcLaunchConfigDir(configDir);
+
+    expect(rebuiltRuntimeDir).toBe(runtimeDir);
+    expect(existsSync(join(rebuiltRuntimeDir, 'junk.txt'))).toBe(false);
+    expect(existsSync(join(rebuiltRuntimeDir, 'junk-dir'))).toBe(false);
   });
 
   it('leaves CLAUDE_CONFIG_DIR unchanged when no preserved companion exists', () => {
@@ -1292,5 +1489,248 @@ describe('runClaude outside-tmux — env forwarding', () => {
     expect(rawCommand).toContain("perl -e 'use POSIX;tcflush(0,TCIFLUSH)' 2>/dev/null;");
 
     Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hasMadmaxFlag
+// ---------------------------------------------------------------------------
+describe('hasMadmaxFlag', () => {
+  it('detects --madmax', () => {
+    expect(hasMadmaxFlag(['--madmax'])).toBe(true);
+  });
+
+  it('detects --yolo', () => {
+    expect(hasMadmaxFlag(['--yolo'])).toBe(true);
+  });
+
+  it('detects --madmax mixed with other args', () => {
+    expect(hasMadmaxFlag(['--print', '--madmax', 'hello'])).toBe(true);
+  });
+
+  it('returns false when neither flag is present', () => {
+    expect(hasMadmaxFlag(['--print', '--dangerously-skip-permissions'])).toBe(false);
+  });
+
+  it('returns false for empty args', () => {
+    expect(hasMadmaxFlag([])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runClaude — --madmax on macOS forces tmux
+// ---------------------------------------------------------------------------
+describe('runClaude — --madmax on macOS forces tmux', () => {
+  let processExitSpy: ReturnType<typeof vi.spyOn>;
+  let stderrSpy: ReturnType<typeof vi.spyOn>;
+  const savedTmux = process.env.TMUX;
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    processExitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    (execFileSync as ReturnType<typeof vi.fn>).mockReturnValue(Buffer.from(''));
+    delete process.env.TMUX;
+  });
+
+  afterEach(() => {
+    processExitSpy.mockRestore();
+    stderrSpy.mockRestore();
+    Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
+    if (savedTmux !== undefined) {
+      process.env.TMUX = savedTmux;
+    } else {
+      delete process.env.TMUX;
+    }
+  });
+
+  it('exits 1 with brew hint when --madmax is used on darwin without tmux', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(false);
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('direct');
+
+    runClaude('/tmp', ['--madmax'], 'sid');
+
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    const messages = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(messages).toContain('--madmax');
+    expect(messages).toContain('--yolo');
+    expect(messages).toContain('tmux');
+    expect(messages).toContain('brew install tmux');
+  });
+
+  it('exits 1 with brew hint when --yolo is used on darwin without tmux', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(false);
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('direct');
+
+    runClaude('/tmp', ['--yolo'], 'sid');
+
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    const messages = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(messages).toContain('brew install tmux');
+  });
+
+  it('exits 1 if resolver returns "direct" while requireTmux is set', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(true);
+    // Even with tmux available, if the resolver returns 'direct' under
+    // requireTmux the launcher must exit rather than silently demote.
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('direct');
+
+    runClaude('/tmp', ['--madmax'], 'sid');
+
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('passes requireTmux=true to resolveLaunchPolicy on darwin --madmax', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(true);
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('outside-tmux');
+
+    runClaude('/tmp', ['--madmax'], 'sid');
+
+    expect(resolveLaunchPolicy).toHaveBeenCalledWith(
+      process.env,
+      ['--madmax'],
+      { requireTmux: true },
+    );
+  });
+
+  it('does not require tmux on darwin without --madmax', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(false);
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('direct');
+
+    runClaude('/tmp', [], 'sid');
+
+    expect(processExitSpy).not.toHaveBeenCalledWith(1);
+    expect(resolveLaunchPolicy).toHaveBeenCalledWith(
+      process.env,
+      [],
+      { requireTmux: false },
+    );
+  });
+
+  it('does not require tmux on linux even with --madmax', () => {
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(false);
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('direct');
+
+    runClaude('/tmp', ['--madmax'], 'sid');
+
+    expect(processExitSpy).not.toHaveBeenCalledWith(1);
+    expect(resolveLaunchPolicy).toHaveBeenCalledWith(
+      process.env,
+      ['--madmax'],
+      { requireTmux: false },
+    );
+  });
+
+  it('skips the install check when already inside tmux on darwin --madmax', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    process.env.TMUX = '/tmp/tmux-501/default,1234,0';
+    vi.mocked(isTmuxAvailable).mockReturnValue(false); // would normally fail, but TMUX env wins
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('inside-tmux');
+
+    runClaude('/tmp', ['--madmax'], 'sid');
+
+    expect(processExitSpy).not.toHaveBeenCalledWith(1);
+    expect(isTmuxAvailable).not.toHaveBeenCalled();
+  });
+
+  it('still bypasses tmux for --print even with --madmax on darwin', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(false);
+
+    runClaude('/tmp', ['--madmax', '--print', 'hi'], 'sid');
+
+    expect(processExitSpy).not.toHaveBeenCalledWith(1);
+    expect(resolveLaunchPolicy).not.toHaveBeenCalled();
+    const claudeCall = vi.mocked(execFileSync).mock.calls.find(([cmd]) => cmd === 'claude');
+    expect(claudeCall).toBeDefined();
+  });
+
+  it('exits 1 when tmux new-session fails under --madmax (no silent direct)', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(true);
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('outside-tmux');
+    vi.mocked(tmuxExec).mockImplementation((tmuxArgs: string[]) => {
+      if (tmuxArgs[0] === 'new-session') {
+        throw new Error('tmux new-session failed');
+      }
+      return '';
+    });
+
+    runClaude('/tmp', ['--madmax'], 'sid');
+
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    const messages = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(messages).toContain('launching tmux failed');
+    const claudeCall = vi.mocked(execFileSync).mock.calls.find(([cmd]) => cmd === 'claude');
+    expect(claudeCall).toBeUndefined();
+  });
+
+  it('exits 1 when tmux attach + has-session both fail under --madmax', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(true);
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('outside-tmux');
+    vi.mocked(tmuxExec).mockImplementation((tmuxArgs: string[]) => {
+      if (tmuxArgs[0] === 'attach-session' || tmuxArgs[0] === 'has-session') {
+        throw new Error(`tmux ${tmuxArgs[0]} failed`);
+      }
+      return '';
+    });
+
+    runClaude('/tmp', ['--madmax'], 'sid');
+
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    const messages = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(messages).toContain('launching tmux failed');
+    const claudeCall = vi.mocked(execFileSync).mock.calls.find(([cmd]) => cmd === 'claude');
+    expect(claudeCall).toBeUndefined();
+  });
+
+  it('exits 1 when tmux attach fails under --madmax even if detached session exists', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(true);
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('outside-tmux');
+    vi.mocked(tmuxExec).mockImplementation((tmuxArgs: string[]) => {
+      if (tmuxArgs[0] === 'attach-session') {
+        throw new Error('tmux attach-session failed');
+      }
+      return '';
+    });
+
+    runClaude('/tmp', ['--madmax'], 'sid');
+
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+    const messages = stderrSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(messages).toContain('launching tmux failed');
+    const tmuxCalls = vi.mocked(tmuxExec).mock.calls.map(([tmuxArgs]) => tmuxArgs[0]);
+    expect(tmuxCalls).toContain('attach-session');
+    expect(tmuxCalls).not.toContain('has-session');
+    const claudeCall = vi.mocked(execFileSync).mock.calls.find(([cmd]) => cmd === 'claude');
+    expect(claudeCall).toBeUndefined();
+  });
+
+  it('preserves the existing direct fallback when tmux new-session fails WITHOUT --madmax', () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+    vi.mocked(isTmuxAvailable).mockReturnValue(true);
+    vi.mocked(resolveLaunchPolicy).mockReturnValue('outside-tmux');
+    vi.mocked(tmuxExec).mockImplementation((tmuxArgs: string[]) => {
+      if (tmuxArgs[0] === 'new-session') {
+        throw new Error('tmux new-session failed');
+      }
+      return '';
+    });
+
+    runClaude('/tmp', [], 'sid');
+
+    // No --madmax: existing behavior preserved (direct path runs, no exit-1).
+    expect(processExitSpy).not.toHaveBeenCalledWith(1);
+    const claudeCall = vi.mocked(execFileSync).mock.calls.find(([cmd]) => cmd === 'claude');
+    expect(claudeCall).toBeDefined();
   });
 });

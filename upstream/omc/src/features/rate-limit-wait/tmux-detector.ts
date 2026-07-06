@@ -49,7 +49,7 @@ const RATE_LIMIT_PATTERNS = [
   /\bweekly\s+(?:usage\s+)?(?:limit|quota|cap|allowance|allocation)\b/i,
 ];
 
-/** Patterns that indicate Claude Code is running */
+/** Patterns that indicate Claude Code is running outside the OMC HUD */
 const CLAUDE_CODE_PATTERNS = [
   /claude/i,
   /anthropic/i,
@@ -58,6 +58,70 @@ const CLAUDE_CODE_PATTERNS = [
   /conversation/i,
   /assistant/i,
 ];
+
+/** Anchored OMC HUD status line, not copied output embedded in logs/tests. */
+const OMC_HUD_STATUS_LINE_PATTERN =
+  /^\s*\[OMC#[^\]\s]*\]\s*\|.*\b(?:Model:|ctx:|session:|5h:|wk:|thinking)\b/i;
+
+/** OMC HUD mode/help line rendered in the captured UI footer. */
+const OMC_HUD_MODE_LINE_PATTERN = /^\s*⏵⏵\s+.*\(shift\+tab to cycle\)/i;
+
+/** Shell commands that print saved terminal transcripts rather than a live UI. */
+const SAVED_TRANSCRIPT_COMMAND_PATTERN =
+  /^\s*(?:[$#%]|❯)\s*(?:cat|bat|less|more|tail|head|sed|awk)\b.*(?:hud|transcript|terminal|output|copied|\.txt)\b/i;
+
+/** Plain-language labels commonly pasted above copied terminal/HUD output. */
+const SAVED_TRANSCRIPT_LABEL_PATTERN =
+  /\b(?:copied\s+from|saved\s+terminal\s+output|terminal\s+transcript|copied\s+hud)\b/i;
+
+/** Rate-limit text shown by the live Claude/OMC limit screen, not arbitrary API/log output. */
+const OMC_HUD_RATE_LIMIT_SCREEN_PATTERNS = [
+  /you(?:'|’)ve\s+(?:hit|reached)\s+(?:your\s+)?(?:session\s+|usage\s+)?limit/i,
+  /\b(?:session|usage|weekly|5[- ]?hour)\s+(?:usage\s+)?(?:limit|quota|cap|allowance|allocation)\b/i,
+  /\blimit\s+resets?\b/i,
+  /stop\s+and\s+wait\s+for\s+limit\s+to\s+reset/i,
+];
+
+function hasOmcRateLimitScreenText(content: string): boolean {
+  return OMC_HUD_RATE_LIMIT_SCREEN_PATTERNS.some(pattern => pattern.test(content));
+}
+
+function hasSavedTranscriptContext(content: string): boolean {
+  return content
+    .split('\n')
+    .some(line =>
+      SAVED_TRANSCRIPT_COMMAND_PATTERN.test(line) ||
+      SAVED_TRANSCRIPT_LABEL_PATTERN.test(line)
+    );
+}
+
+function hasLiveOmcHudEvidence(content: string): boolean {
+  if (hasSavedTranscriptContext(content)) {
+    return false;
+  }
+  const nonEmptyLines = content
+    .split('\n')
+    .map(line => line.trimEnd())
+    .filter(line => line.trim().length > 0);
+  const hudStatusIndex = nonEmptyLines.findIndex(line => OMC_HUD_STATUS_LINE_PATTERN.test(line));
+  if (hudStatusIndex === -1) {
+    return false;
+  }
+
+  const modeLineIndex = nonEmptyLines.findIndex((line, index) =>
+    index > hudStatusIndex && OMC_HUD_MODE_LINE_PATTERN.test(line)
+  );
+  if (modeLineIndex === -1) {
+    return false;
+  }
+
+  const isFooterBlock =
+    hudStatusIndex >= nonEmptyLines.length - 4 &&
+    modeLineIndex === nonEmptyLines.length - 1 &&
+    modeLineIndex - hudStatusIndex <= 2;
+
+  return isFooterBlock;
+}
 
 /**
  * Tightened weekly rate-limit pattern, extracted so `analyzePaneContent` can
@@ -251,10 +315,13 @@ export function analyzePaneContent(content: string): PaneAnalysisResult {
   // "Update assistant config") cannot produce false-positive keyword matches.
   const cleanedContent = stripGitOutputLines(content);
 
-  // Check for Claude Code indicators
-  const hasClaudeCode = CLAUDE_CODE_PATTERNS.some((pattern) =>
-    pattern.test(cleanedContent)
-  );
+  // Check for Claude Code indicators. OMC HUD footer evidence only counts as a
+  // Claude pane when paired with live limit-screen wording; copied HUD footers
+  // next to unrelated API/log rate-limit text must not impersonate a blocked pane.
+  const hasClaudeText = CLAUDE_CODE_PATTERNS.some((pattern) => pattern.test(cleanedContent));
+  const hasLiveOmcHud = hasLiveOmcHudEvidence(cleanedContent);
+  const hasClaudeCode =
+    hasClaudeText || (hasLiveOmcHud && hasOmcRateLimitScreenText(cleanedContent));
 
   // Check for rate limit messages
   const rateLimitMatches = RATE_LIMIT_PATTERNS.filter((pattern) =>
