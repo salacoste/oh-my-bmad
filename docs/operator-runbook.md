@@ -167,6 +167,51 @@ absence). Set up:
 > `GITHUB_TOKEN` to an agent subprocess.** See `deferred-work.md` for the
 > closure record.
 
+### Production credential readiness (Story 131.2)
+
+Story 131.2 makes production credential readiness executable without adding a
+real secret value or enabling real GitHub writes. The canonical inventory is
+[`production-credential-inventory.json`](production-credential-inventory.json)
+and the gate is:
+
+```bash
+uv run python scripts/check_production_credentials.py
+```
+
+For `GITHUB_MCP_SCOPED_TOKEN`, the readiness contract is:
+
+1. Scope the token to exactly one target repository and the minimum GitHub
+   permissions required by the `github-mcp` tools.
+2. Store the value only in the operator/deployment secret store and inject it
+   into the worker environment. Never commit it to repo files, logs, events,
+   dashboard payloads, snapshots, or artifacts.
+3. Keep `GITHUB_MCP_SCOPED_TOKEN` authorized only for the `github` MCP
+   subprocess. The broad `GITHUB_TOKEN` must stay absent from MCP and agent
+   subprocess allowlists.
+4. Before any future real-write activation, run:
+
+   ```bash
+   uv run python scripts/check_production_credentials.py
+   uv run python scripts/check_no_secrets.py
+   git ls-files -z | xargs -0 uv run secret-hygiene-precommit
+   ```
+
+5. Rotation triggers: scheduled security rotation, permission/scope change,
+   owner or repository transfer, suspected exposure, or GitHub App installation
+   change. Rotate within the configured freshness window, restart/recheck
+   consumers, and preserve only metadata evidence.
+6. Revocation target: revoke or delete the token at GitHub and clear the
+   deployment secret within 15 minutes for suspected exposure. Confirm
+   `github-mcp` fails closed without `GITHUB_MCP_SCOPED_TOKEN`.
+7. Audit behavior required before production activation: runtime consumers must
+   emit metadata-only `secret.accessed` events for credential reads. The emitted
+   payload may identify `secret_name` and `scope`; it must never include a
+   credential value.
+
+This section is a readiness/checker contract only. Real GitHub writes remain
+simulation/default-denied until Story 131.3 supplies dry-run, approval, scoped
+token evidence, emergency disable, rate-limit handling, and smoke-test gates.
+
 ### `memory` / `artifact` — store paths + retention
 
 Each store-backed server owns an **isolated subtree of the existing `oh-my-bmad-data`
