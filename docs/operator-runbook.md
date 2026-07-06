@@ -243,6 +243,38 @@ This section is a readiness/checker contract only. It performs no live GitHub AP
 mutation and does not add dashboard, Telegram, console, deployment, lifecycle, or
 retention controls.
 
+
+### Deployment change control readiness (Story 131.4)
+
+Story 131.4 makes the deployment change-control path executable as a static
+readiness check without changing live deployment behavior. The canonical
+contract is [`deployment-change-readiness.json`](deployment-change-readiness.json)
+and the gate is:
+
+```bash
+uv run python scripts/check_deployment_change_readiness.py
+```
+
+The readiness contract requires all of the following before any future live
+deployment-affecting story can proceed:
+
+1. Deployment profile is explicit (`deploy-vps-digest` or
+   `deploy-macos-digest`) and release-owner approval names that exact profile.
+2. Environment/configuration diff, image tags, immutable digests, migration
+   compatibility, backup evidence, and secret-scope evidence are recorded before
+   apply.
+3. The digest deployment path continues to run `verify-images` first and the
+   digest compose overlay fails loud on missing `OMB_IMAGE_DIGEST_*` values.
+4. Rollback profile names previous image digests, config reference,
+   backup/restore path, readiness criteria, and post-rollback health checks.
+5. Post-deploy health evidence, smoke-test result, freeze-window decision, and
+   emergency-disable/rollback decision are preserved as metadata-only evidence.
+6. Tag-based `deploy-vps` and `deploy-macos` stay deprecated for production.
+
+This section is a readiness/checker contract only: it performs no live docker
+compose invocation, no migration, no credential read, no remote host mutation,
+no runtime audit emission, and no new operator command surface.
+
 ### `memory` / `artifact` — store paths + retention
 
 Each store-backed server owns an **isolated subtree of the existing `oh-my-bmad-data`
