@@ -19,6 +19,7 @@ from replay.retention_apply import (
     RetentionApplyApprovalEvidence,
     RetentionApplyConfig,
     RetentionApplyError,
+    RetentionApplyRecord,
     apply_retention_plan,
 )
 
@@ -185,7 +186,7 @@ def _apply(
     idempotency_key: str = "apply-key-1",
     recovery_refs: dict[str, str] | None = None,
     safe_retry_event_ref: str | None = None,
-):
+) -> RetentionApplyRecord:
     return apply_retention_plan(
         config=RetentionApplyConfig(enabled=True),
         plan=plan,

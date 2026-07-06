@@ -84,8 +84,8 @@ def project_retention_status(
     runners = tuple(runner_records)
     applies = tuple(apply_records)
 
-    runner_counts = Counter(record.status for record in runners)
-    apply_counts = Counter(record.status for record in applies)
+    runner_counts: Counter[str] = Counter(str(record.status) for record in runners)
+    apply_counts: Counter[str] = Counter(str(record.status) for record in applies)
     timestamps = [
         timestamp
         for timestamp in (
