@@ -408,8 +408,9 @@ def _validate_docs(root: Path) -> list[Violation]:
     ):
         if needle not in feature:
             violations.append(Violation(str(FEATURE_STATUS_PATH), f"missing {needle!r}"))
+    if "epic-130: in-progress" not in sprint and "epic-130: done" not in sprint:
+        violations.append(Violation(str(SPRINT_STATUS_PATH), "missing Epic 130 status"))
     for needle in (
-        "epic-130: in-progress",
         "130-1-retention-policy-and-object-storage-adapter-contract: done",
         "130-2-object-storage-lifecycle-dry-run-and-manifest-validation: done",
         "130-3-scheduled-retention-job-runner: done",

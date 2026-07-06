@@ -41,6 +41,16 @@ from replay.retention import (
     RetentionPolicy,
     create_retention_dry_run_plan,
 )
+from replay.retention_apply import (
+    APPLY_POLICY_VERSION,
+    InMemoryRetentionApplyLedger,
+    RetentionApplyApprovalEvidence,
+    RetentionApplyAuditEntry,
+    RetentionApplyConfig,
+    RetentionApplyError,
+    RetentionApplyRecord,
+    apply_retention_plan,
+)
 from replay.retention_runner import (
     RUNNER_POLICY_VERSION,
     InMemoryRetentionRunnerLedger,
@@ -52,6 +62,12 @@ from replay.retention_runner import (
     RetentionRunnerRequest,
     compute_retention_runner_idempotency_key,
     run_scheduled_retention_job,
+)
+from replay.retention_status import (
+    STATUS_POLICY_VERSION,
+    RetentionStatusProjection,
+    assert_no_secret_material,
+    project_retention_status,
 )
 from replay.snapshots import (
     SnapshotInfo,
@@ -68,6 +84,14 @@ from replay.validation import (
 )
 
 __all__ = [
+    "APPLY_POLICY_VERSION",
+    "InMemoryRetentionApplyLedger",
+    "RetentionApplyApprovalEvidence",
+    "RetentionApplyAuditEntry",
+    "RetentionApplyConfig",
+    "RetentionApplyError",
+    "RetentionApplyRecord",
+    "apply_retention_plan",
     "InMemoryRetentionRunnerLedger",
     "RUNNER_POLICY_VERSION",
     "RetentionLockMetadata",
@@ -78,6 +102,10 @@ __all__ = [
     "RetentionRunnerRequest",
     "compute_retention_runner_idempotency_key",
     "run_scheduled_retention_job",
+    "STATUS_POLICY_VERSION",
+    "RetentionStatusProjection",
+    "assert_no_secret_material",
+    "project_retention_status",
     "HOT_ONLY_REPLAY",
     "HotOnlyReplaySentinel",
     "ReplayArchiveChecksumError",
