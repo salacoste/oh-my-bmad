@@ -359,8 +359,10 @@ Current boundary:
 - no production credential loading;
 - no runtime audit emitter, dashboard command surface, or registry mutation endpoint.
 
-Treat every retention apply/delete/transition request as fail-closed until a later
-Story 130.4 provides approval-bound apply, audit, and recovery proof.
+At the Story 130.1 readiness boundary, treat every retention apply/delete/transition
+request as fail-closed until Story 130.4 package-local approval-bound apply
+evidence is present. Story 130.4 does not make live production storage mutation,
+credentials, schedulers, command surfaces, or registry mutation endpoints active.
 
 
 ### Object-storage lifecycle dry-run and manifest validation (Story 130.2)
@@ -417,6 +419,89 @@ Example local validation target:
 uv run pytest packages/replay/src/replay/test_retention_runner.py -q
 uv run python scripts/check_retention_policy_readiness.py --verbose
 ```
+
+
+
+### Retention apply, deletion/transition audit, and recovery evidence (Story 130.4)
+
+Story 130.4 exposes the package-local approval-bound `apply_retention_plan(...)`
+API in `packages/replay/src/replay/retention_apply.py`. It consumes a current
+Story 130.2 `RetentionDryRunPlan`, exact matching `plan_hash` approval
+evidence, an idempotency key, recovery evidence references, and an injected
+adapter. The default config is disabled; callers must explicitly enable it.
+
+The apply boundary is adapter-injected only. It imports no object-storage SDK,
+loads no production credentials, starts no scheduler, registers no command
+surface, and adds no dashboard or registry mutation endpoint. Tests use a fake
+adapter to prove that every planned transition/delete verifies manifest-backed
+object identity before mutation and that retain/blocked/skipped decisions do not
+call mutation methods.
+
+Required approval and safety evidence:
+
+- exact dry-run `plan_hash` and dry-run `generated_at` match;
+- canonical dry-run payload re-hash matching `plan_hash` before replay or
+  mutation;
+- non-empty operator identity and approval event/reference;
+- unexpired approval and fresh dry-run plan evidence;
+- blocker-free dry-run evidence before destructive apply;
+- idempotency key;
+- recovery evidence reference for every planned transition/delete;
+- adapter verification of current object identity before mutation;
+- safe retry/review evidence before any further destructive work after a partial
+  failure.
+
+Per-action audit entries record object identity, manifest/policy basis, planned
+action, adapter response, trace id, idempotency key, operator identity, recovery
+status, and failure details when applicable. A completed apply replays from the
+ledger without duplicate adapter mutation calls. A partial failure persists a
+degraded/blocked state and requires explicit safe retry/review evidence. Safe
+retry skips already-succeeded destructive object identities for the blocked
+plan and records the safe retry event reference in returned/audit evidence.
+
+Example local validation target:
+
+```bash
+uv run pytest packages/replay/src/replay/test_retention_apply.py -q
+uv run pytest packages/replay/src/replay/test_retention.py packages/replay/src/replay/test_retention_runner.py packages/replay/src/replay/test_retention_apply.py -q
+uv run python scripts/check_retention_policy_readiness.py --verbose
+```
+
+
+### Retention observability and closure (Story 130.5)
+
+Story 130.5 exposes the package-local read-only
+`project_retention_status(...)` helper in
+`packages/replay/src/replay/retention_status.py`. It summarizes existing Story
+130.3 runner records and Story 130.4 apply records only. It does not call the
+dry-run planner, apply adapter, scheduler, credentials, object storage, command
+surfaces, dashboard/registry routes, or runtime audit emitters.
+
+Status fields:
+
+- `enabled`;
+- caller-supplied `next_run_at` when known;
+- `last_run_at` from existing record update times;
+- failure count;
+- skipped/protected blocker count from runner dry-run evidence;
+- audit count;
+- degraded state and degraded reasons;
+- runner/apply status counts;
+- fixed safety booleans showing no live scheduler, credential load, or
+  status-triggered mutation.
+
+Public status payloads omit local input paths, policy/manifest input references,
+operator identities, and raw record internals. Use `assert_no_secret_material(...)`
+as a defensive check for rendered docs/status payloads.
+
+Example local validation target:
+
+```bash
+uv run pytest packages/replay/src/replay/test_retention_status.py -q
+uv run pytest packages/replay/src/replay/test_retention.py packages/replay/src/replay/test_retention_runner.py packages/replay/src/replay/test_retention_apply.py packages/replay/src/replay/test_retention_status.py -q
+uv run python scripts/check_retention_policy_readiness.py --verbose
+```
+
 
 ### `memory` / `artifact` — store paths + retention
 
