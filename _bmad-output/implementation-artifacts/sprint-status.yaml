@@ -1115,12 +1115,13 @@ development_status:
   # =========================================================================
   # Epic 131: Production operations runbook and preflight contract
   # =========================================================================
-  epic-131: in-progress  # Stories 131.1-131.5 completed locally as production-operations contract/readiness slices; no runtime production operation, real write, live deployment mutation, or live command surface is activated
+  epic-131: done  # Stories 131.1-131.6 complete as production-operations readiness/closure slices; no runtime production operation, real write, live deployment mutation, live command surface, runtime audit emitter, or retention job is activated
   131-1-production-operations-runbook-and-preflight-contract: done  # Defines operation classes, preflight fields, dry-run evidence, approval levels, docs/status audit shape, emergency-disable evidence, rollback/drill prerequisites, ownership, future Story 131.2-131.6 boundaries, and unsupported/fail-closed behavior; real GitHub writes, credentials, deployment mutations, command surfaces, lifecycle/retention jobs, Epic 129/PR #100 reclassification, and runtime production audit emitters remain fail-closed/deferred
   131-2-credential-provisioning-scoping-rotation-revocation: done  # Adds executable credential-readiness inventory/checker for GITHUB_MCP_SCOPED_TOKEN scope, env location, MCP subprocess allowlists, rotation, revocation, scanner coverage, docs refs, and metadata-only secret.accessed behavior; broad GitHub tokens remain denied from MCP/agent subprocesses; no real credential value, GitHub write activation, deployment mutation, command surface, or runtime audit emitter behavior is enabled
   131-3-github-write-activation-readiness: done  # Adds executable GitHub write activation-readiness inventory/checker for Tier-3 approval gates, simulate=True defaults, no runtime write-enable env read, rate-limit retry evidence, github.* audit descriptors, and future smoke/cleanup/emergency-disable requirements; no real GitHub write, env flag flip, credential value, deployment mutation, command surface, or runtime production audit emitter is enabled
   131-4-deployment-change-control-readiness: done  # Adds executable deployment change-control readiness contract/checker for digest deployment preflights, fail-loud image digests, deprecated tag deploy warnings, backup/restore/rollback docs, destructive restore confirmation, and future health/smoke/rollback evidence; no docker compose, migration, credential read, remote host mutation, new command surface, or runtime production audit emitter is enabled
   131-5-production-command-surface-readiness: done  # Adds executable production command-surface readiness contract/checker for existing console/Telegram task-decision boundaries, absent dashboard production-operation controls, absent registry production-operation mutation endpoints, and forbidden prod-operation control tokens; no live command surface, production operation mutation, credential rendering, or runtime audit emitter is enabled
+  131-6-production-operations-readiness-closure: done  # Closes Epic 131 as a static/readiness-contract track with prior story evidence, CI/just gate wiring, status docs, and live-activation overclaim prevention; real GitHub writes, live deployment changes, live command surfaces, runtime audit emitters, and retention jobs remain not enabled
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
@@ -1129,6 +1130,39 @@ audit_trail:
 
 
 
+
+  - date: "2026-07-06"
+    event: story-131-6-production-operations-readiness-closure-local-done
+    from: in-progress
+    to: done
+    epic: epic-131
+    story: 131-6-production-operations-readiness-closure
+    source: scoped-autopilot-story-131-6
+    operation_id: story-131-6-production-operations-readiness-closure
+    operation_class: production_readiness_closure
+    target_environment: repo-static-readiness
+    target_repository_or_service: epic-131-production-operations
+    authority_source: _bmad-output/planning-artifacts/phase-48-production-readiness-epics.md
+    dry_run_evidence_ref: scripts/check_production_operations_closure.py
+    approval_ref: docs/production-operations.md#approval-levels
+    request_trace_correlation_id: epic-131-story-131-6
+    emergency_disable_state: fail-closed-no-live-production-activation
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 131.6 closes Epic 131 as static/readiness evidence only. It does not
+      perform real GitHub write smoke, live deployment rollback drills,
+      production command surface activation, runtime production audit emission,
+      retention job activation, or credential value provisioning. The checker
+      pins prior Story 131 evidence, CI/just wiring, status docs, and
+      live-activation overclaim prevention.
+    rollback_ref: revert-story-131-6-production-operations-readiness-closure-diff
+    expiry_freshness: static-readiness-entry-refresh-on-live-production-activation-story-or-epic-131-contract-change
+    status: done
+    summary: >-
+      Story 131.6 records a production operations readiness closure only; it is
+      not a runtime production audit event, not a production audit emitter, and
+      not live production activation. Verification is executable through
+      scripts/check_production_operations_closure.py, its self-test, and focused pytest.
 
   - date: "2026-07-06"
     event: story-131-5-production-command-surface-readiness-local-done

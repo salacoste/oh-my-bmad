@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "story": "131.6",
+  "title": "Production operations readiness closure evidence",
+  "production_activation": "deferred_fail_closed",
+  "mode": "static_readiness_closure_only",
+  "epic_closure": "readiness_contract_complete_not_live_activation",
+  "required_story_evidence": [
+    {
+      "story": "131.1",
+      "artifact": "_bmad-output/implementation-artifacts/131-1-production-operations-runbook-preflight-contract.md",
+      "docs_ref": "docs/production-operations.md"
+    },
+    {
+      "story": "131.2",
+      "artifact": "_bmad-output/implementation-artifacts/131-2-credential-provisioning-scoping-rotation-revocation.md",
+      "checker": "scripts/check_production_credentials.py",
+      "contract": "docs/production-credential-inventory.json"
+    },
+    {
+      "story": "131.3",
+      "artifact": "_bmad-output/implementation-artifacts/131-3-github-write-activation-readiness.md",
+      "checker": "scripts/check_github_write_activation.py",
+      "contract": "docs/github-write-activation-readiness.json"
+    },
+    {
+      "story": "131.4",
+      "artifact": "_bmad-output/implementation-artifacts/131-4-deployment-change-control-readiness.md",
+      "checker": "scripts/check_deployment_change_readiness.py",
+      "contract": "docs/deployment-change-readiness.json"
+    },
+    {
+      "story": "131.5",
+      "artifact": "_bmad-output/implementation-artifacts/131-5-production-command-surface-readiness.md",
+      "checker": "scripts/check_production_command_surface.py",
+      "contract": "docs/production-command-surface-readiness.json"
+    }
+  ],
+  "required_ci_gates": [
+    "scripts/check_production_credentials.py",
+    "scripts/check_github_write_activation.py",
+    "scripts/check_deployment_change_readiness.py",
+    "scripts/check_production_command_surface.py",
+    "scripts/check_production_operations_closure.py"
+  ],
+  "required_fail_closed_statements": [
+    "real GitHub writes are not enabled",
+    "live deployment changes are not enabled",
+    "live command surfaces are not enabled",
+    "runtime production audit emitters are not enabled",
+    "retention jobs are not enabled"
+  ],
+  "unsupported_until_later_story": [
+    "real GitHub writes",
+    "live deployment mutations",
+    "production operation command surfaces",
+    "runtime production audit emitters",
+    "object-storage lifecycle or retention jobs",
+    "split deployment or remote Postgres scaling",
+    "database connection mTLS"
+  ],
+  "docs_refs": [
+    "docs/feature-status.md",
+    "docs/production-operations.md#future-story-boundaries",
+    "docs/operator-runbook.md",
+    "_bmad-output/implementation-artifacts/sprint-status.yaml",
+    "_bmad-output/implementation-artifacts/131-6-production-operations-readiness-closure.md"
+  ],
+  "non_goals": [
+    "no real GitHub write smoke",
+    "no live deployment rollback drill",
+    "no production command surface activation",
+    "no runtime production audit emitter",
+    "no retention job activation",
+    "no credential value provisioning"
+  ]
+}

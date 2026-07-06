@@ -80,6 +80,9 @@ jobs:
       - name: Check production command surface readiness (Story 131.5)
         run: uv run python scripts/check_production_command_surface.py
 
+      - name: Check production operations closure (Story 131.6)
+        run: uv run python scripts/check_production_operations_closure.py
+
       - name: Check-scripts self-tests
         run: |
           uv run python scripts/check_imports.py --self-test
@@ -94,6 +97,7 @@ jobs:
           uv run python scripts/check_github_write_activation.py --self-test
           uv run python scripts/check_deployment_change_readiness.py --self-test
           uv run python scripts/check_production_command_surface.py --self-test
+          uv run python scripts/check_production_operations_closure.py --self-test
 
       - name: Check secrets (full tree)
         run: git ls-files -z | xargs -0 uv run secret-hygiene-precommit
