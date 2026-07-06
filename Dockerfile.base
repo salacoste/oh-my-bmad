@@ -29,7 +29,7 @@
 # structlog IS a runtime dep of secret-hygiene and ships via its own
 # pyproject.toml). `--no-editable` installs workspace packages as wheels so
 # the source tree is NOT needed in the runtime image.
-FROM python:3.12-slim-bookworm AS venv-builder
+FROM python:3.14-slim-bookworm AS venv-builder
 RUN pip install --no-cache-dir uv==0.11.*
 WORKDIR /build
 COPY pyproject.toml uv.lock ./
@@ -56,7 +56,7 @@ RUN uv sync --frozen --no-dev --all-packages --no-editable
 # subdirs/files registry-state/migrator create inherit the omb group so EVERY
 # omb-group service can read/write regardless of its per-service uid. Benefits
 # fresh-named-volume production deploys too, not just the S-4 test.
-FROM python:3.12-slim-bookworm AS runtime-base
+FROM python:3.14-slim-bookworm AS runtime-base
 # TLS / https support for services that call external APIs (Anthropic,
 # Telegram, GitHub, Node subprocesses, etc.).
 RUN apt-get update \
