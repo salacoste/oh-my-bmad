@@ -212,6 +212,37 @@ This section is a readiness/checker contract only. Real GitHub writes remain
 simulation/default-denied until Story 131.3 supplies dry-run, approval, scoped
 token evidence, emergency disable, rate-limit handling, and smoke-test gates.
 
+### GitHub write activation readiness (Story 131.3)
+
+Story 131.3 makes the GitHub write activation path executable as a static
+readiness check without enabling real writes. The canonical contract is
+[`github-write-activation-readiness.json`](github-write-activation-readiness.json)
+and the gate is:
+
+```bash
+uv run python scripts/check_github_write_activation.py
+```
+
+The readiness contract requires all of the following before any future real-write
+activation story can proceed:
+
+1. `github-mcp` write tools remain Tier-3 approval-gated and bound to
+   `approval_lookup`; missing or stale approval denies the write.
+2. `GitHubWriteClient` keeps `simulate=True` by default, and `build_server` does
+   not pass `simulate=False`. Story 131.3 does not read a write-enable env flag.
+3. Activation is limited to exactly one named repository with repo-owner plus
+   security/operator approval. Wildcard owner/repo targets remain fail-closed.
+4. The scoped credential contract from Story 131.2 is required; broad GitHub
+   tokens must not reach MCP or agent subprocesses.
+5. A future activation must record dry-run proof, simulation parity, real-write
+   smoke-test target, cleanup/rollback plan, rate-limit behavior, metadata-only
+   `github.*`/audit evidence, and emergency disable/revocation evidence.
+6. Out-of-scope writes must fail closed before calling the GitHub API.
+
+This section is a readiness/checker contract only. It performs no live GitHub API
+mutation and does not add dashboard, Telegram, console, deployment, lifecycle, or
+retention controls.
+
 ### `memory` / `artifact` — store paths + retention
 
 Each store-backed server owns an **isolated subtree of the existing `oh-my-bmad-data`

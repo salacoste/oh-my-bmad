@@ -208,10 +208,14 @@ stays deferred/fail-closed.
   real-write activation: credential values, real GitHub writes, deployment
   mutations, command surfaces, and runtime production audit emitters remain
   fail-closed/deferred until later approved stories.
-- **Story 131.3 — GitHub write activation:** may introduce a controlled GitHub
-  mutation path for a named repository only after dry-run, approval, scoped token,
-  emergency-disable, rollback, and audit requirements are met. Until then, real
-  GitHub writes remain fail-closed/deferred.
+- **Story 131.3 — GitHub write activation:** defines the static/readiness
+  contract in `docs/github-write-activation-readiness.json` and enforces it with
+  `scripts/check_github_write_activation.py`. This pins Tier-3 approval gates,
+  simulated-write default, no runtime env flag flip, rate-limit handling, audit
+  descriptors, and future smoke/cleanup/emergency-disable evidence. It does not
+  enable real GitHub writes; real mutation remains fail-closed/deferred until a
+  later approved activation story supplies live evidence for exactly one named
+  repository.
 - **Story 131.4 — deployment change control:** may bind image/config/environment
   changes to preflight, approval, rollback, and health evidence. Until then,
   deployment mutations remain fail-closed/deferred.
@@ -223,5 +227,5 @@ stays deferred/fail-closed.
   emitters or closure evidence only through explicit event schema, implementation,
   and tests. Until then, production audit emitters remain fail-closed/deferred.
 
-Epic 129/PR #100 docs reconciliation is a separate/pending stream until merged; this
-Story 131.1 contract does not reclassify Epic 129 support or PR #100 status.
+Epic 129/PR #100 docs reconciliation was merged separately; this
+production-operations contract does not reclassify Epic 129 support or PR #100 status.

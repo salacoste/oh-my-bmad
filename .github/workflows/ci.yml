@@ -71,6 +71,9 @@ jobs:
       - name: Check production credentials (Story 131.2)
         run: uv run python scripts/check_production_credentials.py
 
+      - name: Check GitHub write activation readiness (Story 131.3)
+        run: uv run python scripts/check_github_write_activation.py
+
       - name: Check-scripts self-tests
         run: |
           uv run python scripts/check_imports.py --self-test
@@ -82,6 +85,7 @@ jobs:
           uv run python scripts/check_tier_declarations.py --self-test
           uv run python scripts/check_sbom_licenses.py --self-test
           uv run python scripts/check_production_credentials.py --self-test
+          uv run python scripts/check_github_write_activation.py --self-test
 
       - name: Check secrets (full tree)
         run: git ls-files -z | xargs -0 uv run secret-hygiene-precommit

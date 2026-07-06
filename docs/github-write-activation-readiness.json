@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "story": "131.3",
+  "production_activation": "deferred_fail_closed",
+  "mode": "static_readiness_only",
+  "activation_flag": {
+    "name": "GITHUB_MCP_WRITE_ENABLED",
+    "status": "future_operator_gate_only",
+    "runtime_read_allowed": false,
+    "reason": "Story 131.3 records readiness requirements only; no env flag may flip github-mcp writes to production in this slice."
+  },
+  "target_boundary": {
+    "server": "github-mcp",
+    "credential_contract_ref": "docs/production-credential-inventory.json",
+    "repo_authority": "single named repository only; no wildcard owner/repo or caller-supplied broad target may activate real writes",
+    "authorized_runtime": "future approved story with scoped credential, dry-run proof, explicit approval, emergency-disable evidence, and smoke-test evidence"
+  },
+  "required_evidence": [
+    "scoped credential readiness from Story 131.2",
+    "repo owner approval for exactly one repository",
+    "security/operator approval at L3 GitHub write activation",
+    "simulation parity for every write tool",
+    "real-write smoke test plan and cleanup/rollback target",
+    "rate-limit and transient failure handling evidence",
+    "metadata-only audit event evidence",
+    "emergency disable or revoke path",
+    "out-of-scope owner/repo fail-closed evidence"
+  ],
+  "write_tools": [
+    {
+      "tool": "github.issues.create",
+      "handler": "github_issues_create",
+      "event": "github.issue.created",
+      "tier": "THREE",
+      "requires_approval_lookup": true
+    },
+    {
+      "tool": "github.issues.update",
+      "handler": "github_issues_update",
+      "event": "github.issue.updated",
+      "tier": "THREE",
+      "requires_approval_lookup": true
+    },
+    {
+      "tool": "github.prs.create",
+      "handler": "github_prs_create",
+      "event": "github.pr.created",
+      "tier": "THREE",
+      "requires_approval_lookup": true
+    },
+    {
+      "tool": "github.prs.update",
+      "handler": "github_prs_update",
+      "event": "github.pr.updated",
+      "tier": "THREE",
+      "requires_approval_lookup": true
+    },
+    {
+      "tool": "github.reviews.request",
+      "handler": "github_reviews_request",
+      "event": "github.review.requested",
+      "tier": "THREE",
+      "requires_approval_lookup": true
+    },
+    {
+      "tool": "github.comment.create",
+      "handler": "github_comment_create",
+      "event": "github.comment.created",
+      "tier": "THREE",
+      "requires_approval_lookup": true
+    }
+  ],
+  "fail_closed_checks": [
+    "GitHubWriteClient simulate default remains true",
+    "build_server does not pass simulate=false",
+    "runtime code does not read GITHUB_MCP_WRITE_ENABLED",
+    "all write tools are Tier.THREE",
+    "all write handlers call validate_caller_trace_id before check_tier_with_approval",
+    "all write handlers bind approval_lookup=approval_lookup",
+    "all write handlers validate owner/repo before invoking the write client",
+    "rate-limit handling retries 429 responses without leaking tokens",
+    "write results and audit descriptors never include credential values"
+  ],
+  "docs_refs": [
+    "docs/production-operations.md#future-story-boundaries",
+    "docs/operator-runbook.md#github-write-activation-readiness-story-1313",
+    "docs/feature-status.md",
+    "_bmad-output/implementation-artifacts/131-3-github-write-activation-readiness.md"
+  ]
+}
