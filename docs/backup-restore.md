@@ -231,3 +231,11 @@ operational log.
 - [Operator runbook](./operator-runbook.md) — SQLite WAL recovery + per-service restart procedures.
 - [VPS deployment](./deployment/vps.md) — full prerequisite installation for a fresh host.
 - [macOS deployment](./deployment/macos.md) — macOS-specific deployment steps.
+
+## Deployment change readiness cross-reference
+
+For Story 131.4 deployment change-control readiness, production deployment
+profiles must use the digest-pinned recipes `just deploy-vps-digest` or
+`just deploy-macos-digest` after `just backup`, release digest verification,
+and rollback-profile review. Tag-based deployment recipes remain local/dev or
+deprecated production paths only.

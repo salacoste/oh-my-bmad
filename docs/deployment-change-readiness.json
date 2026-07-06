@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "story": "131.4",
+  "title": "Deployment change control and rollback readiness",
+  "production_activation": "deferred_fail_closed",
+  "mode": "static_readiness_only",
+  "operation_class": "deployment_change",
+  "target_boundary": {
+    "current_behavior": "readiness contract only; no deployment command behavior is changed by Story 131.4",
+    "production_profiles": ["vps_digest", "macos_digest"],
+    "credential_contract_ref": "docs/production-credential-inventory.json",
+    "operation_contract_ref": "docs/production-operations.md"
+  },
+  "required_evidence": [
+    "release owner approval for the exact deployment profile",
+    "environment and configuration diff reviewed before apply",
+    "image tags and immutable digests recorded for every deployed first-party service",
+    "cosign signature SLSA provenance and SBOM verification evidence",
+    "database migration compatibility and backup evidence",
+    "secret scope and scanner evidence from Story 131.2",
+    "pre-deploy readiness and dependency health checks",
+    "rollback profile with previous image digests and config reference",
+    "post-deploy health evidence and smoke-test result",
+    "freeze-window or emergency-disable decision recorded"
+  ],
+  "fail_closed_checks": [
+    "digest deployment targets depend on verify-images",
+    "digest compose overlay fails loud on unset OMB_IMAGE_DIGEST variables",
+    "tag-based deploy targets are documented as deprecated for production",
+    "rollback documentation names previous digests and health criteria",
+    "backup and restore documentation is linked from deployment guidance",
+    "restore-from-litestream requires typed destructive confirmation",
+    "deployment readiness remains static and does not add a new runtime command surface",
+    "contract contains no credential or private-key values"
+  ],
+  "profiles": [
+    {
+      "id": "vps_digest",
+      "description": "Linux/VPS digest-pinned production deployment path",
+      "just_target": "deploy-vps-digest",
+      "compose_files": ["docker-compose.yml", "docker-compose.digest.yml"],
+      "required_preflight_targets": ["verify-images", "backup", "migrate"],
+      "rollback_refs": ["docs/deployment-guide.md#rollback", "docs/backup-restore.md"]
+    },
+    {
+      "id": "macos_digest",
+      "description": "macOS digest-pinned deployment path with bind-mount overlay",
+      "just_target": "deploy-macos-digest",
+      "compose_files": ["docker-compose.yml", "docker-compose.digest.yml", "docker-compose.macos.yml"],
+      "required_preflight_targets": ["verify-images", "backup", "migrate"],
+      "rollback_refs": ["docs/deployment-guide.md#rollback", "docs/backup-restore.md"]
+    }
+  ],
+  "first_party_digest_services": [
+    "registry_api",
+    "registry_state",
+    "telegram_gateway",
+    "orchestrator_adapter",
+    "worker_wrapper",
+    "clawhip_daemon"
+  ],
+  "docs_refs": [
+    "docs/production-operations.md#future-story-boundaries",
+    "docs/operator-runbook.md#deployment-change-control-readiness-story-1314",
+    "docs/deployment-guide.md#upgrading",
+    "docs/deployment-guide.md#rollback",
+    "docs/backup-restore.md",
+    "_bmad-output/implementation-artifacts/131-4-deployment-change-control-readiness.md"
+  ],
+  "non_goals": [
+    "no live docker compose invocation",
+    "no migration execution",
+    "no credential value provisioning",
+    "no new deployment command surface",
+    "no runtime production audit emitter",
+    "no remote host mutation"
+  ]
+}

@@ -216,9 +216,14 @@ stays deferred/fail-closed.
   enable real GitHub writes; real mutation remains fail-closed/deferred until a
   later approved activation story supplies live evidence for exactly one named
   repository.
-- **Story 131.4 — deployment change control:** may bind image/config/environment
-  changes to preflight, approval, rollback, and health evidence. Until then,
-  deployment mutations remain fail-closed/deferred.
+- **Story 131.4 — deployment change control:** defines the static/readiness
+  contract in `docs/deployment-change-readiness.json` and enforces it with
+  `scripts/check_deployment_change_readiness.py`. This pins digest deployment
+  preflights, fail-loud image digest handling, deprecated tag deploy warnings,
+  backup/restore/rollback documentation, destructive restore confirmation,
+  and future health/smoke evidence. It does not run deployments or migrations;
+  deployment mutations remain fail-closed/deferred until a later approved live
+  deployment story supplies profile-specific evidence.
 - **Story 131.5 — lifecycle/retention operations:** may extend object-storage,
   archive, backup, retention, or cleanup behavior only after dry-run
   manifests, restore proof, data-owner approval, and drill evidence exist. Until
