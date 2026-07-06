@@ -3,6 +3,11 @@
 First-responder runbook for when something is wrong with a running oh-my-bmad stack.
 Start here before escalating to architecture docs or filing a bug.
 
+For production-operation preflight, approval, rollback, emergency-disable, and
+fail-closed boundaries, see [`docs/production-operations.md`](production-operations.md).
+That contract is operator-facing guidance only; it does not replace the service
+playbooks below or activate any production mutation.
+
 ---
 
 ## Running-state check

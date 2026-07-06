@@ -36,7 +36,7 @@
 
 generated: 2026-04-22
 last_updated: "2026-07-06T00:00:00+03:00"
-current_phase: 48  # Phase 48 locally reconciled through Epic 129 status/docs closure; Epic 127, Epic 128, and Epic 129 are locally complete, and the next major feature priority is Epic 131 production operations before Epic 130 retention/object-storage jobs
+current_phase: 48  # Phase 48 / Epic 131 production-operations contract slice started after Epic 129 status/docs reconciliation; Epic 127, Epic 128, and Epic 129 are locally complete, Story 131.1 docs/status-only is done, and production credentials, real GitHub writes, deployment mutations, command surfaces, lifecycle/retention jobs, and runtime production audit emitters remain fail-closed/deferred
 
 development_status:
   # =========================================================================
@@ -1112,6 +1112,12 @@ development_status:
   129-5-dashboard-and-api-lifecycle-mutation-visibility: done  # Read-only API/dashboard lifecycle mutation status exposes dry-run, approval, execution, rollback readiness, audit trail, freshness, and ProblemDetails without triggering mutation helpers; unsupported classes remain fail-closed
   129-6-epic-129-destructive-lifecycle-mutation-controls-closure: done  # Closure artifact records Autopilot completion, code-review APPROVE/CLEAR, UltraQA clean, focused pytest 3 passed, targeted pytest 348 passed, Ruff/node_check/py_compile/git_diff_check passed, Stories 129.1-129.6 complete, supported `prune_hot_segment` only, and unsupported classes fail-closed
 
+  # =========================================================================
+  # Epic 131: Production operations runbook and preflight contract
+  # =========================================================================
+  epic-131: in-progress  # Story 131.1 docs/status-only runbook/preflight contract completed locally; no runtime production operation is activated
+  131-1-production-operations-runbook-and-preflight-contract: done  # Defines operation classes, preflight fields, dry-run evidence, approval levels, docs/status audit shape, emergency-disable evidence, rollback/drill prerequisites, ownership, future Story 131.2-131.6 boundaries, and unsupported/fail-closed behavior; real GitHub writes, credentials, deployment mutations, command surfaces, lifecycle/retention jobs, Epic 129/PR #100 reclassification, and runtime production audit emitters remain fail-closed/deferred
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
@@ -1138,6 +1144,42 @@ audit_trail:
       and _bmad-output/implementation-artifacts/129-6-epic-129-destructive-lifecycle-mutation-controls-closure.md.
       Supported mutation class is only reversible `prune_hot_segment`;
       unsupported classes remain fail-closed.
+
+  - date: "2026-07-06"
+    event: story-131-1-production-operations-runbook-and-preflight-contract-docs-status-local-done
+    from: in-progress
+    to: done
+    epic: epic-131
+    story: 131-1-production-operations-runbook-and-preflight-contract
+    source: scoped-ultragoal-story-131-1
+    operation_id: story-131-1-docs-status-only
+    operation_class: read_only_diagnostics
+    target_environment: docs-status
+    target_repository_or_service: docs/production-operations.md
+    authority_source: .omx/specs/epic-131-story-131-1-production-ops-runbook-preflight-plan.md
+    dry_run_evidence_ref: docs/status-only-static-verification
+    approval_ref: .omx/specs/epic-131-story-131-1-production-ops-runbook-preflight-test-spec.md
+    request_trace_correlation_id: epic-131-story-131-1
+    emergency_disable_state: not-applicable-docs-status-only-no-runtime-surface
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Docs/status-only sprint transition for Story 131.1; risk is limited to
+      status/runbook accuracy because no production credential, real GitHub write,
+      deployment mutation, command surface, runtime audit emitter, retention job,
+      lifecycle job, or service behavior is implemented, enabled, live, active,
+      provisioned, configured, deployed, scheduled, or shipped.
+    rollback_ref: revert-docs-status-story-131-1-local-diff
+    expiry_freshness: static-status-entry-no-runtime-expiry; refresh-on-story-131-2-or-docs-status-schema-change
+    status: done
+    summary: >-
+      Story 131.1 records a sprint/status transition entry only; it is not a runtime production audit event, not a production audit emitter, not an event type
+      implementation, and not a command surface. The local contract defines future
+      preflight, dry-run, approval, emergency-disable, rollback, ownership,
+      audit-shape, and fail-closed requirements in docs/status files. Real GitHub
+      writes, credentials, deployment mutations, command surfaces, lifecycle/retention
+      jobs, Epic 129/PR #100 reclassification, and runtime production audit emitters
+      remain fail-closed/deferred until separate approved stories implement and verify
+      them.
 
 
   - date: "2026-07-04"
