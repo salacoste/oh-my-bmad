@@ -333,6 +333,35 @@ deployment rollback drill, no production command surface activation, no runtime
 production audit emission, no retention job activation, and no credential value
 provisioning.
 
+
+### Retention policy and object-storage adapter contract (Story 130.1)
+
+Story 130.1 is a static/readiness-only Epic 130 gate. Run it with:
+
+```bash
+uv run python scripts/check_retention_policy_readiness.py --verbose
+```
+
+The checker validates `docs/retention-policy-object-storage-readiness.json`, docs/status wiring, CI/just wiring, and the absence of new runner or mutation endpoint
+files. The required policy contract includes retention windows, owner/authority,
+manifest-backed object identity, legal hold and operator exclusion rules, dry-run
+requirements, future-apply prerequisites, UTC clock semantics, eventual-consistency
+failure states, adapter metadata-only responses, and rollback/recovery references.
+
+Current boundary:
+
+- no scheduled retention job runner;
+- no object-storage deletion or transition;
+- no archive or lifecycle-manifest mutation;
+- no backup pruning;
+- no external object storage calls;
+- no production credential loading;
+- no runtime audit emitter, dashboard command surface, or registry mutation endpoint.
+
+Treat every retention apply/delete/transition request as fail-closed until later
+Stories 130.2-130.4 provide dry-run manifest validation, lock/idempotency-protected
+scheduler evidence, approval-bound apply, audit, and recovery proof.
+
 ### `memory` / `artifact` — store paths + retention
 
 Each store-backed server owns an **isolated subtree of the existing `oh-my-bmad-data`

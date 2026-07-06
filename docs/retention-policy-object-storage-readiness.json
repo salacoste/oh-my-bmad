@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "story": "130.1",
+  "production_activation": "deferred_fail_closed",
+  "mode": "static_policy_contract_only",
+  "operation_class": "lifecycle_retention",
+  "epic": "130",
+  "target_boundary": {
+    "planning_ref": "_bmad-output/planning-artifacts/phase-48-production-readiness-epics.md#story-1301-retention-policy-and-object-storage-adapter-contract",
+    "operation_contract_ref": "docs/production-operations.md#operation-classes",
+    "operator_runbook_ref": "docs/operator-runbook.md#retention-policy-and-object-storage-adapter-contract-story-1301",
+    "status_ref": "docs/feature-status.md#current-bmad-status"
+  },
+  "policy_required_fields": [
+    "policy_id",
+    "policy_version",
+    "owner",
+    "authority_source",
+    "object_domain",
+    "object_identity_schema",
+    "retention_window",
+    "hold_and_exclusion_rules",
+    "dry_run_required",
+    "apply_requires_future_story",
+    "rollback_or_recovery_reference",
+    "clock_semantics",
+    "eventual_consistency_semantics",
+    "audit_event_shape"
+  ],
+  "object_identity_schema": {
+    "required_identity_fields": [
+      "domain",
+      "manifest_ref",
+      "object_key",
+      "version_or_generation",
+      "etag_or_checksum",
+      "size_bytes",
+      "created_at_utc",
+      "last_modified_at_utc",
+      "storage_class",
+      "hold_refs"
+    ],
+    "forbidden_identity_sources": [
+      "wildcard bucket deletion",
+      "prefix-only deletion without manifest identity",
+      "dashboard row-derived hidden selectors",
+      "object key inferred from logs or generated text",
+      "unencrypted credential or secret fields"
+    ]
+  },
+  "adapter_contract": {
+    "required_capabilities_before_apply": [
+      "list by manifest identity with bounded page size",
+      "head object with checksum or etag verification",
+      "dry-run transition/delete plan without mutation",
+      "idempotency key support or deterministic duplicate-safe response handling",
+      "explicit eventual-consistency stale-read classification",
+      "metadata-only audit response without credential material"
+    ],
+    "supported_modes_in_this_story": ["static_contract", "dry_run_contract_only"],
+    "unsupported_modes_in_this_story": [
+      "scheduled retention job runner",
+      "object storage delete",
+      "object storage transition",
+      "archive manifest mutation",
+      "backup pruning",
+      "external storage credential loading"
+    ]
+  },
+  "required_evidence": [
+    "retention windows are explicit per object domain and default to fail closed when missing",
+    "legal hold and operator exclusion rules override deletion or transition",
+    "object identity is manifest-backed and includes checksum etag size and version or generation evidence",
+    "dry-run is mandatory before any apply story can consume retention evidence",
+    "apply mode requires future Story 130.2 through 130.4 evidence and approval",
+    "clock semantics use UTC timestamps and reject ambiguous stale or future-dated evidence",
+    "eventual consistency ambiguity blocks mutation until fresh head/list evidence is available",
+    "adapter responses are metadata-only and never contain credentials or secret values",
+    "scheduled jobs remain disabled until a later implementation story adds lock and idempotency evidence"
+  ],
+  "fail_closed_conditions": [
+    "missing or unknown retention policy id",
+    "missing data owner or authority source",
+    "missing manifest reference or checksum evidence",
+    "duplicate overlapping or prefix-only object identity",
+    "active legal hold operator exclusion or backup coverage gap",
+    "stale dry-run evidence or clock skew outside the documented tolerance",
+    "eventual-consistency stale-read ambiguity",
+    "adapter lacks checksum etag version generation or idempotency evidence",
+    "missing rollback recovery or restore reference",
+    "attempted apply delete transition backup pruning archive mutation or scheduled job activation in Story 130.1"
+  ],
+  "docs_refs": [
+    "docs/production-operations.md#story-1301-retention-policy-and-object-storage-adapter-contract",
+    "docs/operator-runbook.md#retention-policy-and-object-storage-adapter-contract-story-1301",
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/130-1-retention-policy-object-storage-adapter-contract.md"
+  ],
+  "non_goals": [
+    "no scheduled retention job runner",
+    "no object storage deletion or transition",
+    "no archive or lifecycle manifest mutation",
+    "no backup pruning",
+    "no external object storage calls",
+    "no production credential loading",
+    "no runtime audit emitter",
+    "no dashboard command surface or registry mutation endpoint"
+  ]
+}
