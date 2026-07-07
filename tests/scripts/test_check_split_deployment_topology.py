@@ -169,6 +169,24 @@ def test_machine_readable_activation_statuses_fail(
     assert any("must not claim activation status" in v.message for v in violations)
 
 
+def test_unknown_machine_readable_activation_claims_fail(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    data = _load_contract(tmp_path, mod)
+    data["remote_postgres_status"] = "live"
+    data["future_runtime_claims"] = {"split_deployment_runtime": "enabled"}
+    _write_contract(tmp_path, mod, data)
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any(
+        "remote_postgres_status must not claim activation status" in v.message for v in violations
+    )
+    assert any(
+        "future_runtime_claims.split_deployment_runtime must not claim activation status"
+        in v.message
+        for v in violations
+    )
+
+
 def test_missing_network_boundary_fails(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
@@ -509,6 +527,11 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
             "services:\n  api:\n    image: registry-api:latest\n    profiles: [split]\n",
             "compose profile/overlay",
         ),
+        (
+            "compose.production.yaml",
+            "services:\n  api:\n    image: registry-api:latest\n    profiles: [prod]\n",
+            "compose profile/overlay",
+        ),
         (".env.production", "SPLIT_DEPLOYMENT_ENABLED=true", "environment activation"),
         (".env.production", "ENABLE_SPLIT_DEPLOYMENT=true", "environment activation"),
         ("pyproject.toml", "SPLIT_DEPLOYMENT=true", "environment activation"),
@@ -556,6 +579,16 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
         (
             "packages/replay/src/replay/db.py",
             'os.environ["DATABASE_URL"] = "postgres://prod-db.example.invalid/app"',
+            "connection code",
+        ),
+        (
+            "packages/replay/src/replay/db.py",
+            'url = os.getenv("DATABASE_URL", "postgres://prod-db.example.invalid/app")',
+            "connection code",
+        ),
+        (
+            "packages/replay/src/replay/settings.py",
+            'database_url: str = Field("postgres://prod-db.example.invalid/app", alias="DATABASE_URL")',
             "connection code",
         ),
         (
@@ -634,6 +667,32 @@ def test_forbidden_runtime_expansion_surfaces_fail(
     target.write_text(content, encoding="utf-8")
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any(expected in v.message for v in violations)
+
+
+@pytest.mark.parametrize(
+    ("relpath", "content"),
+    [
+        (".env.example", "DATABASE_URL=postgres://prod-db.example.invalid/app\n"),
+        (
+            "config/runtime.example.json",
+            '{"DATABASE_URL":"postgres://prod-db.example.invalid/app"}',
+        ),
+        (
+            "scripts/checks/fixtures/runtime.example.json",
+            '{"DATABASE_URL":"postgres://prod-db.example.invalid/app"}',
+        ),
+    ],
+)
+def test_non_runtime_example_postgres_placeholders_do_not_false_positive(
+    tmp_path: Path, relpath: str, content: str
+) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    target = tmp_path / relpath
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert not any("connection code" in v.message for v in violations)
 
 
 @pytest.mark.parametrize(

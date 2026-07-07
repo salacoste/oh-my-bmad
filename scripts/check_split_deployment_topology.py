@@ -213,6 +213,18 @@ FORBIDDEN_MACHINE_READABLE_ACTIVATION_STATUSES = frozenset(
         "shipped",
     }
 )
+MACHINE_READABLE_ACTIVATION_PATH_TERMS = frozenset(
+    {
+        "activation",
+        "deployment",
+        "mode",
+        "postgres",
+        "runtime",
+        "split",
+        "status",
+        "topology",
+    }
+)
 EXPECTED_MACHINE_READABLE_STATUSES = {
     ("mode",): "static_readiness_only",
     ("production_activation",): "deferred_fail_closed",
@@ -292,16 +304,13 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
         re.compile(
             r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn|"
             r"REMOTE_PG_DSN)\b|"
-            r"(?:\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b[\s'\"\]]*[:=]|"
-            r"\bname\s*:\s*(?:['\"])?(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)(?:['\"])?"
-            r"\s*(?:\n|.){0,160}?\bvalue\s*:)\s*['\"]?"
+            r"\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b(?:\n|.){0,160}?['\"]?"
             r"postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
             r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\?|\s|['\"}\]]|$))"
             r"[^\s'\"]+|"
-            r"\bvalue\s*:\s*['\"]?postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
+            r"postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
             r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\?|\s|['\"}\]]|$))"
-            r"[^\s'\"]+(?:\n|.){0,160}?\bname\s*:\s*(?:['\"])?"
-            r"(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)(?:['\"])?|"
+            r"[^\s'\"]+(?:\n|.){0,160}?\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b|"
             r"\b(?:POSTGRES_HOST|PGHOST)\b[\s'\"\]]*[:=]\s*['\"]?"
             r"(?!(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|\s|['\"}\]]|$))[^\s'\"]+"
         ),
@@ -338,6 +347,9 @@ FORBIDDEN_SCAN_EXCLUDE_PREFIXES = (
     "tests/",
     "scripts/check_split_deployment_topology.py",
     "_bmad-output/implementation-artifacts/",
+)
+NON_RUNTIME_EXAMPLE_PATH_TOKENS = frozenset(
+    {"example", "examples", "fixture", "fixtures", "sample", "samples"}
 )
 
 
@@ -753,6 +765,35 @@ def _lookup_path(data: Mapping[str, Any], path: tuple[str, ...]) -> object:
     return current
 
 
+def _iter_path_values(
+    value: object, path: tuple[str, ...] = ()
+) -> Iterable[tuple[tuple[str, ...], object]]:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            yield from _iter_path_values(child, (*path, str(key)))
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for index, child in enumerate(value):
+            yield from _iter_path_values(child, (*path, str(index)))
+    else:
+        yield path, value
+
+
+def _normalise_machine_status(value: str) -> str:
+    return value.lower().replace("-", "_").replace(" ", "_")
+
+
+def _is_forbidden_machine_activation_value(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and _normalise_machine_status(value) in FORBIDDEN_MACHINE_READABLE_ACTIVATION_STATUSES
+    )
+
+
+def _is_machine_activation_claim_path(path: tuple[str, ...]) -> bool:
+    path_text = "_".join(path).lower().replace("-", "_")
+    return any(term in path_text for term in MACHINE_READABLE_ACTIVATION_PATH_TERMS)
+
+
 def _validate_machine_readable_statuses(data: dict[str, Any]) -> list[Violation]:
     violations: list[Violation] = []
     for path, expected in EXPECTED_MACHINE_READABLE_STATUSES.items():
@@ -764,15 +805,23 @@ def _validate_machine_readable_statuses(data: dict[str, Any]) -> list[Violation]
                     f"{'.'.join(path)} machine-readable status must be {expected}",
                 )
             )
-        if (
-            isinstance(actual, str)
-            and actual.lower().replace("-", "_").replace(" ", "_")
-            in FORBIDDEN_MACHINE_READABLE_ACTIVATION_STATUSES
-        ):
+        if _is_forbidden_machine_activation_value(actual):
             violations.append(
                 Violation(
                     str(CONTRACT_PATH),
                     f"{'.'.join(path)} must not claim activation status {actual!r}",
+                )
+            )
+    for path, value in _iter_path_values(data):
+        if path in EXPECTED_MACHINE_READABLE_STATUSES:
+            continue
+        if _is_machine_activation_claim_path(path) and _is_forbidden_machine_activation_value(
+            value
+        ):
+            violations.append(
+                Violation(
+                    str(CONTRACT_PATH),
+                    f"{'.'.join(path)} must not claim activation status {value!r}",
                 )
             )
     return violations
@@ -988,6 +1037,13 @@ def _is_compose_file(relpath: Path) -> bool:
     )
 
 
+def _is_compose_overlay_file(relpath: Path) -> bool:
+    name = relpath.name.lower()
+    if name in {"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}:
+        return False
+    return _is_compose_file(relpath)
+
+
 def _has_forbidden_compose_path_token(relpath: Path) -> bool:
     token_source = relpath.as_posix().lower()
     tokens = [token for token in re.split(r"[/._-]+", token_source) if token]
@@ -1021,6 +1077,9 @@ def _compose_has_split_or_remote_postgres_surface(relpath: Path, text: str) -> b
     split_profile = bool(
         re.search(r"(?im)\bprofiles?\s*:\s*(?:\[[^\]]*\bsplit\b|[^\n]*\bsplit\b)", text)
     )
+    generic_profile = bool(re.search(r"(?im)\bprofiles?\s*:", text))
+    if is_compose_like_yaml and generic_profile and _is_compose_overlay_file(relpath):
+        return True
     if is_compose_like_yaml and split_profile:
         return True
     postgres_service = bool(re.search(r"(?i)\bpostgres(?:ql)?\b", text))
@@ -1028,6 +1087,11 @@ def _compose_has_split_or_remote_postgres_surface(relpath: Path, text: str) -> b
         is_named_compose_file
         and (path_suggests_split_or_postgres or (split_profile and postgres_service))
     )
+
+
+def _is_non_runtime_example_file(relpath: Path) -> bool:
+    path_tokens = {token for token in re.split(r"[/._-]+", relpath.as_posix().lower()) if token}
+    return bool(path_tokens & NON_RUNTIME_EXAMPLE_PATH_TOKENS)
 
 
 def _validate_forbidden_runtime_surfaces(root: Path) -> list[Violation]:
@@ -1050,7 +1114,10 @@ def _validate_forbidden_runtime_surfaces(root: Path) -> list[Violation]:
                 )
             )
             continue
+        skip_example_remote_dsn = _is_non_runtime_example_file(relpath)
         for surface, pattern, suffixes in FORBIDDEN_RUNTIME_PATTERNS:
+            if skip_example_remote_dsn and surface == "remote Postgres connection code":
+                continue
             if _suffix_matches(rel, suffixes) and pattern.search(text):
                 violations.append(
                     Violation(
