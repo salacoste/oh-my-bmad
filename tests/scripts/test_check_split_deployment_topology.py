@@ -328,6 +328,8 @@ def test_active_topology_overclaim_with_interposed_words_and_has_been_fails(
         "Remote Postgres available now.",
         "Split deployment has been activated.",
         "Remote Postgres has been shipped.",
+        "Production-ready remote Postgres support.",
+        "Enabled split deployment support.",
     ],
 )
 def test_active_topology_overclaim_broadened_variants_fail(tmp_path: Path, claim: str) -> None:
@@ -448,12 +450,44 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
             "compose profile/overlay",
         ),
         (
+            "deployments/remote-postgres.yml",
+            "services:\n  api:\n    build: .\n",
+            "compose profile/overlay",
+        ),
+        (
+            "deployments/remote-postgres/compose.yml",
+            "services:\n  api:\n    build: .\n",
+            "compose profile/overlay",
+        ),
+        (
+            "deployments/split/docker-compose.yml",
+            "services:\n  api:\n    build: .\n",
+            "compose profile/overlay",
+        ),
+        (
+            "ops/split-deployment/compose.yaml",
+            "services:\n  api:\n    image: registry-api:latest\n",
+            "compose profile/overlay",
+        ),
+        (
+            "infra/remote_postgres/docker-compose.yaml",
+            "services:\n  db:\n    image: postgres:16\n",
+            "compose profile/overlay",
+        ),
+        (
             "ops/split-deployment.yaml",
             "services:\n  api:\n    image: registry-api:latest\n",
             "compose profile/overlay",
         ),
         ("compose.yaml", "services: {} # split deployment", "compose profile/overlay"),
+        (
+            "ops/app.yaml",
+            "services:\n  api:\n    image: registry-api:latest\n    profiles: [split]\n",
+            "compose profile/overlay",
+        ),
         (".env.production", "SPLIT_DEPLOYMENT_ENABLED=true", "environment activation"),
+        (".env.production", "ENABLE_SPLIT_DEPLOYMENT=true", "environment activation"),
+        ("pyproject.toml", "SPLIT_DEPLOYMENT=true", "environment activation"),
         ("pyproject.toml", "REMOTE_POSTGRES_ENABLED=true", "environment activation"),
         ("justfile", "deploy-split:\n    echo nope\n", "deploy target"),
         ("scripts/run_remote_pg.py", "remote_postgres_migration_runner = True", "migration runner"),
@@ -464,6 +498,17 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
             "REMOTE_POSTGRES_URL = 'metadata-only'",
             "connection code",
         ),
+        (
+            "packages/replay/src/replay/db.py",
+            "DATABASE_URL = 'postgres://remote-postgres.example.invalid/app'",
+            "connection code",
+        ),
+        (
+            ".env.production",
+            "POSTGRES_DSN=postgres://remote-postgres.example.invalid/app",
+            "connection code",
+        ),
+        (".env.production", "POSTGRES_HOST=remote-postgres.example.invalid", "connection code"),
         ("justfile", "ssh ops@remote-postgres.example.invalid true", "external host"),
     ],
 )

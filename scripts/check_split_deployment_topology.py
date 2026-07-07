@@ -186,6 +186,11 @@ OVERCLAIM_PATTERNS: tuple[re.Pattern[str], ...] = (
         rf"(?P<gap>(?:\s+[-\w]+){{0,6}}?)\s+\b{OVERCLAIM_STATE_PATTERN}\b",
         re.IGNORECASE,
     ),
+    re.compile(
+        rf"\b{OVERCLAIM_STATE_PATTERN}\b"
+        rf"(?P<gap>(?:\s+[-\w]+){{0,6}}?)\s+\b{OVERCLAIM_SUBJECT_PATTERN}\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\blive split[-_ ]deployment is active\b", re.IGNORECASE),
     re.compile(
         r"\bproduction remote[-_ ]postgres\b(?P<gap>(?:\s+[-\w]+){0,6}?)\s+\blive\b", re.IGNORECASE
@@ -242,7 +247,8 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
     (
         "environment activation flag",
         re.compile(
-            r"(?i)\b(?:SPLIT_DEPLOYMENT_ENABLED|REMOTE_POSTGRES_ENABLED|ENABLE_REMOTE_POSTGRES)\b"
+            r"(?i)\b(?:SPLIT_DEPLOYMENT(?:_ENABLED)?|ENABLE_SPLIT_DEPLOYMENT|"
+            r"REMOTE_POSTGRES_ENABLED|ENABLE_REMOTE_POSTGRES)\b"
         ),
         (
             ".env",
@@ -283,7 +289,12 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
     ),
     (
         "remote Postgres connection code",
-        re.compile(r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn)\b"),
+        re.compile(
+            r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn)\b|"
+            r"\b(?:DATABASE_URL|POSTGRES_DSN)\b\s*[:=]\s*['\"]?"
+            r"postgres(?:ql)?://[^\s'\"]*remote[-_.]?postgres|"
+            r"\bPOSTGRES_HOST\b\s*[:=]\s*['\"]?[^\s'\"]*remote[-_.]?postgres"
+        ),
         (
             ".py",
             ".ts",
@@ -843,9 +854,16 @@ def _validate_wiring(root: Path) -> list[Violation]:
     return violations
 
 
-def _is_overclaim_match(match: re.Match[str]) -> bool:
+def _is_overclaim_match(match: re.Match[str], text: str) -> bool:
     gap = match.groupdict().get("gap") or ""
-    return not OVERCLAIM_NEGATION_PATTERN.search(gap)
+    sentence_start = max(text.rfind(".", 0, match.start()), text.rfind("\n", 0, match.start()))
+    prefix = text[sentence_start + 1 : match.start()]
+    prefix_negation = re.search(
+        r"\b(?:no|not|never|without|does\s+not|do\s+not|did\s+not)\b",
+        prefix,
+        re.IGNORECASE,
+    )
+    return not OVERCLAIM_NEGATION_PATTERN.search(gap) and prefix_negation is None
 
 
 def _validate_overclaims_and_secrets(root: Path) -> list[Violation]:
@@ -856,7 +874,7 @@ def _validate_overclaims_and_secrets(root: Path) -> list[Violation]:
             continue
         text = path.read_text(encoding="utf-8")
         for pattern in OVERCLAIM_PATTERNS:
-            if any(_is_overclaim_match(match) for match in pattern.finditer(text)):
+            if any(_is_overclaim_match(match, text) for match in pattern.finditer(text)):
                 violations.append(
                     Violation(
                         str(relpath), f"overclaim forbidden by Story 132.1: {pattern.pattern}"
@@ -925,19 +943,17 @@ def _is_compose_file(relpath: Path) -> bool:
     )
 
 
-def _has_forbidden_compose_filename_token(relpath: Path) -> bool:
-    stem = relpath.name.lower()
-    tokens = re.split(r"[._-]+", stem)
+def _has_forbidden_compose_path_token(relpath: Path) -> bool:
+    token_source = relpath.as_posix().lower()
+    tokens = [token for token in re.split(r"[/._-]+", token_source) if token]
     token_pairs = {f"{left}-{right}" for left, right in zip(tokens, tokens[1:], strict=False)}
     token_pairs.update(f"{left}_{right}" for left, right in zip(tokens, tokens[1:], strict=False))
     return bool((set(tokens) | token_pairs) & FORBIDDEN_COMPOSE_FILENAME_TOKENS)
 
 
 def _has_compose_like_yaml_shape(text: str) -> bool:
-    return bool(
-        re.search(r"(?im)^services\s*:", text)
-        and (re.search(r"(?im)^\s+profiles?\s*:", text) or re.search(r"(?im)^\s+image\s*:", text))
-    )
+    compose_service_keys = r"(?im)^\s+(?:profiles?|image|build)\s*:"
+    return bool(re.search(r"(?im)^services\s*:", text) and re.search(compose_service_keys, text))
 
 
 def _suffix_matches(rel: str, suffixes: tuple[str, ...]) -> bool:
@@ -956,14 +972,16 @@ def _compose_has_split_or_remote_postgres_surface(relpath: Path, text: str) -> b
         return False
     if re.search(r"(?i)\b(?:split[-_ ]deployment|remote[-_ ]postgres)\b", text):
         return True
-    filename_suggests_split_or_postgres = _has_forbidden_compose_filename_token(relpath)
+    path_suggests_split_or_postgres = _has_forbidden_compose_path_token(relpath)
     split_profile = bool(
         re.search(r"(?im)\bprofiles?\s*:\s*(?:\[[^\]]*\bsplit\b|[^\n]*\bsplit\b)", text)
     )
+    if is_compose_like_yaml and split_profile:
+        return True
     postgres_service = bool(re.search(r"(?i)\bpostgres(?:ql)?\b", text))
-    return (is_compose_like_yaml and filename_suggests_split_or_postgres) or (
+    return (is_compose_like_yaml and path_suggests_split_or_postgres) or (
         is_named_compose_file
-        and (filename_suggests_split_or_postgres or (split_profile and postgres_service))
+        and (path_suggests_split_or_postgres or (split_profile and postgres_service))
     )
 
 
