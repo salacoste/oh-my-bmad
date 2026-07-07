@@ -7,6 +7,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -41,7 +42,18 @@ def _copy_live_fixture(tmp_path: Path, mod: object) -> None:
 
 
 def _load_contract(tmp_path: Path, mod: object) -> dict[str, object]:
-    return json.loads((tmp_path / mod.CONTRACT_PATH).read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+    raw: object = json.loads((tmp_path / mod.CONTRACT_PATH).read_text(encoding="utf-8"))  # type: ignore[attr-defined]
+    assert isinstance(raw, dict)
+    return cast("dict[str, object]", raw)
+
+
+def _set_nested_value(data: dict[str, object], path: tuple[str, ...], value: object) -> None:
+    current: dict[str, object] = data
+    for key in path[:-1]:
+        child = current[key]
+        assert isinstance(child, dict)
+        current = cast("dict[str, object]", child)
+    current[path[-1]] = value
 
 
 def _write_contract(tmp_path: Path, mod: object, data: dict[str, object]) -> None:
@@ -132,6 +144,29 @@ def test_guarded_contract_section_implemented_or_active_status_fails(
     _write_contract(tmp_path, mod, data)
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any(f"{section} status must be" in v.message for v in violations)
+
+
+@pytest.mark.parametrize(
+    ("path", "bad_status"),
+    [
+        (("mode",), "rollout_complete"),
+        (("production_activation",), "production ready"),
+        (("current_default_preservation", "status"), "activated"),
+        (("service_placement", "status"), "available_now"),
+        (("network_boundaries", "status"), "shipped"),
+    ],
+)
+def test_machine_readable_activation_statuses_fail(
+    tmp_path: Path, path: tuple[str, ...], bad_status: str
+) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    data = _load_contract(tmp_path, mod)
+    _set_nested_value(data, path, bad_status)
+    _write_contract(tmp_path, mod, data)
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("machine-readable status must be" in v.message for v in violations)
+    assert any("must not claim activation status" in v.message for v in violations)
 
 
 def test_missing_network_boundary_fails(tmp_path: Path) -> None:
@@ -285,6 +320,28 @@ def test_active_topology_overclaim_with_interposed_words_and_has_been_fails(
     assert any("overclaim" in v.message for v in violations)
 
 
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "Split deployment rollout complete.",
+        "Remote Postgres production ready.",
+        "Remote Postgres available now.",
+        "Split deployment has been activated.",
+        "Remote Postgres has been shipped.",
+    ],
+)
+def test_active_topology_overclaim_broadened_variants_fail(tmp_path: Path, claim: str) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    feature_status = tmp_path / mod.FEATURE_STATUS_PATH  # type: ignore[attr-defined]
+    feature_status.write_text(
+        f"{feature_status.read_text(encoding='utf-8')}\n{claim}\n",
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("overclaim" in v.message for v in violations)
+
+
 def test_secret_like_value_fails(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
@@ -383,6 +440,16 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
         (
             "compose.split.yml",
             "services:\n  db:\n    image: postgres:16\n    profiles: [split]\n",
+            "compose profile/overlay",
+        ),
+        (
+            "deployments/remote-postgres.yml",
+            "services:\n  db:\n    image: postgres:16\n",
+            "compose profile/overlay",
+        ),
+        (
+            "ops/split-deployment.yaml",
+            "services:\n  api:\n    image: registry-api:latest\n",
             "compose profile/overlay",
         ),
         ("compose.yaml", "services: {} # split deployment", "compose profile/overlay"),

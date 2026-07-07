@@ -23,7 +23,7 @@ import tempfile
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_PATH = Path("docs/split-deployment-topology-readiness.json")
@@ -176,7 +176,10 @@ SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\b(?:password|secret|token)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{24,}"),
 )
 OVERCLAIM_SUBJECT_PATTERN = r"(?:split[-_ ]deployment|remote[-_ ]postgres)"
-OVERCLAIM_STATE_PATTERN = r"(?:enabled|live|active|available|implemented)"
+OVERCLAIM_STATE_PATTERN = (
+    r"(?:enabled|live|active|activated|available(?:\s+now)?|implemented|"
+    r"production[-_ ]ready|ready|shipped|rollout\s+complete)"
+)
 OVERCLAIM_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
         rf"\b{OVERCLAIM_SUBJECT_PATTERN}\b"
@@ -189,6 +192,47 @@ OVERCLAIM_PATTERNS: tuple[re.Pattern[str], ...] = (
     ),
 )
 OVERCLAIM_NEGATION_PATTERN = re.compile(r"\b(?:no|not|never|without)\b", re.IGNORECASE)
+FORBIDDEN_MACHINE_READABLE_ACTIVATION_STATUSES = frozenset(
+    {
+        "active",
+        "activated",
+        "available",
+        "available_now",
+        "complete",
+        "enabled",
+        "implemented",
+        "live",
+        "production_ready",
+        "ready",
+        "rollout_complete",
+        "shipped",
+    }
+)
+EXPECTED_MACHINE_READABLE_STATUSES = {
+    ("mode",): "static_readiness_only",
+    ("production_activation",): "deferred_fail_closed",
+    ("current_default_preservation", "status"): "preserved",
+    ("service_placement", "status"): "contract_only",
+    ("network_boundaries", "status"): "contract_only",
+    ("remote_postgres_data_authority", "status"): "deferred_fail_closed",
+    ("pooling_migration_backup_prerequisites", "status"): "future_required_evidence",
+    ("ingress", "status"): "contract_only",
+    ("secrets_handling", "status"): "metadata_only",
+    ("observability", "status"): "future_required_evidence",
+    ("unsupported_topologies", "status"): "fail_closed",
+    ("rollback_fallback", "status"): "future_required_evidence",
+    ("db_mtls_deferment", "status"): "deferred_to_epic_133",
+}
+FORBIDDEN_COMPOSE_FILENAME_TOKENS = frozenset(
+    {
+        "split",
+        "split-deployment",
+        "split_deployment",
+        "remote-postgres",
+        "remote_postgres",
+        "postgres",
+    }
+)
 FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = (
     (
         "compose profile/overlay activation",
@@ -291,10 +335,10 @@ def _read(root: Path, relpath: Path) -> str:
 
 def _load_json(root: Path, relpath: Path) -> dict[str, Any]:
     with (root / relpath).open(encoding="utf-8") as f:
-        data = json.load(f)
+        data: object = json.load(f)
     if not isinstance(data, dict):
         raise ValueError(f"{relpath} must be a JSON object")
-    return data
+    return cast("dict[str, Any]", data)
 
 
 def _walk_strings(value: object) -> Iterable[str]:
@@ -440,6 +484,7 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
         violations.append(
             Violation(str(CONTRACT_PATH), "production_activation must be deferred_fail_closed")
         )
+    violations.extend(_validate_machine_readable_statuses(data))
 
     missing_sections = REQUIRED_TOP_LEVEL_SECTIONS - set(data)
     if missing_sections:
@@ -657,6 +702,40 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
     return violations
 
 
+def _lookup_path(data: Mapping[str, Any], path: tuple[str, ...]) -> object:
+    current: object = data
+    for key in path:
+        if not isinstance(current, Mapping):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _validate_machine_readable_statuses(data: dict[str, Any]) -> list[Violation]:
+    violations: list[Violation] = []
+    for path, expected in EXPECTED_MACHINE_READABLE_STATUSES.items():
+        actual = _lookup_path(data, path)
+        if actual != expected:
+            violations.append(
+                Violation(
+                    str(CONTRACT_PATH),
+                    f"{'.'.join(path)} machine-readable status must be {expected}",
+                )
+            )
+        if (
+            isinstance(actual, str)
+            and actual.lower().replace("-", "_").replace(" ", "_")
+            in FORBIDDEN_MACHINE_READABLE_ACTIVATION_STATUSES
+        ):
+            violations.append(
+                Violation(
+                    str(CONTRACT_PATH),
+                    f"{'.'.join(path)} must not claim activation status {actual!r}",
+                )
+            )
+    return violations
+
+
 def _validate_docs_and_status(root: Path) -> list[Violation]:
     violations: list[Violation] = []
     required_mentions = {
@@ -846,6 +925,21 @@ def _is_compose_file(relpath: Path) -> bool:
     )
 
 
+def _has_forbidden_compose_filename_token(relpath: Path) -> bool:
+    stem = relpath.name.lower()
+    tokens = re.split(r"[._-]+", stem)
+    token_pairs = {f"{left}-{right}" for left, right in zip(tokens, tokens[1:], strict=False)}
+    token_pairs.update(f"{left}_{right}" for left, right in zip(tokens, tokens[1:], strict=False))
+    return bool((set(tokens) | token_pairs) & FORBIDDEN_COMPOSE_FILENAME_TOKENS)
+
+
+def _has_compose_like_yaml_shape(text: str) -> bool:
+    return bool(
+        re.search(r"(?im)^services\s*:", text)
+        and (re.search(r"(?im)^\s+profiles?\s*:", text) or re.search(r"(?im)^\s+image\s*:", text))
+    )
+
+
 def _suffix_matches(rel: str, suffixes: tuple[str, ...]) -> bool:
     name = Path(rel).name
     if "compose-file" in suffixes and _is_compose_file(Path(rel)):
@@ -854,19 +948,23 @@ def _suffix_matches(rel: str, suffixes: tuple[str, ...]) -> bool:
 
 
 def _compose_has_split_or_remote_postgres_surface(relpath: Path, text: str) -> bool:
-    if not _is_compose_file(relpath):
+    if relpath.suffix.lower() not in {".yaml", ".yml"}:
         return False
-    name = relpath.name.lower()
+    is_named_compose_file = _is_compose_file(relpath)
+    is_compose_like_yaml = _has_compose_like_yaml_shape(text)
+    if not is_named_compose_file and not is_compose_like_yaml:
+        return False
     if re.search(r"(?i)\b(?:split[-_ ]deployment|remote[-_ ]postgres)\b", text):
         return True
-    filename_suggests_split_or_postgres = bool(
-        re.search(r"(?:^|[._-])(?:split|remote[-_]?postgres|postgres)(?:[._-]|$)", name)
-    )
+    filename_suggests_split_or_postgres = _has_forbidden_compose_filename_token(relpath)
     split_profile = bool(
         re.search(r"(?im)\bprofiles?\s*:\s*(?:\[[^\]]*\bsplit\b|[^\n]*\bsplit\b)", text)
     )
     postgres_service = bool(re.search(r"(?i)\bpostgres(?:ql)?\b", text))
-    return filename_suggests_split_or_postgres or (split_profile and postgres_service)
+    return (is_compose_like_yaml and filename_suggests_split_or_postgres) or (
+        is_named_compose_file
+        and (filename_suggests_split_or_postgres or (split_profile and postgres_service))
+    )
 
 
 def _validate_forbidden_runtime_surfaces(root: Path) -> list[Violation]:
@@ -939,7 +1037,7 @@ def _self_test() -> int:
             return 1
 
         contract = root / CONTRACT_PATH
-        data = json.loads(contract.read_text(encoding="utf-8"))
+        data = _load_json(root, CONTRACT_PATH)
         data["core_invariants"].pop("single_writer_state_mutation")
         contract.write_text(json.dumps(data, indent=2), encoding="utf-8")
         violations = validate(root)
