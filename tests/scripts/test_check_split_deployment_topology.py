@@ -511,15 +511,29 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
             "connection code",
         ),
         (
+            "packages/replay/src/replay/db.py",
+            "DATABASE_URL = 'postgres://prod-db.example.invalid/app'",
+            "connection code",
+        ),
+        (".env.production", "DATABASE_URL=postgres://192.0.2.10/app", "connection code"),
+        (
             ".env.production",
             "POSTGRES_DSN=postgres://remote-postgres.example.invalid/app",
             "connection code",
         ),
         (".env.production", "POSTGRES_HOST=remote-postgres.example.invalid", "connection code"),
+        (".env.production", "POSTGRES_HOST=prod-db.example.invalid", "connection code"),
+        (".env.production", "POSTGRES_HOST=192.0.2.10", "connection code"),
         (".env.production", "PGHOST=remote-postgres.example.invalid", "connection code"),
+        (".env.production", "PGHOST=prod-db.example.invalid", "connection code"),
         (
             ".env.production",
             "POSTGRES_URL=postgres://remote-postgres.example.invalid/app",
+            "connection code",
+        ),
+        (
+            ".env.production",
+            "POSTGRES_URL=postgres://prod-db.example.invalid/app",
             "connection code",
         ),
         (
