@@ -926,6 +926,15 @@ def _should_scan_runtime_file(relpath: Path) -> bool:
     return _is_relevant_runtime_text_file(relpath)
 
 
+def _is_test_fixture_file(relpath: Path) -> bool:
+    name = relpath.name.lower()
+    return (
+        name.startswith("test_")
+        or name.endswith(("_test.py", ".test.ts", ".test.js"))
+        or any(part in {"tests", "__tests__"} for part in relpath.parts)
+    )
+
+
 def _is_relevant_runtime_text_file(relpath: Path) -> bool:
     name = relpath.name
     lower_name = name.lower()
@@ -1020,6 +1029,9 @@ def _validate_forbidden_runtime_surfaces(root: Path) -> list[Violation]:
         try:
             text = (root / relpath).read_text(encoding="utf-8")
         except UnicodeDecodeError:
+            continue
+        if not _is_test_fixture_file(relpath) and _postgres_url_contains_secret(text):
+            violations.append(Violation(rel, "secret-like Postgres URL value is forbidden"))
             continue
         if _compose_has_split_or_remote_postgres_surface(relpath, text):
             violations.append(

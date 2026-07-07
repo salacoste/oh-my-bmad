@@ -540,6 +540,16 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
         ),
         (
             "packages/replay/src/replay/db.py",
+            'DATABASE_URL = "postgresql+asyncpg://app:supersecretpassword@localhost:5432/app"',
+            "secret-like",
+        ),
+        (
+            "config/runtime.json",
+            '{"DATABASE_URL":"postgresql+asyncpg://app:supersecretpassword@localhost:5432/app"}',
+            "secret-like",
+        ),
+        (
+            "packages/replay/src/replay/db.py",
             'os.environ["DATABASE_URL"] = "postgres://prod-db.example.invalid/app"',
             "connection code",
         ),
