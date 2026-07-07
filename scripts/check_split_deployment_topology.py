@@ -176,19 +176,24 @@ SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?i)\b(?:password|secret|token)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{24,}"),
 )
 OVERCLAIM_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"\bsplit deployment is enabled\b", re.IGNORECASE),
-    re.compile(r"\bsplit deployment is live\b", re.IGNORECASE),
-    re.compile(r"\blive split deployment is active\b", re.IGNORECASE),
-    re.compile(r"\bremote postgres is enabled\b", re.IGNORECASE),
-    re.compile(r"\bremote postgres support is implemented\b", re.IGNORECASE),
-    re.compile(r"\bsplit deployment support is implemented\b", re.IGNORECASE),
-    re.compile(r"\bproduction remote postgres is live\b", re.IGNORECASE),
+    re.compile(
+        r"\bsplit[-_ ]deployment\s+(?:is\s+)?(?:enabled|live|active|available|implemented)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bremote[-_ ]postgres\s+(?:is\s+)?(?:enabled|live|active|available|implemented)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\blive split[-_ ]deployment is active\b", re.IGNORECASE),
+    re.compile(r"\bremote[-_ ]postgres support is implemented\b", re.IGNORECASE),
+    re.compile(r"\bsplit[-_ ]deployment support is implemented\b", re.IGNORECASE),
+    re.compile(r"\bproduction remote[-_ ]postgres is live\b", re.IGNORECASE),
 )
 FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = (
     (
         "compose profile/overlay activation",
         re.compile(r"(?i)\b(?:split[-_ ]deployment|remote[-_ ]postgres)\b"),
-        ("docker-compose", ".compose.", "compose.yaml", "compose.yml"),
+        ("compose-file",),
     ),
     (
         "environment activation flag",
@@ -673,35 +678,82 @@ def _validate_docs_and_status(root: Path) -> list[Violation]:
     return violations
 
 
+def _strip_shell_comment(line: str) -> str:
+    in_single_quote = False
+    in_double_quote = False
+    escaped = False
+    for index, char in enumerate(line):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == "'" and not in_double_quote:
+            in_single_quote = not in_single_quote
+            continue
+        if char == '"' and not in_single_quote:
+            in_double_quote = not in_double_quote
+            continue
+        if char == "#" and not in_single_quote and not in_double_quote:
+            return line[:index]
+    return line
+
+
+def _normalise_executable_command(line: str) -> str:
+    candidate = _strip_shell_comment(line).strip()
+    while candidate.startswith(("@", "-")):
+        candidate = candidate[1:].lstrip()
+    return candidate
+
+
 def _contains_exact_command(text: str, command: str) -> bool:
     for line in text.splitlines():
         candidate = line.strip()
         if candidate.startswith("run:"):
             candidate = candidate.removeprefix("run:").strip()
-        candidate = candidate.split("#", 1)[0].strip()
+        candidate = _normalise_executable_command(candidate)
         if candidate == command:
             return True
     return False
+
+
+def _recipe_header_matches(line: str, recipe: str) -> bool:
+    if line[:1].isspace():
+        return False
+    stripped = _strip_shell_comment(line).strip()
+    return bool(re.match(rf"^{re.escape(recipe)}(?:\s[^:]*)?:", stripped))
+
+
+def _iter_just_recipe_commands(text: str, recipe: str) -> Iterable[str]:
+    in_recipe = False
+    for line in text.splitlines():
+        if not in_recipe:
+            in_recipe = _recipe_header_matches(line, recipe)
+            continue
+        if line.strip() and not line[:1].isspace() and not line.lstrip().startswith("#"):
+            break
+        command = _normalise_executable_command(line)
+        if command:
+            yield command
+
+
+def _just_recipe_has_executable_command(text: str, recipe: str, command: str) -> bool:
+    return any(candidate == command for candidate in _iter_just_recipe_commands(text, recipe))
 
 
 def _validate_wiring(root: Path) -> list[Violation]:
     violations: list[Violation] = []
     justfile = _read(root, JUSTFILE_PATH)
     ci = _read(root, CI_PATH)
-    if justfile.count(CHECKER_COMMAND) < 3:
-        violations.append(
-            Violation(
-                str(JUSTFILE_PATH), "mandatory justfile wiring missing normal or self-test checker"
-            )
-        )
-    for recipe in ("lint:", "check-gates:"):
-        start = justfile.find(recipe)
-        if start < 0 or CHECKER_COMMAND not in justfile[start : justfile.find("\n\n", start)]:
+    for recipe in ("lint", "check-gates"):
+        if not _just_recipe_has_executable_command(justfile, recipe, CHECKER_COMMAND):
             violations.append(
-                Violation(str(JUSTFILE_PATH), f"{recipe} missing split topology checker")
+                Violation(str(JUSTFILE_PATH), f"{recipe}: missing split topology checker")
             )
-    start = justfile.find("check-gates-self-test:")
-    if start < 0 or CHECKER_SELF_TEST_COMMAND not in justfile[start : justfile.find("\n\n", start)]:
+    if not _just_recipe_has_executable_command(
+        justfile, "check-gates-self-test", CHECKER_SELF_TEST_COMMAND
+    ):
         violations.append(
             Violation(str(JUSTFILE_PATH), "check-gates-self-test missing split topology self-test")
         )
@@ -780,9 +832,38 @@ def _iter_repo_files(root: Path) -> Iterable[Path]:
             yield relpath
 
 
+def _is_compose_file(relpath: Path) -> bool:
+    name = relpath.name.lower()
+    if relpath.suffix.lower() not in {".yaml", ".yml"}:
+        return False
+    return name in {"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"} or (
+        name.startswith(("compose.", "compose-", "docker-compose.", "docker-compose-"))
+    )
+
+
 def _suffix_matches(rel: str, suffixes: tuple[str, ...]) -> bool:
     name = Path(rel).name
+    if "compose-file" in suffixes and _is_compose_file(Path(rel)):
+        return True
     return any(rel.endswith(suffix) or name == suffix or suffix in rel for suffix in suffixes)
+
+
+def _compose_has_split_or_remote_postgres_surface(relpath: Path, text: str) -> bool:
+    if not _is_compose_file(relpath):
+        return False
+    name = relpath.name.lower()
+    if re.search(r"(?i)\b(?:split[-_ ]deployment|remote[-_ ]postgres)\b", text):
+        return True
+    filename_suggests_split_or_postgres = bool(
+        re.search(r"(?:^|[._-])(?:split|remote[-_]?postgres|postgres)(?:[._-]|$)", name)
+    )
+    split_profile = bool(
+        re.search(r"(?im)\bprofiles?\s*:\s*(?:\[[^\]]*\bsplit\b|[^\n]*\bsplit\b)", text)
+    )
+    postgres_service = bool(re.search(r"(?i)\bpostgres(?:ql)?\b", text))
+    return (filename_suggests_split_or_postgres and (split_profile or postgres_service)) or (
+        split_profile and postgres_service
+    )
 
 
 def _validate_forbidden_runtime_surfaces(root: Path) -> list[Violation]:
@@ -792,6 +873,15 @@ def _validate_forbidden_runtime_surfaces(root: Path) -> list[Violation]:
         try:
             text = (root / relpath).read_text(encoding="utf-8")
         except UnicodeDecodeError:
+            continue
+        if _compose_has_split_or_remote_postgres_surface(relpath, text):
+            violations.append(
+                Violation(
+                    rel,
+                    "forbidden runtime/deployment expansion surface detected: "
+                    "compose profile/overlay activation",
+                )
+            )
             continue
         for surface, pattern, suffixes in FORBIDDEN_RUNTIME_PATTERNS:
             if _suffix_matches(rel, suffixes) and pattern.search(text):

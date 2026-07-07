@@ -257,6 +257,19 @@ def test_active_topology_overclaim_fails(tmp_path: Path) -> None:
     assert any("overclaim" in v.message for v in violations)
 
 
+def test_active_topology_overclaim_variant_without_is_fails(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    feature_status = tmp_path / mod.FEATURE_STATUS_PATH  # type: ignore[attr-defined]
+    feature_status.write_text(
+        feature_status.read_text(encoding="utf-8")
+        + "\nSplit deployment enabled for production and remote Postgres available now.\n",
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("overclaim" in v.message for v in violations)
+
+
 def test_secret_like_value_fails(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
@@ -309,6 +322,26 @@ def test_missing_mandatory_justfile_and_ci_wiring_fails(tmp_path: Path) -> None:
     assert any("CI missing" in v.message for v in violations)
 
 
+def test_commented_out_justfile_wiring_is_not_executable(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    justfile = tmp_path / mod.JUSTFILE_PATH  # type: ignore[attr-defined]
+    text = justfile.read_text(encoding="utf-8")
+    text = text.replace(
+        f"    {mod.CHECKER_COMMAND}\n",  # type: ignore[attr-defined]
+        f"    # {mod.CHECKER_COMMAND}\n",  # type: ignore[attr-defined]
+    )
+    text = text.replace(
+        f"    {mod.CHECKER_SELF_TEST_COMMAND}\n",  # type: ignore[attr-defined]
+        f"    # {mod.CHECKER_SELF_TEST_COMMAND}\n",  # type: ignore[attr-defined]
+    )
+    justfile.write_text(text, encoding="utf-8")
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("lint:" in v.message for v in violations)
+    assert any("check-gates:" in v.message for v in violations)
+    assert any("check-gates-self-test" in v.message for v in violations)
+
+
 def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
@@ -331,6 +364,11 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
     ("relpath", "content", "expected"),
     [
         ("docker-compose.split.yml", "services: {} # split deployment", "compose profile/overlay"),
+        (
+            "compose.split.yml",
+            "services:\n  db:\n    image: postgres:16\n    profiles: [split]\n",
+            "compose profile/overlay",
+        ),
         ("compose.yaml", "services: {} # split deployment", "compose profile/overlay"),
         (".env.production", "SPLIT_DEPLOYMENT_ENABLED=true", "environment activation"),
         ("pyproject.toml", "REMOTE_POSTGRES_ENABLED=true", "environment activation"),
