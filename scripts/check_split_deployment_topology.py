@@ -293,11 +293,11 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
             r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn|"
             r"REMOTE_PG_DSN)\b|"
             r"\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b[\s'\"\]]*[:=]\s*['\"]?"
-            r"postgres(?:ql)?://"
-            r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|$))"
+            r"postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
+            r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\s|$))"
             r"[^\s'\"]+|"
             r"\b(?:POSTGRES_HOST|PGHOST)\b[\s'\"\]]*[:=]\s*['\"]?"
-            r"(?!(?:localhost|127\.0\.0\.1|::1|\[::1\])(?:\b|:|\s|$))[^\s'\"]+"
+            r"(?!(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|\s|$))[^\s'\"]+"
         ),
         (
             ".py",

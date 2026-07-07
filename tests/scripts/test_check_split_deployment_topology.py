@@ -517,6 +517,11 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
         ),
         (
             "packages/replay/src/replay/db.py",
+            "DATABASE_URL = 'postgresql+asyncpg://prod-db.example.invalid/app'",
+            "connection code",
+        ),
+        (
+            "packages/replay/src/replay/db.py",
             'os.environ["DATABASE_URL"] = "postgres://prod-db.example.invalid/app"',
             "connection code",
         ),
@@ -531,11 +536,20 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
             "POSTGRES_DSN=postgres://remote-postgres.example.invalid/app",
             "connection code",
         ),
+        (
+            ".env.production",
+            "POSTGRES_DSN=postgresql+psycopg://prod-db.example.invalid/app",
+            "connection code",
+        ),
         (".env.production", "POSTGRES_HOST=remote-postgres.example.invalid", "connection code"),
         (".env.production", "POSTGRES_HOST=prod-db.example.invalid", "connection code"),
+        (".env.production", "POSTGRES_HOST=localhost.example.invalid", "connection code"),
+        (".env.production", "POSTGRES_HOST=127.0.0.1.example.invalid", "connection code"),
         (".env.production", "POSTGRES_HOST=192.0.2.10", "connection code"),
         (".env.production", "PGHOST=remote-postgres.example.invalid", "connection code"),
         (".env.production", "PGHOST=prod-db.example.invalid", "connection code"),
+        (".env.production", "PGHOST=localhost.example.invalid", "connection code"),
+        (".env.production", "PGHOST=127.0.0.1.example.invalid", "connection code"),
         ("config/runtime.json", '{"PGHOST": "prod-db.example.invalid"}', "connection code"),
         (
             ".env.production",
@@ -545,6 +559,11 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
         (
             ".env.production",
             "POSTGRES_URL=postgres://prod-db.example.invalid/app",
+            "connection code",
+        ),
+        (
+            ".env.production",
+            "POSTGRES_URL=postgresql+asyncpg://prod-db.example.invalid/app",
             "connection code",
         ),
         (
@@ -582,6 +601,8 @@ def test_forbidden_runtime_expansion_surfaces_fail(
         (".env.production", "DATABASE_URL=postgres://[::1]:5432/app\n"),
         (".env.production", "POSTGRES_HOST=localhost\n"),
         (".env.production", "POSTGRES_HOST=127.0.0.1\n"),
+        (".env.production", "POSTGRES_HOST=localhost:5432\n"),
+        (".env.production", "POSTGRES_HOST=127.0.0.1:5432\n"),
         (".env.production", "POSTGRES_HOST=[::1]\n"),
         ("config/runtime.json", '{"DATABASE_URL":"postgres://localhost:5432/app"}'),
     ],
