@@ -175,6 +175,7 @@ def test_unknown_machine_readable_activation_claims_fail(tmp_path: Path) -> None
     data = _load_contract(tmp_path, mod)
     data["remote_postgres_status"] = "live"
     data["future_runtime_claims"] = {"split_deployment_runtime": "enabled"}
+    data["remote_postgres_enabled"] = True
     _write_contract(tmp_path, mod, data)
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any(
@@ -184,6 +185,9 @@ def test_unknown_machine_readable_activation_claims_fail(tmp_path: Path) -> None
         "future_runtime_claims.split_deployment_runtime must not claim activation status"
         in v.message
         for v in violations
+    )
+    assert any(
+        "remote_postgres_enabled must not claim boolean activation" in v.message for v in violations
     )
 
 
@@ -389,6 +393,19 @@ def test_driver_qualified_postgres_secret_like_value_fails(tmp_path: Path, secre
     _write_contract(tmp_path, mod, data)
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("credential" in v.message or "secret-like" in v.message for v in violations)
+
+
+def test_sprint_status_secret_like_value_fails(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    sprint_status = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    sprint_status.write_text(
+        f"{sprint_status.read_text(encoding='utf-8')}\n"
+        "leaked_secret: postgres://app:supersecretpassword@prod-db.example.invalid/app\n",
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("secret-like" in v.message for v in violations)
 
 
 def test_missing_docs_status_references_fail(tmp_path: Path) -> None:

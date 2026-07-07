@@ -4,7 +4,9 @@
 This gate is intentionally static/readiness-only. It validates the remote
 Postgres/split-deployment topology contract, documentation/status wiring, CI/just
 wiring, overclaim prevention, secret absence, and the absence of Story 132.1
-runtime/deployment expansion surfaces.
+runtime/deployment expansion surfaces. Runtime-surface checks are repo-wide and
+fail-closed by design: Story 132.1 must not add activation/deployment surfaces
+outside the static contract artifacts.
 
 Usage::
 
@@ -165,6 +167,7 @@ SECRET_SCAN_PATHS = (
     OPERATOR_RUNBOOK_PATH,
     PRODUCTION_OPS_PATH,
     FEATURE_STATUS_PATH,
+    SPRINT_STATUS_PATH,
     ARTIFACT_PATH,
 )
 
@@ -223,6 +226,31 @@ MACHINE_READABLE_ACTIVATION_PATH_TERMS = frozenset(
         "split",
         "status",
         "topology",
+    }
+)
+MACHINE_READABLE_BOOLEAN_ACTIVATION_TERMS = frozenset(
+    {
+        "active",
+        "activated",
+        "available",
+        "enabled",
+        "implemented",
+        "live",
+        "ready",
+        "runtime",
+    }
+)
+MACHINE_READABLE_NEGATING_PATH_TERMS = frozenset(
+    {
+        "deferred",
+        "fail",
+        "forbidden",
+        "future",
+        "no",
+        "not",
+        "preservation",
+        "unsupported",
+        "without",
     }
 )
 EXPECTED_MACHINE_READABLE_STATUSES = {
@@ -794,6 +822,26 @@ def _is_machine_activation_claim_path(path: tuple[str, ...]) -> bool:
     return any(term in path_text for term in MACHINE_READABLE_ACTIVATION_PATH_TERMS)
 
 
+def _path_tokens(path: tuple[str, ...]) -> set[str]:
+    return {
+        token
+        for segment in path
+        for token in re.split(r"[^a-z0-9]+", segment.lower().replace("-", "_"))
+        if token
+    }
+
+
+def _is_forbidden_machine_activation_boolean(path: tuple[str, ...], value: object) -> bool:
+    if value is not True:
+        return False
+    tokens = _path_tokens(path)
+    if tokens & MACHINE_READABLE_NEGATING_PATH_TERMS:
+        return False
+    return bool(tokens & MACHINE_READABLE_BOOLEAN_ACTIVATION_TERMS) and bool(
+        tokens & MACHINE_READABLE_ACTIVATION_PATH_TERMS
+    )
+
+
 def _validate_machine_readable_statuses(data: dict[str, Any]) -> list[Violation]:
     violations: list[Violation] = []
     for path, expected in EXPECTED_MACHINE_READABLE_STATUSES.items():
@@ -822,6 +870,13 @@ def _validate_machine_readable_statuses(data: dict[str, Any]) -> list[Violation]
                 Violation(
                     str(CONTRACT_PATH),
                     f"{'.'.join(path)} must not claim activation status {value!r}",
+                )
+            )
+        if _is_forbidden_machine_activation_boolean(path, value):
+            violations.append(
+                Violation(
+                    str(CONTRACT_PATH),
+                    f"{'.'.join(path)} must not claim boolean activation {value!r}",
                 )
             )
     return violations
