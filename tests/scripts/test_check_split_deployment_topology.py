@@ -712,6 +712,38 @@ def test_non_runtime_example_postgres_placeholders_do_not_false_positive(
     assert not any("connection code" in v.message for v in violations)
 
 
+def test_runtime_policy_documents_example_dsn_allowlist_scope() -> None:
+    mod = _load_module()
+    policies = mod.FORBIDDEN_RUNTIME_POLICIES  # type: ignore[attr-defined]
+    names = [policy.surface for policy in policies]
+    assert names == [
+        "compose profile/overlay activation",
+        "environment activation flag",
+        "deploy target",
+        "migration runner",
+        "service route activation",
+        "Dockerfile activation",
+        "remote Postgres connection code",
+        "external host/network command surface",
+    ]
+    example_skips = [policy.surface for policy in policies if policy.skip_non_runtime_examples]
+    assert example_skips == ["remote Postgres connection code"]
+    path_policy = mod.RUNTIME_PATH_POLICY  # type: ignore[attr-defined]
+    assert {"example", "fixtures", "sample"} <= path_policy.non_runtime_example_tokens
+
+
+def test_non_runtime_example_secret_like_postgres_value_still_fails(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    target = tmp_path / ".env.example"
+    target.write_text(
+        "DATABASE_URL=postgres://app:supersecretpassword@prod-db.example.invalid/app\n",
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("secret-like Postgres URL value is forbidden" in v.message for v in violations)
+
+
 @pytest.mark.parametrize(
     ("relpath", "content"),
     [
