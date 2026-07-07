@@ -43,6 +43,40 @@ CI_PATH = Path(".github/workflows/ci.yml")
 CHECKER_COMMAND = "uv run python scripts/check_split_deployment_topology.py"
 CHECKER_SELF_TEST_COMMAND = f"{CHECKER_COMMAND} --self-test"
 
+
+@dataclass(frozen=True)
+class RuntimeSurfacePolicy:
+    """One explicit fail-closed runtime expansion surface rule.
+
+    ``skip_non_runtime_examples`` is intentionally narrow: it suppresses only
+    placeholder/example DSN connection-code hits after secret scanning has already
+    run. Real secret-like Postgres URLs are still rejected before this policy table
+    is evaluated.
+    """
+
+    surface: str
+    pattern: re.Pattern[str]
+    suffixes: tuple[str, ...]
+    skip_non_runtime_examples: bool = False
+
+
+@dataclass(frozen=True)
+class RuntimePathPolicy:
+    """Repo-wide runtime scan path policy for Story 132.1.
+
+    The checker is a conservative Story 132.1 guard, not a general linter.
+    Excluded prefixes are static contract/status/test artifacts checked by
+    dedicated validators; example tokens only affect placeholder DSN connection
+    code, never secret-like value detection.
+    """
+
+    excluded_prefixes: tuple[str, ...]
+    non_runtime_example_tokens: frozenset[str]
+    exact_text_files: frozenset[str]
+    name_prefixes: tuple[str, ...]
+    suffixes: frozenset[str]
+
+
 REQUIRED_TOP_LEVEL_SECTIONS = frozenset(
     {
         "current_default_preservation",
@@ -278,19 +312,78 @@ FORBIDDEN_COMPOSE_FILENAME_TOKENS = frozenset(
         "postgres",
     }
 )
-FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = (
-    (
-        "compose profile/overlay activation",
-        re.compile(r"(?i)\b(?:split[-_ ]deployment|remote[-_ ]postgres)\b"),
-        ("compose-file",),
+
+POSTGRES_DSN_SCHEME_PATTERN = r"postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
+REMOTE_POSTGRES_HOST_GUARD_PATTERN = (
+    r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])"
+    r"(?::|/|\?|\s|['\"}\]]|$))"
+)
+REMOTE_POSTGRES_DSN_VALUE_PATTERN = (
+    rf"{POSTGRES_DSN_SCHEME_PATTERN}{REMOTE_POSTGRES_HOST_GUARD_PATTERN}[^\s'\"]+"
+)
+LOCAL_POSTGRES_HOST_GUARD_PATTERN = r"(?!(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|\s|['\"}\]]|$))"
+REMOTE_POSTGRES_CONNECTION_CODE_PATTERN = re.compile(
+    r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn|"
+    r"REMOTE_PG_DSN)\b|"
+    rf"\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b(?:\n|.){{0,160}}?['\"]?"
+    rf"{REMOTE_POSTGRES_DSN_VALUE_PATTERN}|"
+    rf"{REMOTE_POSTGRES_DSN_VALUE_PATTERN}(?:\n|.){{0,160}}?"
+    r"\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b|"
+    rf"\b(?:POSTGRES_HOST|PGHOST)\b[\s'\"\]]*[:=]\s*['\"]?"
+    rf"{LOCAL_POSTGRES_HOST_GUARD_PATTERN}[^\s'\"]+"
+)
+
+RUNTIME_PATH_POLICY = RuntimePathPolicy(
+    excluded_prefixes=(
+        ".git/",
+        ".mypy_cache/",
+        ".pytest_cache/",
+        ".ruff_cache/",
+        ".venv/",
+        ".omx/",
+        "docs/",
+        "tests/",
+        "scripts/check_split_deployment_topology.py",
+        "_bmad-output/implementation-artifacts/",
     ),
-    (
-        "environment activation flag",
-        re.compile(
+    non_runtime_example_tokens=frozenset(
+        {"example", "examples", "fixture", "fixtures", "sample", "samples"}
+    ),
+    exact_text_files=frozenset({"justfile", "Justfile", "pyproject.toml"}),
+    name_prefixes=("dockerfile", ".env"),
+    suffixes=frozenset(
+        {
+            ".bash",
+            ".cfg",
+            ".env",
+            ".ini",
+            ".js",
+            ".json",
+            ".md",
+            ".py",
+            ".sh",
+            ".toml",
+            ".ts",
+            ".yaml",
+            ".yml",
+            ".zsh",
+        }
+    ),
+)
+
+FORBIDDEN_RUNTIME_POLICIES: tuple[RuntimeSurfacePolicy, ...] = (
+    RuntimeSurfacePolicy(
+        surface="compose profile/overlay activation",
+        pattern=re.compile(r"(?i)\b(?:split[-_ ]deployment|remote[-_ ]postgres)\b"),
+        suffixes=("compose-file",),
+    ),
+    RuntimeSurfacePolicy(
+        surface="environment activation flag",
+        pattern=re.compile(
             r"(?i)\b(?:SPLIT_DEPLOYMENT(?:_ENABLED)?|ENABLE_SPLIT_DEPLOYMENT|"
             r"REMOTE_POSTGRES(?:_ENABLED)?|ENABLE_REMOTE_POSTGRES)\b"
         ),
-        (
+        suffixes=(
             ".env",
             "justfile",
             ".yml",
@@ -307,42 +400,32 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
             ".js",
         ),
     ),
-    (
-        "deploy target",
-        re.compile(r"(?im)^deploy-(?:split|remote-postgres|split-deployment)\b"),
-        ("justfile", ".sh", ".bash", ".zsh"),
+    RuntimeSurfacePolicy(
+        surface="deploy target",
+        pattern=re.compile(r"(?im)^deploy-(?:split|remote-postgres|split-deployment)\b"),
+        suffixes=("justfile", ".sh", ".bash", ".zsh"),
     ),
-    (
-        "migration runner",
-        re.compile(r"(?i)\b(?:remote_postgres_migration_runner|migrate-remote-postgres)\b"),
-        ("justfile", ".py", ".sh", ".bash", ".zsh"),
+    RuntimeSurfacePolicy(
+        surface="migration runner",
+        pattern=re.compile(r"(?i)\b(?:remote_postgres_migration_runner|migrate-remote-postgres)\b"),
+        suffixes=("justfile", ".py", ".sh", ".bash", ".zsh"),
     ),
-    (
-        "service route activation",
-        re.compile(r"(?i)/(?:admin/)?(?:split-deployment|remote-postgres)/(?:enable|activate)\b"),
-        (".py", ".ts", ".js"),
-    ),
-    (
-        "Dockerfile activation",
-        re.compile(r"(?i)\b(?:SPLIT_DEPLOYMENT|REMOTE_POSTGRES)\b"),
-        ("Dockerfile", ".dockerfile"),
-    ),
-    (
-        "remote Postgres connection code",
-        re.compile(
-            r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn|"
-            r"REMOTE_PG_DSN)\b|"
-            r"\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b(?:\n|.){0,160}?['\"]?"
-            r"postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
-            r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\?|\s|['\"}\]]|$))"
-            r"[^\s'\"]+|"
-            r"postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
-            r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\?|\s|['\"}\]]|$))"
-            r"[^\s'\"]+(?:\n|.){0,160}?\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b|"
-            r"\b(?:POSTGRES_HOST|PGHOST)\b[\s'\"\]]*[:=]\s*['\"]?"
-            r"(?!(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|\s|['\"}\]]|$))[^\s'\"]+"
+    RuntimeSurfacePolicy(
+        surface="service route activation",
+        pattern=re.compile(
+            r"(?i)/(?:admin/)?(?:split-deployment|remote-postgres)/(?:enable|activate)\b"
         ),
-        (
+        suffixes=(".py", ".ts", ".js"),
+    ),
+    RuntimeSurfacePolicy(
+        surface="Dockerfile activation",
+        pattern=re.compile(r"(?i)\b(?:SPLIT_DEPLOYMENT|REMOTE_POSTGRES)\b"),
+        suffixes=("Dockerfile", ".dockerfile"),
+    ),
+    RuntimeSurfacePolicy(
+        surface="remote Postgres connection code",
+        pattern=REMOTE_POSTGRES_CONNECTION_CODE_PATTERN,
+        suffixes=(
             ".py",
             ".ts",
             ".js",
@@ -357,27 +440,15 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
             ".ini",
             ".cfg",
         ),
+        skip_non_runtime_examples=True,
     ),
-    (
-        "external host/network command surface",
-        re.compile(r"(?i)\b(?:ssh\s+.*remote-postgres|tailscale\s+.*split|scp\s+.*postgres)\b"),
-        ("justfile", ".sh", ".bash", ".zsh", ".md"),
+    RuntimeSurfacePolicy(
+        surface="external host/network command surface",
+        pattern=re.compile(
+            r"(?i)\b(?:ssh\s+.*remote-postgres|tailscale\s+.*split|scp\s+.*postgres)\b"
+        ),
+        suffixes=("justfile", ".sh", ".bash", ".zsh", ".md"),
     ),
-)
-FORBIDDEN_SCAN_EXCLUDE_PREFIXES = (
-    ".git/",
-    ".mypy_cache/",
-    ".pytest_cache/",
-    ".ruff_cache/",
-    ".venv/",
-    ".omx/",
-    "docs/",
-    "tests/",
-    "scripts/check_split_deployment_topology.py",
-    "_bmad-output/implementation-artifacts/",
-)
-NON_RUNTIME_EXAMPLE_PATH_TOKENS = frozenset(
-    {"example", "examples", "fixture", "fixtures", "sample", "samples"}
 )
 
 
@@ -1033,7 +1104,7 @@ def _validate_overclaims_and_secrets(root: Path) -> list[Violation]:
 
 def _should_scan_runtime_file(relpath: Path) -> bool:
     rel = relpath.as_posix()
-    if any(rel.startswith(prefix) for prefix in FORBIDDEN_SCAN_EXCLUDE_PREFIXES):
+    if any(rel.startswith(prefix) for prefix in RUNTIME_PATH_POLICY.excluded_prefixes):
         return False
     return _is_relevant_runtime_text_file(relpath)
 
@@ -1050,28 +1121,13 @@ def _is_test_fixture_file(relpath: Path) -> bool:
 def _is_relevant_runtime_text_file(relpath: Path) -> bool:
     name = relpath.name
     lower_name = name.lower()
-    if name in {"justfile", "Justfile", "pyproject.toml"}:
+    if name in RUNTIME_PATH_POLICY.exact_text_files:
         return True
-    if lower_name.startswith(("dockerfile", ".env")):
+    if lower_name.startswith(RUNTIME_PATH_POLICY.name_prefixes):
         return True
     if lower_name in {"compose.yaml", "compose.yml"}:
         return True
-    return relpath.suffix in {
-        ".bash",
-        ".cfg",
-        ".env",
-        ".ini",
-        ".js",
-        ".json",
-        ".md",
-        ".py",
-        ".sh",
-        ".toml",
-        ".ts",
-        ".yaml",
-        ".yml",
-        ".zsh",
-    }
+    return relpath.suffix in RUNTIME_PATH_POLICY.suffixes
 
 
 def _iter_repo_files(root: Path) -> Iterable[Path]:
@@ -1112,11 +1168,13 @@ def _has_compose_like_yaml_shape(text: str) -> bool:
     return bool(re.search(r"(?im)^services\s*:", text) and re.search(compose_service_keys, text))
 
 
-def _suffix_matches(rel: str, suffixes: tuple[str, ...]) -> bool:
+def _policy_suffix_matches(rel: str, policy: RuntimeSurfacePolicy) -> bool:
     name = Path(rel).name
-    if "compose-file" in suffixes and _is_compose_file(Path(rel)):
+    if "compose-file" in policy.suffixes and _is_compose_file(Path(rel)):
         return True
-    return any(rel.endswith(suffix) or name == suffix or suffix in rel for suffix in suffixes)
+    return any(
+        rel.endswith(suffix) or name == suffix or suffix in rel for suffix in policy.suffixes
+    )
 
 
 def _compose_has_split_or_remote_postgres_surface(relpath: Path, text: str) -> bool:
@@ -1146,7 +1204,7 @@ def _compose_has_split_or_remote_postgres_surface(relpath: Path, text: str) -> b
 
 def _is_non_runtime_example_file(relpath: Path) -> bool:
     path_tokens = {token for token in re.split(r"[/._-]+", relpath.as_posix().lower()) if token}
-    return bool(path_tokens & NON_RUNTIME_EXAMPLE_PATH_TOKENS)
+    return bool(path_tokens & RUNTIME_PATH_POLICY.non_runtime_example_tokens)
 
 
 def _validate_forbidden_runtime_surfaces(root: Path) -> list[Violation]:
@@ -1170,13 +1228,15 @@ def _validate_forbidden_runtime_surfaces(root: Path) -> list[Violation]:
             )
             continue
         skip_example_remote_dsn = _is_non_runtime_example_file(relpath)
-        for surface, pattern, suffixes in FORBIDDEN_RUNTIME_PATTERNS:
-            if skip_example_remote_dsn and surface == "remote Postgres connection code":
+        for policy in FORBIDDEN_RUNTIME_POLICIES:
+            if skip_example_remote_dsn and policy.skip_non_runtime_examples:
                 continue
-            if _suffix_matches(rel, suffixes) and pattern.search(text):
+            if _policy_suffix_matches(rel, policy) and policy.pattern.search(text):
                 violations.append(
                     Violation(
-                        rel, f"forbidden runtime/deployment expansion surface detected: {surface}"
+                        rel,
+                        "forbidden runtime/deployment expansion surface detected: "
+                        f"{policy.surface}",
                     )
                 )
     return violations
