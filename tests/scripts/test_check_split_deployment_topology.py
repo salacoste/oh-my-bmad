@@ -270,6 +270,21 @@ def test_active_topology_overclaim_variant_without_is_fails(tmp_path: Path) -> N
     assert any("overclaim" in v.message for v in violations)
 
 
+def test_active_topology_overclaim_with_interposed_words_and_has_been_fails(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    feature_status = tmp_path / mod.FEATURE_STATUS_PATH  # type: ignore[attr-defined]
+    feature_status.write_text(
+        feature_status.read_text(encoding="utf-8")
+        + "\nRemote Postgres is now live for production. Split deployment has been implemented.\n",
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("overclaim" in v.message for v in violations)
+
+
 def test_secret_like_value_fails(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
@@ -364,6 +379,7 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
     ("relpath", "content", "expected"),
     [
         ("docker-compose.split.yml", "services: {} # split deployment", "compose profile/overlay"),
+        ("compose.split.yml", "services: {}\n", "compose profile/overlay"),
         (
             "compose.split.yml",
             "services:\n  db:\n    image: postgres:16\n    profiles: [split]\n",

@@ -175,20 +175,20 @@ SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"postgres(?:ql)?://[^\s:/@]+:[^\s/@]{8,}@", re.IGNORECASE),
     re.compile(r"(?i)\b(?:password|secret|token)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{24,}"),
 )
+OVERCLAIM_SUBJECT_PATTERN = r"(?:split[-_ ]deployment|remote[-_ ]postgres)"
+OVERCLAIM_STATE_PATTERN = r"(?:enabled|live|active|available|implemented)"
 OVERCLAIM_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(
-        r"\bsplit[-_ ]deployment\s+(?:is\s+)?(?:enabled|live|active|available|implemented)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\bremote[-_ ]postgres\s+(?:is\s+)?(?:enabled|live|active|available|implemented)\b",
+        rf"\b{OVERCLAIM_SUBJECT_PATTERN}\b"
+        rf"(?P<gap>(?:\s+[-\w]+){{0,6}}?)\s+\b{OVERCLAIM_STATE_PATTERN}\b",
         re.IGNORECASE,
     ),
     re.compile(r"\blive split[-_ ]deployment is active\b", re.IGNORECASE),
-    re.compile(r"\bremote[-_ ]postgres support is implemented\b", re.IGNORECASE),
-    re.compile(r"\bsplit[-_ ]deployment support is implemented\b", re.IGNORECASE),
-    re.compile(r"\bproduction remote[-_ ]postgres is live\b", re.IGNORECASE),
+    re.compile(
+        r"\bproduction remote[-_ ]postgres\b(?P<gap>(?:\s+[-\w]+){0,6}?)\s+\blive\b", re.IGNORECASE
+    ),
 )
+OVERCLAIM_NEGATION_PATTERN = re.compile(r"\b(?:no|not|never|without)\b", re.IGNORECASE)
 FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = (
     (
         "compose profile/overlay activation",
@@ -764,6 +764,11 @@ def _validate_wiring(root: Path) -> list[Violation]:
     return violations
 
 
+def _is_overclaim_match(match: re.Match[str]) -> bool:
+    gap = match.groupdict().get("gap") or ""
+    return not OVERCLAIM_NEGATION_PATTERN.search(gap)
+
+
 def _validate_overclaims_and_secrets(root: Path) -> list[Violation]:
     violations: list[Violation] = []
     for relpath in DOC_STATUS_PATHS:
@@ -772,7 +777,7 @@ def _validate_overclaims_and_secrets(root: Path) -> list[Violation]:
             continue
         text = path.read_text(encoding="utf-8")
         for pattern in OVERCLAIM_PATTERNS:
-            if pattern.search(text):
+            if any(_is_overclaim_match(match) for match in pattern.finditer(text)):
                 violations.append(
                     Violation(
                         str(relpath), f"overclaim forbidden by Story 132.1: {pattern.pattern}"
@@ -861,9 +866,7 @@ def _compose_has_split_or_remote_postgres_surface(relpath: Path, text: str) -> b
         re.search(r"(?im)\bprofiles?\s*:\s*(?:\[[^\]]*\bsplit\b|[^\n]*\bsplit\b)", text)
     )
     postgres_service = bool(re.search(r"(?i)\bpostgres(?:ql)?\b", text))
-    return (filename_suggests_split_or_postgres and (split_profile or postgres_service)) or (
-        split_profile and postgres_service
-    )
+    return filename_suggests_split_or_postgres or (split_profile and postgres_service)
 
 
 def _validate_forbidden_runtime_surfaces(root: Path) -> list[Violation]:
