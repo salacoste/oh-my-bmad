@@ -260,6 +260,34 @@ stays deferred/fail-closed.
 - This document should be kept concrete. Do not replace required fields with broad
   “TBD” headings unless the operation is explicitly marked unsupported/fail-closed.
 
+
+## Epic 132 split deployment and remote Postgres readiness
+
+Story 132.1 adds the static/readiness-only split deployment and remote Postgres
+topology contract in `docs/split-deployment-topology-readiness.json` and enforces
+it with:
+
+```bash
+uv run python scripts/check_split_deployment_topology.py
+```
+
+The contract preserves the current single-host/local compose default and records
+future prerequisites for service placement, including `clawhip_daemon`, network
+boundaries, remote Postgres data authority, pooling, migrations, backups,
+ingress, secrets, observability, unsupported topologies, rollback/fallback, and
+core invariants. Single-writer state mutation, append-only event-log authority,
+idempotency/locking, and capability tiers remain mandatory before any future
+split profile can activate. DB mTLS is explicitly deferred to Epic 133.
+
+Story 132.1 is not a deployment change and not a production activation story. It
+does not add compose/profile/env activation, deployment targets, migration
+runners, service routes, Dockerfile behavior, remote Postgres connection code,
+external host commands, credential values, runtime production audit emitters, or
+production command surfaces. Live deployment changes, database migration
+execution, remote hosts, production credentials, and DB mTLS remain
+deferred/fail-closed until later approved stories supply profile-specific
+evidence.
+
 ## Future-story boundaries
 
 - **Story 131.2 — credential readiness:** defines the static/readiness contract
@@ -302,6 +330,15 @@ stays deferred/fail-closed.
   are not enabled, live deployment changes are not enabled, live command
   surfaces are not enabled, runtime production audit emitters are not enabled,
   and retention jobs are not enabled.
+
+- **Story 132.1 — split deployment and remote Postgres topology:** defines
+  the static/readiness contract in `docs/split-deployment-topology-readiness.json`
+  and enforces it with `scripts/check_split_deployment_topology.py`. This pins
+  current single-host default preservation, service placement including
+  `clawhip_daemon`, network/data authority, unsupported topologies,
+  rollback/fallback, and DB mTLS deferment to Epic 133. It does not activate
+  split deployment or remote Postgres; compose/profile/env/deploy/migration/
+  service/Docker/remote-host surfaces remain fail-closed/deferred.
 
 Epic 129/PR #100 docs reconciliation was merged separately; this
 production-operations contract does not reclassify Epic 129 support or PR #100 status.

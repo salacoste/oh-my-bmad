@@ -334,6 +334,49 @@ production audit emission, no retention job activation, and no credential value
 provisioning.
 
 
+
+### Split deployment and remote Postgres topology readiness (Story 132.1)
+
+Story 132.1 defines a static/readiness-only topology contract for future split
+deployment and remote Postgres work. The canonical contract is
+[`split-deployment-topology-readiness.json`](split-deployment-topology-readiness.json)
+and the gate is:
+
+```bash
+uv run python scripts/check_split_deployment_topology.py
+```
+
+The readiness contract requires all of the following before any later split
+deployment profile or remote Postgres activation story can proceed:
+
+1. The current single-host/local compose default remains the only supported
+   runtime topology until a later approved activation story changes it.
+2. Service placement is explicit for `registry_api`, `registry_state`,
+   `telegram_gateway`, `orchestrator_adapter`, `worker_wrapper`, and
+   `clawhip_daemon`.
+3. Network boundaries identify public ingress, private service-to-service
+   traffic, database traffic, and `clawhip_daemon` reachability.
+4. Remote Postgres data authority names state mutation, append-only event-log,
+   migration, backup/restore, and unsupported read/write split boundaries.
+5. Pooling, migration, backup, ingress, secrets handling, and observability
+   prerequisites are future evidence requirements, not active behavior.
+6. Unsupported topologies fail closed, including multi-writer state, multiple
+   migration runners, omitted `clawhip_daemon` placement, ad hoc external host
+   commands, and compose profile activation in this story.
+7. Rollback/fallback must preserve a documented return to the current
+   single-host/local default.
+8. DB mTLS design and activation are deferred to Epic 133; Story 132.1 does not
+   implement database mTLS.
+9. Core invariants stay mandatory before future activation: single-writer state
+   mutation, append-only event-log authority, idempotency/locking, and
+   capability tiers.
+
+This section is a readiness/checker contract only. It adds no compose profile or
+overlay, no environment activation flag, no deployment target, no migration
+runner, no service route, no Dockerfile behavior, no remote Postgres connection
+code, no external host command, no credential value, and no live split deployment
+or remote Postgres activation.
+
 ### Retention policy and object-storage adapter contract (Story 130.1)
 
 Story 130.1 is a static/readiness-only Epic 130 gate. Run it with:

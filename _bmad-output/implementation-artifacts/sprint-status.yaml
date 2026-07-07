@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-06T00:00:00+03:00"
+# last_updated: "2026-07-07T00:00:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-06T00:00:00+03:00"
-current_phase: 48  # Phase 48 / Epic 131 production-operations contract slice started after Epic 129 status/docs reconciliation; Epic 127, Epic 128, and Epic 129 are locally complete, Story 131.1 docs/status-only is done, and production credentials, real GitHub writes, deployment mutations, command surfaces, lifecycle/retention jobs, and runtime production audit emitters remain fail-closed/deferred
+last_updated: "2026-07-07T00:00:00+03:00"
+current_phase: 49  # Phase 49 / Epic 132 split-deployment topology readiness starts after Epic 131 readiness closure; Story 132.1 is static/readiness-only and split deployment, remote Postgres activation, DB mTLS, compose/profile/env/deploy/migration/service/Docker/remote-host changes, credentials, and runtime production audit emitters remain fail-closed/deferred
 
 development_status:
   # =========================================================================
@@ -1134,10 +1134,50 @@ development_status:
   131-5-production-command-surface-readiness: done  # Adds executable production command-surface readiness contract/checker for existing console/Telegram task-decision boundaries, absent dashboard production-operation controls, absent registry production-operation mutation endpoints, and forbidden prod-operation control tokens; no live command surface, production operation mutation, credential rendering, or runtime audit emitter is enabled
   131-6-production-operations-readiness-closure: done  # Closes Epic 131 as a static/readiness-contract track with prior story evidence, CI/just gate wiring, status docs, and live-activation overclaim prevention; real GitHub writes, live deployment changes, live command surfaces, runtime audit emitters, and retention jobs remain not enabled
 
+  # =========================================================================
+  # Epic 132: Split deployment and remote Postgres topology readiness
+  # =========================================================================
+  epic-132: done  # Story 132.1 defines static/readiness-only split deployment and remote Postgres topology prerequisites; no split deployment, remote Postgres runtime, DB mTLS, compose/profile/env/deploy/migration/service/Docker/remote-host command, credential, or runtime audit emitter behavior is enabled
+  132-1-split-deployment-remote-postgres-topology-contract: done  # Adds executable topology-readiness contract/checker for current single-host default preservation, service placement including clawhip_daemon, network/data authority, pooling/migration/backup prerequisites, unsupported topologies, rollback/fallback, DB mTLS deferment to Epic 133, core invariants, docs/status refs, just/CI wiring, secret absence, overclaim prevention, and forbidden runtime expansion surfaces
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-07-07"
+    event: story-132-1-split-deployment-topology-contract-local-done
+    from: planned
+    to: done
+    epic: epic-132
+    story: 132-1-split-deployment-remote-postgres-topology-contract
+    source: scoped-story-132-1
+    operation_id: story-132-1-split-deployment-topology-contract
+    operation_class: split_deployment_remote_postgres_topology_readiness
+    target_environment: repo-static-readiness
+    target_repository_or_service: split-deployment-remote-postgres-topology
+    authority_source: .omx/specs/epic-132-story-132-1-split-deployment-topology-contract-plan.md
+    dry_run_evidence_ref: scripts/check_split_deployment_topology.py
+    approval_ref: docs/production-operations.md#epic-132-split-deployment-and-remote-postgres-readiness
+    request_trace_correlation_id: epic-132-story-132-1
+    emergency_disable_state: fail-closed-no-live-split-deployment-or-remote-postgres-activation
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 132.1 records static/readiness-only split deployment and remote
+      Postgres topology prerequisites. It preserves the current single-host
+      default, defers DB mTLS to Epic 133, and does not add compose/profile/env
+      activation, deploy targets, migration runners, service routes, Dockerfile
+      behavior, remote Postgres connection code, external host commands,
+      credential values, or runtime production audit emitters.
+    rollback_ref: revert-story-132-1-split-deployment-topology-contract-diff
+    expiry_freshness: static-readiness-entry-refresh-on-live-split-deployment-or-remote-postgres-activation-story
+    status: done
+    summary: >-
+      Story 132.1 defines the split deployment and remote Postgres topology
+      contract as readiness evidence only. Verification is executable through
+      scripts/check_split_deployment_topology.py, its self-test, focused pytest,
+      just check-gates, and just check-gates-self-test.
 
   - date: "2026-07-06"
     event: story-130-3-scheduled-retention-job-runner-local-done

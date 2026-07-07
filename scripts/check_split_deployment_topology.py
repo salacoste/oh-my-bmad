@@ -1,0 +1,617 @@
+#!/usr/bin/env python3
+"""Validate the Story 132.1 split deployment topology readiness contract.
+
+This gate is intentionally static/readiness-only. It validates the remote
+Postgres/split-deployment topology contract, documentation/status wiring, CI/just
+wiring, overclaim prevention, secret absence, and the absence of Story 132.1
+runtime/deployment expansion surfaces.
+
+Usage::
+
+    uv run python scripts/check_split_deployment_topology.py
+    uv run python scripts/check_split_deployment_topology.py --self-test
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shutil
+import sys
+import tempfile
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CONTRACT_PATH = Path("docs/split-deployment-topology-readiness.json")
+OPERATOR_RUNBOOK_PATH = Path("docs/operator-runbook.md")
+PRODUCTION_OPS_PATH = Path("docs/production-operations.md")
+FEATURE_STATUS_PATH = Path("docs/feature-status.md")
+SPRINT_STATUS_PATH = Path("_bmad-output/implementation-artifacts/sprint-status.yaml")
+ARTIFACT_PATH = Path(
+    "_bmad-output/implementation-artifacts/"
+    "132-1-split-deployment-remote-postgres-topology-contract.md"
+)
+JUSTFILE_PATH = Path("justfile")
+CI_PATH = Path(".github/workflows/ci.yml")
+CHECKER_COMMAND = "uv run python scripts/check_split_deployment_topology.py"
+CHECKER_SELF_TEST_COMMAND = f"{CHECKER_COMMAND} --self-test"
+
+REQUIRED_TOP_LEVEL_SECTIONS = frozenset(
+    {
+        "current_default_preservation",
+        "service_placement",
+        "network_boundaries",
+        "remote_postgres_data_authority",
+        "pooling_migration_backup_prerequisites",
+        "ingress",
+        "secrets_handling",
+        "observability",
+        "unsupported_topologies",
+        "rollback_fallback",
+        "db_mtls_deferment",
+        "core_invariants",
+        "forbidden_runtime_expansion_surfaces",
+        "fail_closed_checks",
+        "non_goals",
+        "docs_refs",
+        "status_refs",
+    }
+)
+REQUIRED_SERVICES = frozenset(
+    {
+        "registry_api",
+        "registry_state",
+        "telegram_gateway",
+        "orchestrator_adapter",
+        "worker_wrapper",
+        "clawhip_daemon",
+    }
+)
+REQUIRED_CORE_INVARIANTS = frozenset(
+    {
+        "single_writer_state_mutation",
+        "append_only_event_log_authority",
+        "idempotency_and_locking",
+        "capability_tiers",
+    }
+)
+REQUIRED_FORBIDDEN_SURFACES = frozenset(
+    {
+        "compose profile or compose overlay activation",
+        "environment activation flag for split deployment or remote Postgres",
+        "new deploy target for split deployment or remote Postgres",
+        "migration runner for remote Postgres",
+        "service route activation for topology or database switching",
+        "Dockerfile activation for split deployment",
+        "remote Postgres connection code or DSN defaults",
+        "external host or network command surface",
+    }
+)
+REQUIRED_DOC_REFS = frozenset(
+    {
+        str(OPERATOR_RUNBOOK_PATH),
+        str(PRODUCTION_OPS_PATH),
+        str(FEATURE_STATUS_PATH),
+        str(ARTIFACT_PATH),
+    }
+)
+REQUIRED_STATUS_REFS = frozenset({str(SPRINT_STATUS_PATH), str(FEATURE_STATUS_PATH)})
+DOC_STATUS_PATHS = (
+    CONTRACT_PATH,
+    OPERATOR_RUNBOOK_PATH,
+    PRODUCTION_OPS_PATH,
+    FEATURE_STATUS_PATH,
+    SPRINT_STATUS_PATH,
+    ARTIFACT_PATH,
+)
+SECRET_SCAN_PATHS = (
+    CONTRACT_PATH,
+    OPERATOR_RUNBOOK_PATH,
+    PRODUCTION_OPS_PATH,
+    FEATURE_STATUS_PATH,
+    ARTIFACT_PATH,
+)
+
+SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(r"AKIA[0-9A-Z]{16}"),
+    re.compile(r"postgres(?:ql)?://[^\s:/@]+:[^\s/@]{8,}@", re.IGNORECASE),
+    re.compile(r"(?i)\b(?:password|secret|token)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{24,}"),
+)
+OVERCLAIM_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bsplit deployment is enabled\b", re.IGNORECASE),
+    re.compile(r"\bsplit deployment is live\b", re.IGNORECASE),
+    re.compile(r"\blive split deployment is active\b", re.IGNORECASE),
+    re.compile(r"\bremote postgres is enabled\b", re.IGNORECASE),
+    re.compile(r"\bremote postgres support is implemented\b", re.IGNORECASE),
+    re.compile(r"\bsplit deployment support is implemented\b", re.IGNORECASE),
+    re.compile(r"\bproduction remote postgres is live\b", re.IGNORECASE),
+)
+FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], ...] = (
+    (
+        "compose profile/overlay activation",
+        re.compile(r"(?i)\b(?:split[-_ ]deployment|remote[-_ ]postgres)\b"),
+        ("docker-compose", ".compose."),
+    ),
+    (
+        "environment activation flag",
+        re.compile(
+            r"(?i)\b(?:SPLIT_DEPLOYMENT_ENABLED|REMOTE_POSTGRES_ENABLED|ENABLE_REMOTE_POSTGRES)\b"
+        ),
+        (".env", "justfile", ".yml", ".yaml", ".py", ".ts", ".js"),
+    ),
+    (
+        "deploy target",
+        re.compile(r"(?im)^deploy-(?:split|remote-postgres|split-deployment)\b"),
+        ("justfile",),
+    ),
+    (
+        "migration runner",
+        re.compile(r"(?i)\b(?:remote_postgres_migration_runner|migrate-remote-postgres)\b"),
+        ("justfile", ".py", ".sh"),
+    ),
+    (
+        "service route activation",
+        re.compile(r"(?i)/(?:admin/)?(?:split-deployment|remote-postgres)/(?:enable|activate)\b"),
+        (".py", ".ts", ".js"),
+    ),
+    (
+        "Dockerfile activation",
+        re.compile(r"(?i)\b(?:SPLIT_DEPLOYMENT|REMOTE_POSTGRES)\b"),
+        ("Dockerfile", ".dockerfile"),
+    ),
+    (
+        "remote Postgres connection code",
+        re.compile(r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn)\b"),
+        (".py", ".ts", ".js", ".env", ".yml", ".yaml"),
+    ),
+    (
+        "external host/network command surface",
+        re.compile(r"(?i)\b(?:ssh\s+.*remote-postgres|tailscale\s+.*split|scp\s+.*postgres)\b"),
+        ("justfile", ".sh", ".md"),
+    ),
+)
+FORBIDDEN_SCAN_EXCLUDE_PREFIXES = (
+    ".git/",
+    ".mypy_cache/",
+    ".pytest_cache/",
+    ".ruff_cache/",
+    ".venv/",
+    ".omx/",
+    "docs/",
+    "tests/",
+    "scripts/check_split_deployment_topology.py",
+    "_bmad-output/implementation-artifacts/",
+)
+
+
+@dataclass(frozen=True)
+class Violation:
+    location: str
+    message: str
+
+    def render(self) -> str:
+        return f"{self.location}: {self.message}"
+
+
+def _read(root: Path, relpath: Path) -> str:
+    return (root / relpath).read_text(encoding="utf-8")
+
+
+def _load_json(root: Path, relpath: Path) -> dict[str, Any]:
+    with (root / relpath).open(encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"{relpath} must be a JSON object")
+    return data
+
+
+def _walk_strings(value: object) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, Mapping):
+        for k, v in value.items():
+            yield from _walk_strings(k)
+            yield from _walk_strings(v)
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        for item in value:
+            yield from _walk_strings(item)
+
+
+def _contains_secret_value(value: str) -> bool:
+    return any(pattern.search(value) for pattern in SECRET_VALUE_PATTERNS)
+
+
+def _ref_path(ref: str) -> str:
+    return ref.split("#", 1)[0]
+
+
+def _section(data: dict[str, Any], name: str) -> Mapping[str, Any]:
+    value = data.get(name)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _string_set(value: object) -> set[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return set()
+    return {entry for entry in value if isinstance(entry, str)}
+
+
+def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
+    violations: list[Violation] = []
+    if data.get("version") != 1:
+        violations.append(Violation(str(CONTRACT_PATH), "version must be 1"))
+    if data.get("story") != "132.1":
+        violations.append(Violation(str(CONTRACT_PATH), "story must be 132.1"))
+    if data.get("mode") != "static_readiness_only":
+        violations.append(Violation(str(CONTRACT_PATH), "mode must be static_readiness_only"))
+    if data.get("production_activation") != "deferred_fail_closed":
+        violations.append(
+            Violation(str(CONTRACT_PATH), "production_activation must be deferred_fail_closed")
+        )
+
+    missing_sections = REQUIRED_TOP_LEVEL_SECTIONS - set(data)
+    if missing_sections:
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH), f"required topology sections missing {sorted(missing_sections)}"
+            )
+        )
+
+    current_default = _section(data, "current_default_preservation")
+    if current_default.get("single_host_default") is not True:
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH),
+                "current_default_preservation must keep single_host_default true",
+            )
+        )
+    if current_default.get("future_activation_requires_new_story") is not True:
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH),
+                "current_default_preservation must require a future activation story",
+            )
+        )
+
+    services = _string_set(_section(data, "service_placement").get("required_services"))
+    missing_services = REQUIRED_SERVICES - services
+    if missing_services:
+        violations.append(
+            Violation(str(CONTRACT_PATH), f"service_placement missing {sorted(missing_services)}")
+        )
+
+    network_boundaries = _string_set(
+        _section(data, "network_boundaries").get("required_boundaries")
+    )
+    if len(network_boundaries) < 4 or not any("clawhip" in item for item in network_boundaries):
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH),
+                "network_boundaries must cover private networks, database traffic, and clawhip_daemon",
+            )
+        )
+
+    authority = _section(data, "remote_postgres_data_authority")
+    authority_text = "\n".join(_walk_strings(authority)).lower()
+    for phrase in ("future data authority", "local database defaults", "migration authority"):
+        if phrase not in authority_text:
+            violations.append(
+                Violation(str(CONTRACT_PATH), f"remote_postgres_data_authority missing {phrase!r}")
+            )
+    data_boundaries = _string_set(authority.get("data_boundary_coverage"))
+    for phrase in (
+        "state mutation authority",
+        "append-only event-log authority",
+        "backup and restore authority",
+    ):
+        if phrase not in data_boundaries:
+            violations.append(
+                Violation(
+                    str(CONTRACT_PATH), f"remote Postgres data-boundary coverage missing {phrase!r}"
+                )
+            )
+
+    prereqs = _section(data, "pooling_migration_backup_prerequisites")
+    for subsection in ("pooling", "migration", "backup"):
+        if len(_string_set(prereqs.get(subsection))) < 2:
+            violations.append(
+                Violation(
+                    str(CONTRACT_PATH),
+                    f"pooling_migration_backup_prerequisites missing {subsection}",
+                )
+            )
+
+    unsupported = _section(data, "unsupported_topologies")
+    unsupported_entries = "\n".join(_walk_strings(unsupported)).lower()
+    if unsupported.get("status") != "fail_closed" or "multi-writer" not in unsupported_entries:
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH),
+                "unsupported_topologies must be fail_closed and name multi-writer",
+            )
+        )
+    if "clawhip_daemon omitted" not in unsupported_entries:
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH),
+                "unsupported_topologies must fail closed when clawhip_daemon is omitted",
+            )
+        )
+
+    rollback = "\n".join(_walk_strings(_section(data, "rollback_fallback"))).lower()
+    if "single-host" not in rollback or "fallback" not in rollback or "rollback" not in rollback:
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH),
+                "rollback_fallback must document single-host fallback and rollback",
+            )
+        )
+
+    mtls = _section(data, "db_mtls_deferment")
+    if mtls.get("status") != "deferred_to_epic_133" or str(mtls.get("epic")) != "133":
+        violations.append(
+            Violation(str(CONTRACT_PATH), "db_mtls_deferment must be deferred_to_epic_133")
+        )
+
+    invariants = _section(data, "core_invariants")
+    missing_invariants = REQUIRED_CORE_INVARIANTS - set(invariants)
+    if missing_invariants:
+        violations.append(
+            Violation(str(CONTRACT_PATH), f"core_invariants missing {sorted(missing_invariants)}")
+        )
+    invariant_text = "\n".join(_walk_strings(invariants)).lower()
+    for phrase in ("single", "append-only", "idempotency", "lock", "capability tiers"):
+        if phrase not in invariant_text:
+            violations.append(
+                Violation(str(CONTRACT_PATH), f"core invariant coverage missing {phrase!r}")
+            )
+
+    forbidden = _string_set(data.get("forbidden_runtime_expansion_surfaces"))
+    missing_forbidden = REQUIRED_FORBIDDEN_SURFACES - forbidden
+    if missing_forbidden:
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH),
+                f"forbidden_runtime_expansion_surfaces missing {sorted(missing_forbidden)}",
+            )
+        )
+
+    non_goals = "\n".join(str(x) for x in data.get("non_goals", []))
+    for phrase in (
+        "no live split deployment activation",
+        "no remote Postgres connection code",
+        "no docker compose profile or overlay activation",
+        "no deployment target or external host command",
+        "no migration runner or database migration execution",
+        "no service route or command surface activation",
+        "no Dockerfile behavior change",
+        "no DB mTLS implementation before Epic 133",
+    ):
+        if phrase not in non_goals:
+            violations.append(Violation(str(CONTRACT_PATH), f"non_goals missing {phrase!r}"))
+
+    doc_refs = {_ref_path(ref) for ref in _string_set(data.get("docs_refs"))}
+    missing_doc_refs = REQUIRED_DOC_REFS - doc_refs
+    if missing_doc_refs:
+        violations.append(
+            Violation(str(CONTRACT_PATH), f"docs_refs missing {sorted(missing_doc_refs)}")
+        )
+    status_refs = {_ref_path(ref) for ref in _string_set(data.get("status_refs"))}
+    missing_status_refs = REQUIRED_STATUS_REFS - status_refs
+    if missing_status_refs:
+        violations.append(
+            Violation(str(CONTRACT_PATH), f"status_refs missing {sorted(missing_status_refs)}")
+        )
+    for ref in doc_refs | status_refs:
+        if ref and not (root / ref).exists():
+            violations.append(
+                Violation(str(CONTRACT_PATH), f"referenced file does not exist: {ref}")
+            )
+
+    for value in _walk_strings(data):
+        if _contains_secret_value(value):
+            violations.append(
+                Violation(str(CONTRACT_PATH), "contract appears to contain a real credential value")
+            )
+            break
+    return violations
+
+
+def _validate_docs_and_status(root: Path) -> list[Violation]:
+    violations: list[Violation] = []
+    required_mentions = {
+        OPERATOR_RUNBOOK_PATH: ["Story 132.1", CHECKER_COMMAND, "DB mTLS", "Epic 133"],
+        PRODUCTION_OPS_PATH: ["Story 132.1", str(CONTRACT_PATH), CHECKER_COMMAND],
+        FEATURE_STATUS_PATH: ["Story 132.1", str(CONTRACT_PATH), str(ARTIFACT_PATH)],
+        SPRINT_STATUS_PATH: ["132-1-split-deployment", "epic-132"],
+        ARTIFACT_PATH: ["Story 132.1", CHECKER_COMMAND, "No runtime"],
+    }
+    for relpath, needles in required_mentions.items():
+        path = root / relpath
+        if not path.exists():
+            violations.append(Violation(str(relpath), "required docs/status file is missing"))
+            continue
+        text = path.read_text(encoding="utf-8")
+        for needle in needles:
+            if needle not in text:
+                violations.append(Violation(str(relpath), f"missing required reference {needle!r}"))
+    return violations
+
+
+def _validate_wiring(root: Path) -> list[Violation]:
+    violations: list[Violation] = []
+    justfile = _read(root, JUSTFILE_PATH)
+    ci = _read(root, CI_PATH)
+    if justfile.count(CHECKER_COMMAND) < 3:
+        violations.append(
+            Violation(
+                str(JUSTFILE_PATH), "mandatory justfile wiring missing normal or self-test checker"
+            )
+        )
+    for recipe in ("lint:", "check-gates:"):
+        start = justfile.find(recipe)
+        if start < 0 or CHECKER_COMMAND not in justfile[start : justfile.find("\n\n", start)]:
+            violations.append(
+                Violation(str(JUSTFILE_PATH), f"{recipe} missing split topology checker")
+            )
+    start = justfile.find("check-gates-self-test:")
+    if start < 0 or CHECKER_SELF_TEST_COMMAND not in justfile[start : justfile.find("\n\n", start)]:
+        violations.append(
+            Violation(str(JUSTFILE_PATH), "check-gates-self-test missing split topology self-test")
+        )
+    if CHECKER_COMMAND not in ci:
+        violations.append(Violation(str(CI_PATH), "CI missing split topology checker step"))
+    if CHECKER_SELF_TEST_COMMAND not in ci:
+        violations.append(Violation(str(CI_PATH), "CI missing split topology checker self-test"))
+    return violations
+
+
+def _validate_overclaims_and_secrets(root: Path) -> list[Violation]:
+    violations: list[Violation] = []
+    for relpath in DOC_STATUS_PATHS:
+        path = root / relpath
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        for pattern in OVERCLAIM_PATTERNS:
+            if pattern.search(text):
+                violations.append(
+                    Violation(
+                        str(relpath), f"overclaim forbidden by Story 132.1: {pattern.pattern}"
+                    )
+                )
+                break
+    for relpath in SECRET_SCAN_PATHS:
+        path = root / relpath
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8")
+        if _contains_secret_value(text):
+            violations.append(Violation(str(relpath), "secret-like value is forbidden"))
+    return violations
+
+
+def _should_scan_runtime_file(relpath: Path) -> bool:
+    rel = relpath.as_posix()
+    if any(rel.startswith(prefix) for prefix in FORBIDDEN_SCAN_EXCLUDE_PREFIXES):
+        return False
+    return (not rel.startswith(".")) or rel.startswith((".github/", ".env"))
+
+
+def _iter_repo_files(root: Path) -> Iterable[Path]:
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        relpath = path.relative_to(root)
+        if _should_scan_runtime_file(relpath):
+            yield relpath
+
+
+def _suffix_matches(rel: str, suffixes: tuple[str, ...]) -> bool:
+    name = Path(rel).name
+    return any(rel.endswith(suffix) or name == suffix or suffix in rel for suffix in suffixes)
+
+
+def _validate_forbidden_runtime_surfaces(root: Path) -> list[Violation]:
+    violations: list[Violation] = []
+    for relpath in _iter_repo_files(root):
+        rel = relpath.as_posix()
+        try:
+            text = (root / relpath).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for surface, pattern, suffixes in FORBIDDEN_RUNTIME_PATTERNS:
+            if _suffix_matches(rel, suffixes) and pattern.search(text):
+                violations.append(
+                    Violation(
+                        rel, f"forbidden runtime/deployment expansion surface detected: {surface}"
+                    )
+                )
+    return violations
+
+
+def validate(root: Path = REPO_ROOT) -> list[Violation]:
+    violations: list[Violation] = []
+    try:
+        data = _load_json(root, CONTRACT_PATH)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return [Violation(str(CONTRACT_PATH), f"failed to load contract: {exc}")]
+    violations.extend(_validate_contract(root, data))
+    violations.extend(_validate_docs_and_status(root))
+    violations.extend(_validate_wiring(root))
+    violations.extend(_validate_overclaims_and_secrets(root))
+    violations.extend(_validate_forbidden_runtime_surfaces(root))
+    return violations
+
+
+def _copy_self_test_fixture(src_root: Path, dst_root: Path) -> None:
+    for relpath in (
+        CONTRACT_PATH,
+        OPERATOR_RUNBOOK_PATH,
+        PRODUCTION_OPS_PATH,
+        FEATURE_STATUS_PATH,
+        SPRINT_STATUS_PATH,
+        ARTIFACT_PATH,
+        JUSTFILE_PATH,
+        CI_PATH,
+    ):
+        src = src_root / relpath
+        dst = dst_root / relpath
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+
+
+def _self_test() -> int:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _copy_self_test_fixture(REPO_ROOT, root)
+        clean = validate(root)
+        if clean:
+            print("self-test clean fixture failed:", file=sys.stderr)
+            for violation in clean:
+                print(f"  - {violation.render()}", file=sys.stderr)
+            return 1
+
+        contract = root / CONTRACT_PATH
+        data = json.loads(contract.read_text(encoding="utf-8"))
+        data["core_invariants"].pop("single_writer_state_mutation")
+        contract.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        violations = validate(root)
+        if not any("core_invariants missing" in violation.message for violation in violations):
+            print("self-test failed to detect missing invariant", file=sys.stderr)
+            return 1
+    print("split deployment topology readiness self-test passed")
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--self-test", action="store_true", help="run the checker's self-test fixture"
+    )
+    parser.add_argument("--verbose", action="store_true", help="print success details")
+    args = parser.parse_args(argv)
+
+    if args.self_test:
+        return _self_test()
+
+    violations = validate(REPO_ROOT)
+    if violations:
+        print("split deployment topology readiness check failed:", file=sys.stderr)
+        for violation in violations:
+            print(f"  - {violation.render()}", file=sys.stderr)
+        return 1
+    if args.verbose:
+        print("split deployment topology readiness check passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
