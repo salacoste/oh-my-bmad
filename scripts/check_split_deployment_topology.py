@@ -292,7 +292,9 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
         re.compile(
             r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn|"
             r"REMOTE_PG_DSN)\b|"
-            r"\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b[\s'\"\]]*[:=]\s*['\"]?"
+            r"(?:\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b[\s'\"\]]*[:=]|"
+            r"\bname\s*:\s*(?:['\"])?(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)(?:['\"])?"
+            r"\s*(?:\n|.){0,160}?\bvalue\s*:)\s*['\"]?"
             r"postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
             r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\?|\s|['\"}\]]|$))"
             r"[^\s'\"]+|"
@@ -369,7 +371,9 @@ def _walk_strings(value: object) -> Iterable[str]:
 
 
 POSTGRES_URL_PATTERN = re.compile(r"""(?i)\bpostgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://[^\s'"<>]+""")
-PLACEHOLDER_PASSWORDS = frozenset({"password", "example", "changeme", "placeholder"})
+PLACEHOLDER_PASSWORDS = frozenset(
+    {"password", "example", "changeme", "placeholder", "pass", "test", "secret", "****"}
+)
 LOCAL_POSTGRES_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
 
 
@@ -380,7 +384,7 @@ def _postgres_url_contains_secret(value: str) -> bool:
         except ValueError:
             continue
         password = parsed.password or ""
-        if len(password) >= 8 and password.lower() not in PLACEHOLDER_PASSWORDS:
+        if password and password.lower() not in PLACEHOLDER_PASSWORDS:
             return True
     return False
 
