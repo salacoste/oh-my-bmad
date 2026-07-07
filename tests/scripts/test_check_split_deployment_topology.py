@@ -106,6 +106,8 @@ def test_missing_service_placement_fails(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("section", "bad_status"),
     [
+        ("current_default_preservation", "implemented"),
+        ("current_default_preservation", "active"),
         ("service_placement", "implemented"),
         ("service_placement", "active"),
         ("network_boundaries", "implemented"),

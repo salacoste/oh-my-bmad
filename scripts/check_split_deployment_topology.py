@@ -447,6 +447,13 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
         violations.extend(_validate_section_status(data, section_name))
 
     current_default = _section(data, "current_default_preservation")
+    if current_default.get("status") != "preserved":
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH),
+                "current_default_preservation status must be preserved",
+            )
+        )
     for flag in REQUIRED_DEFAULT_PRESERVATION_FLAGS:
         if current_default.get(flag) is not True:
             violations.append(
