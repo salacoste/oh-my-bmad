@@ -68,6 +68,28 @@ def test_missing_current_default_preservation_fails(tmp_path: Path) -> None:
     assert any("required topology sections missing" in v.message for v in violations)
 
 
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "no_compose_profile_change",
+        "no_env_activation_flag",
+        "no_remote_postgres_connection_code",
+    ],
+)
+def test_current_default_preservation_false_flags_fail(tmp_path: Path, flag: str) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    data = _load_contract(tmp_path, mod)
+    current_default = data["current_default_preservation"]
+    assert isinstance(current_default, dict)
+    current_default[flag] = False
+    _write_contract(tmp_path, mod, data)
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any(
+        "current_default_preservation" in v.message and flag in v.message for v in violations
+    )
+
+
 def test_missing_service_placement_fails(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
@@ -89,6 +111,50 @@ def test_missing_network_boundary_fails(tmp_path: Path) -> None:
     _write_contract(tmp_path, mod, data)
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("network_boundaries" in v.message for v in violations)
+
+
+@pytest.mark.parametrize(
+    ("section", "replacement", "expected"),
+    [
+        ("ingress", {}, "ingress"),
+        (
+            "ingress",
+            {"status": "implemented", "requirements": ["public ingress routes directly anywhere"]},
+            "ingress status must be contract_only",
+        ),
+        ("secrets_handling", {}, "secrets_handling"),
+        (
+            "secrets_handling",
+            {
+                "status": "implemented",
+                "requirements": ["remote database passwords may be committed"],
+            },
+            "secrets_handling status must be metadata_only",
+        ),
+        ("observability", {}, "observability"),
+        (
+            "observability",
+            {"status": "already_available", "requirements": ["generic uptime logs are enough"]},
+            "observability status must be future_required_evidence",
+        ),
+        ("fail_closed_checks", [], "fail_closed_checks missing"),
+        (
+            "fail_closed_checks",
+            ["activation checks are advisory after deployment"],
+            "fail_closed_checks missing",
+        ),
+    ],
+)
+def test_required_split_topology_sections_empty_or_contradictory_fail(
+    tmp_path: Path, section: str, replacement: object, expected: str
+) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    data = _load_contract(tmp_path, mod)
+    data[section] = replacement
+    _write_contract(tmp_path, mod, data)
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any(expected in v.message for v in violations)
 
 
 def test_missing_remote_postgres_authority_and_data_boundary_fails(tmp_path: Path) -> None:

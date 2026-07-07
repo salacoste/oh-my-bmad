@@ -100,6 +100,45 @@ REQUIRED_DOC_REFS = frozenset(
     }
 )
 REQUIRED_STATUS_REFS = frozenset({str(SPRINT_STATUS_PATH), str(FEATURE_STATUS_PATH)})
+REQUIRED_DEFAULT_PRESERVATION_FLAGS = (
+    "single_host_default",
+    "no_compose_profile_change",
+    "no_env_activation_flag",
+    "no_remote_postgres_connection_code",
+    "future_activation_requires_new_story",
+)
+REQUIRED_INGRESS_PHRASES = (
+    "public ingress",
+    "approved edge services",
+    "registry_api",
+    "control boundary",
+    "not added by this story",
+)
+REQUIRED_SECRETS_HANDLING_PHRASES = (
+    "no real secret values",
+    "future approved secret store contract",
+    "embedded passwords",
+    "forbidden",
+    "story 131.2 credential readiness",
+)
+REQUIRED_OBSERVABILITY_PHRASES = (
+    "per-service topology identity labels",
+    "database connection pool metrics",
+    "migration and backup audit evidence",
+    "network-boundary health checks",
+    "event-log append and idempotency-lock metrics",
+)
+REQUIRED_FAIL_CLOSED_CHECKS = frozenset(
+    {
+        "contract remains static_readiness_only",
+        "current single-host default is preserved",
+        "unsupported topologies are explicitly fail-closed",
+        "DB mTLS is deferred to Epic 133",
+        "no live split deployment or remote Postgres support is claimed",
+        "no runtime/deployment expansion surface is added by Story 132.1",
+        "mandatory justfile and CI checker wiring is present",
+    }
+)
 DOC_STATUS_PATHS = (
     CONTRACT_PATH,
     OPERATOR_RUNBOOK_PATH,
@@ -243,6 +282,39 @@ def _string_set(value: object) -> set[str]:
     return {entry for entry in value if isinstance(entry, str)}
 
 
+def _lower_text(value: object) -> str:
+    return "\n".join(_walk_strings(value)).lower()
+
+
+def _validate_requirements_section(
+    data: dict[str, Any],
+    name: str,
+    *,
+    expected_status: str,
+    min_requirements: int,
+    required_phrases: tuple[str, ...],
+) -> list[Violation]:
+    violations: list[Violation] = []
+    section = _section(data, name)
+    if section.get("status") != expected_status:
+        violations.append(Violation(str(CONTRACT_PATH), f"{name} status must be {expected_status}"))
+    requirements = _string_set(section.get("requirements"))
+    if len(requirements) < min_requirements:
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH),
+                f"{name} must include at least {min_requirements} requirement entries",
+            )
+        )
+    text = _lower_text(section)
+    for phrase in required_phrases:
+        if phrase not in text:
+            violations.append(
+                Violation(str(CONTRACT_PATH), f"{name} missing required phrase {phrase!r}")
+            )
+    return violations
+
+
 def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
     violations: list[Violation] = []
     if data.get("version") != 1:
@@ -265,18 +337,22 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
         )
 
     current_default = _section(data, "current_default_preservation")
-    if current_default.get("single_host_default") is not True:
-        violations.append(
-            Violation(
-                str(CONTRACT_PATH),
-                "current_default_preservation must keep single_host_default true",
+    for flag in REQUIRED_DEFAULT_PRESERVATION_FLAGS:
+        if current_default.get(flag) is not True:
+            violations.append(
+                Violation(
+                    str(CONTRACT_PATH),
+                    f"current_default_preservation must keep {flag} true",
+                )
             )
-        )
-    if current_default.get("future_activation_requires_new_story") is not True:
+    if (
+        "only supported runtime topology"
+        not in str(current_default.get("required_statement", "")).lower()
+    ):
         violations.append(
             Violation(
                 str(CONTRACT_PATH),
-                "current_default_preservation must require a future activation story",
+                "current_default_preservation required_statement must preserve current defaults",
             )
         )
 
@@ -328,8 +404,36 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
                 )
             )
 
+    violations.extend(
+        _validate_requirements_section(
+            data,
+            "ingress",
+            expected_status="contract_only",
+            min_requirements=3,
+            required_phrases=REQUIRED_INGRESS_PHRASES,
+        )
+    )
+    violations.extend(
+        _validate_requirements_section(
+            data,
+            "secrets_handling",
+            expected_status="metadata_only",
+            min_requirements=4,
+            required_phrases=REQUIRED_SECRETS_HANDLING_PHRASES,
+        )
+    )
+    violations.extend(
+        _validate_requirements_section(
+            data,
+            "observability",
+            expected_status="future_required_evidence",
+            min_requirements=5,
+            required_phrases=REQUIRED_OBSERVABILITY_PHRASES,
+        )
+    )
+
     unsupported = _section(data, "unsupported_topologies")
-    unsupported_entries = "\n".join(_walk_strings(unsupported)).lower()
+    unsupported_entries = _lower_text(unsupported)
     if unsupported.get("status") != "fail_closed" or "multi-writer" not in unsupported_entries:
         violations.append(
             Violation(
@@ -345,7 +449,7 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
             )
         )
 
-    rollback = "\n".join(_walk_strings(_section(data, "rollback_fallback"))).lower()
+    rollback = _lower_text(_section(data, "rollback_fallback"))
     if "single-host" not in rollback or "fallback" not in rollback or "rollback" not in rollback:
         violations.append(
             Violation(
@@ -380,6 +484,16 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
             Violation(
                 str(CONTRACT_PATH),
                 f"forbidden_runtime_expansion_surfaces missing {sorted(missing_forbidden)}",
+            )
+        )
+
+    fail_closed_checks = _string_set(data.get("fail_closed_checks"))
+    missing_fail_closed_checks = REQUIRED_FAIL_CLOSED_CHECKS - fail_closed_checks
+    if missing_fail_closed_checks:
+        violations.append(
+            Violation(
+                str(CONTRACT_PATH),
+                f"fail_closed_checks missing {sorted(missing_fail_closed_checks)}",
             )
         )
 
