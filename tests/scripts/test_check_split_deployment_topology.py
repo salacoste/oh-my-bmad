@@ -330,6 +330,7 @@ def test_active_topology_overclaim_with_interposed_words_and_has_been_fails(
         "Remote Postgres has been shipped.",
         "Production-ready remote Postgres support.",
         "Enabled split deployment support.",
+        "No gate is needed because split deployment is enabled.",
     ],
 )
 def test_active_topology_overclaim_broadened_variants_fail(tmp_path: Path, claim: str) -> None:
@@ -455,6 +456,11 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
             "compose profile/overlay",
         ),
         (
+            "deployments/remote-postgres.yml",
+            "services: {api: {build: .}}\n",
+            "compose profile/overlay",
+        ),
+        (
             "deployments/remote-postgres/compose.yml",
             "services:\n  api:\n    build: .\n",
             "compose profile/overlay",
@@ -489,6 +495,7 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
         (".env.production", "ENABLE_SPLIT_DEPLOYMENT=true", "environment activation"),
         ("pyproject.toml", "SPLIT_DEPLOYMENT=true", "environment activation"),
         ("pyproject.toml", "REMOTE_POSTGRES_ENABLED=true", "environment activation"),
+        ("pyproject.toml", "REMOTE_POSTGRES=true", "environment activation"),
         ("justfile", "deploy-split:\n    echo nope\n", "deploy target"),
         ("scripts/run_remote_pg.py", "remote_postgres_migration_runner = True", "migration runner"),
         ("services/registry-api/routes.py", "'/remote-postgres/enable'", "service route"),
@@ -509,6 +516,17 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
             "connection code",
         ),
         (".env.production", "POSTGRES_HOST=remote-postgres.example.invalid", "connection code"),
+        (".env.production", "PGHOST=remote-postgres.example.invalid", "connection code"),
+        (
+            ".env.production",
+            "POSTGRES_URL=postgres://remote-postgres.example.invalid/app",
+            "connection code",
+        ),
+        (
+            ".env.production",
+            "REMOTE_PG_DSN=postgres://remote-postgres.example.invalid/app",
+            "connection code",
+        ),
         ("justfile", "ssh ops@remote-postgres.example.invalid true", "external host"),
     ],
 )

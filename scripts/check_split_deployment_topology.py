@@ -248,7 +248,7 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
         "environment activation flag",
         re.compile(
             r"(?i)\b(?:SPLIT_DEPLOYMENT(?:_ENABLED)?|ENABLE_SPLIT_DEPLOYMENT|"
-            r"REMOTE_POSTGRES_ENABLED|ENABLE_REMOTE_POSTGRES)\b"
+            r"REMOTE_POSTGRES(?:_ENABLED)?|ENABLE_REMOTE_POSTGRES)\b"
         ),
         (
             ".env",
@@ -290,10 +290,11 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
     (
         "remote Postgres connection code",
         re.compile(
-            r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn)\b|"
-            r"\b(?:DATABASE_URL|POSTGRES_DSN)\b\s*[:=]\s*['\"]?"
+            r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn|"
+            r"REMOTE_PG_DSN)\b|"
+            r"\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b\s*[:=]\s*['\"]?"
             r"postgres(?:ql)?://[^\s'\"]*remote[-_.]?postgres|"
-            r"\bPOSTGRES_HOST\b\s*[:=]\s*['\"]?[^\s'\"]*remote[-_.]?postgres"
+            r"\b(?:POSTGRES_HOST|PGHOST)\b\s*[:=]\s*['\"]?[^\s'\"]*remote[-_.]?postgres"
         ),
         (
             ".py",
@@ -858,9 +859,14 @@ def _is_overclaim_match(match: re.Match[str], text: str) -> bool:
     gap = match.groupdict().get("gap") or ""
     sentence_start = max(text.rfind(".", 0, match.start()), text.rfind("\n", 0, match.start()))
     prefix = text[sentence_start + 1 : match.start()]
+    local_prefix = re.split(
+        r"\b(?:because|but|however|although|though|while|whereas|yet|unless|except)\b|[;:]",
+        prefix,
+        flags=re.IGNORECASE,
+    )[-1]
     prefix_negation = re.search(
         r"\b(?:no|not|never|without|does\s+not|do\s+not|did\s+not)\b",
-        prefix,
+        local_prefix,
         re.IGNORECASE,
     )
     return not OVERCLAIM_NEGATION_PATTERN.search(gap) and prefix_negation is None
@@ -952,7 +958,7 @@ def _has_forbidden_compose_path_token(relpath: Path) -> bool:
 
 
 def _has_compose_like_yaml_shape(text: str) -> bool:
-    compose_service_keys = r"(?im)^\s+(?:profiles?|image|build)\s*:"
+    compose_service_keys = r"(?i)\b(?:profiles?|image|build)\s*:"
     return bool(re.search(r"(?im)^services\s*:", text) and re.search(compose_service_keys, text))
 
 
