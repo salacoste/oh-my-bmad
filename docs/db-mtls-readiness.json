@@ -1,0 +1,233 @@
+{
+  "version": 1,
+  "epic": "133",
+  "story": "133.1-133.5",
+  "mode": "runtime_gated_readiness",
+  "production_activation": "deferred_fail_closed",
+  "db_mtls_runtime_implementation": "runtime_gated_supported",
+  "ca_ownership": {
+    "status": "contract_required",
+    "owner_role": "security_owner",
+    "requirements": [
+      "security_owner controls DB mTLS root and intermediate CA issuance",
+      "separate server and client certificate profiles are required",
+      "CA material is referenced only through approved secret locations"
+    ]
+  },
+  "certificate_profiles": {
+    "status": "contract_required",
+    "server_profile": [
+      "Postgres server certificate must chain to approved DB CA",
+      "server SAN must match REGISTRY_DB_MTLS_SERVER_HOSTNAME for verify-full",
+      "server certificate must be validated by registry-state client before connection"
+    ],
+    "client_profile": [
+      "registry-state client certificate must chain to approved client CA",
+      "client certificate is scoped to the application role and database",
+      "client private key uses mode and owner evidence checks"
+    ],
+    "hostname_policy": "verify-full Postgres hostname/SAN matching is mandatory when DB mTLS is enabled"
+  },
+  "approved_secret_locations": {
+    "status": "contract_required",
+    "approved_prefixes": [
+      "/run/secrets/",
+      "/certs/db/"
+    ],
+    "test_only_prefix_policy": "temporary fixture directories require an explicit test-only override and are forbidden in production docs",
+    "canonical_resolution": "realpath_under_approved_prefix",
+    "symlink_escape_policy": "reject",
+    "private_key_permission_policy": "reject_group_or_world_readable",
+    "owner_expectation": "secret-mounted keys must record expected owner/group without mutating live hosts during local validation",
+    "example_paths": [
+      "/run/secrets/db-material",
+      "/certs/db/material"
+    ]
+  },
+  "env_config_keys": {
+    "status": "contract_required",
+    "required_keys": [
+      "REGISTRY_DB_MTLS_ENABLED",
+      "REGISTRY_DB_MTLS_ROOT_CA",
+      "REGISTRY_DB_MTLS_CLIENT_CERT",
+      "REGISTRY_DB_MTLS_CLIENT_KEY",
+      "REGISTRY_DB_MTLS_SERVER_HOSTNAME",
+      "REGISTRY_DB_MTLS_REVOCATION_LIST",
+      "REGISTRY_DATABASE_URL"
+    ]
+  },
+  "profile_gating_and_url_policy": {
+    "status": "contract_required",
+    "disabled_profile_connect_args": "unchanged_no_ssl_args",
+    "policies": [
+      "disabled_profile_preserves_sqlite_default",
+      "enabled_requires_postgresql_asyncpg",
+      "enabled_rejects_sqlite",
+      "enabled_rejects_non_postgres",
+      "enabled_rejects_non_asyncpg_postgres",
+      "enabled_rejects_sslmode_disable",
+      "enabled_rejects_sslmode_allow",
+      "enabled_rejects_sslmode_prefer",
+      "enabled_rejects_sslmode_require",
+      "enabled_rejects_sslmode_verify_ca",
+      "no_plaintext_fallback"
+    ]
+  },
+  "server_side_postgres_evidence": {
+    "status": "operator_contract_required",
+    "postgresql_conf_required": [
+      "ssl=on",
+      "ssl_cert_file",
+      "ssl_key_file",
+      "ssl_ca_file"
+    ],
+    "revocation_claimed": true,
+    "revocation_settings_required": [
+      "ssl_crl_file or ssl_crl_dir"
+    ],
+    "approved_secret_evidence": [
+      "server_certificate_from_approved_prefix",
+      "server_private_key_from_approved_prefix",
+      "root_ca_from_approved_prefix",
+      "client_ca_from_approved_prefix",
+      "private_key_mode_and_owner_checked"
+    ],
+    "pg_hba_required": [
+      "application_role_and_database",
+      "hostssl",
+      "clientcert",
+      "cert_based_client_verification",
+      "no_earlier_plaintext_host_bypass"
+    ],
+    "sslmode_disable_rejection": true,
+    "application_database": "registry",
+    "application_role": "app"
+  },
+  "client_side_registry_evidence": {
+    "status": "runtime_gated_supported",
+    "requirements": [
+      "runtime engine must pass asyncpg ssl connect args only when DB mTLS is enabled",
+      "Alembic migration path must use the same asyncpg ssl builder or fail closed",
+      "verify-full semantics and hostname checking are required",
+      "all setup diagnostics must be sanitized"
+    ]
+  },
+  "rotation_revocation_drills": {
+    "status": "future_evidence_required",
+    "required_evidence": [
+      "replacement_server_cert_from_approved_ca",
+      "replacement_client_cert_from_approved_ca",
+      "distribution_only_approved_prefixes",
+      "safe_service_reconnect_after_staging",
+      "old_client_cert_rejected_by_server",
+      "revoked_or_old_server_cert_rejected_by_client",
+      "old_serial_rejected_through_crl",
+      "crl_under_approved_prefixes",
+      "reload_restart_reconnect_after_rotation",
+      "expiry_warning_before_hard_expiry",
+      "failed_rotation_rollback_without_private_key_commit"
+    ]
+  },
+  "failure_observability": {
+    "status": "runtime_gated_supported",
+    "failure_classes": [
+      "invalid_ca",
+      "expired_cert",
+      "hostname_mismatch",
+      "missing_client_cert",
+      "wrong_permissions",
+      "unreadable_material",
+      "plaintext_attempt",
+      "revoked_cert"
+    ],
+    "bounded_retry": {
+      "required": true,
+      "max_attempts": "documented finite integer",
+      "backoff": "documented bounded backoff",
+      "outcome": "fail_closed"
+    },
+    "audit_shape": "sanitized failure class plus config key family, no secret material"
+  },
+  "redaction_and_secret_hygiene": {
+    "status": "contract_required",
+    "required_surfaces": [
+      "db_mtls_builder_structured_logs",
+      "registry_state_runtime_engine_diagnostics",
+      "alembic_migration_diagnostics",
+      "readiness_checker_output"
+    ],
+    "forbidden_diagnostics": [
+      "password",
+      "private key",
+      "PEM",
+      "full DSN",
+      "full filesystem path",
+      "cert/key filename",
+      "certificate subject",
+      "SAN hostname",
+      "production hostname"
+    ]
+  },
+  "rollback_disable": {
+    "status": "contract_required",
+    "requirements": [
+      "failed rotation rollback never commits private key material",
+      "local validation never mutates production hosts",
+      "DB mTLS disable path is a future approved rollback gate and cannot silently downgrade to plaintext"
+    ]
+  },
+  "closure_gate": {
+    "status": "closure_evidence_recorded",
+    "required_fields": [
+      "enabled_disabled_matrix",
+      "rotation_revocation_drill",
+      "failure_mode_observability",
+      "secret_scanner",
+      "docs_status_links",
+      "architect_approval",
+      "critic_approval",
+      "code_review",
+      "ultraqa",
+      "ci_local_validation",
+      "split_deployment_remote_postgres_notes",
+      "checker",
+      "scanner"
+    ],
+    "recorded_evidence": [
+      "docs",
+      "CI",
+      "checker",
+      "scanner",
+      "code-review",
+      "UltraQA"
+    ]
+  },
+  "fail_closed_checks": [
+    "runtime-gated registry-state DB mTLS support; no production activation without operator evidence",
+    "server-side Postgres evidence is exact and required before activation",
+    "approved secret prefixes enforced by canonical realpath",
+    "symlink escapes fail closed",
+    "no plaintext fallback or sslmode=disable bypass",
+    "rotation and revocation evidence required before closure",
+    "failure diagnostics are sanitized and bounded",
+    "local closure evidence recorded; production activation still requires operator evidence",
+    "justfile and CI checker wiring is present"
+  ],
+  "non_goals": [
+    "runtime-gated registry-state DB mTLS support is present, but no production activation without operator evidence",
+    "no live Postgres provisioning or host mutation",
+    "no committed certificate, private key, password, token, or production hostname",
+    "no plaintext fallback"
+  ],
+  "docs_refs": [
+    "docs/operator-runbook.md#db-mtls-readiness-story-133",
+    "docs/production-operations.md#epic-133-db-connection-mtls-readiness",
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/133-1-db-mtls-static-readiness-contract.md#summary",
+    "_bmad-output/implementation-artifacts/133-5-db-mtls-closure-evidence.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

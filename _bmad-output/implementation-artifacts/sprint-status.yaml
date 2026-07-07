@@ -36,7 +36,7 @@
 
 generated: 2026-04-22
 last_updated: "2026-07-07T00:00:00+03:00"
-current_phase: 49  # Phase 49 / Epic 132 split-deployment topology readiness starts after Epic 131 readiness closure; Story 132.1 is static/readiness-only and split deployment, remote Postgres activation, DB mTLS, compose/profile/env/deploy/migration/service/Docker/remote-host changes, credentials, and runtime production audit emitters remain fail-closed/deferred
+current_phase: 50  # Phase 50 / Epic 133 DB connection mTLS runtime-gated readiness; registry-state DB mTLS code is gated by REGISTRY_DB_MTLS_ENABLED while production activation, Postgres provisioning, production host mutation, real certificate material, and plaintext fallback remain fail-closed/deferred
 
 development_status:
   # =========================================================================
@@ -1140,10 +1140,54 @@ development_status:
   epic-132: done  # Story 132.1 defines static/readiness-only split deployment and remote Postgres topology prerequisites; no split deployment, remote Postgres runtime, DB mTLS, compose/profile/env/deploy/migration/service/Docker/remote-host command, credential, or runtime audit emitter behavior is enabled
   132-1-split-deployment-remote-postgres-topology-contract: done  # Adds executable topology-readiness contract/checker for current single-host default preservation, service placement including clawhip_daemon, network/data authority, pooling/migration/backup prerequisites, unsupported topologies, rollback/fallback, DB mTLS deferment to Epic 133, core invariants, docs/status refs, just/CI wiring, secret absence, overclaim prevention, and forbidden runtime expansion surfaces
 
+  # =========================================================================
+  # Epic 133: DB connection mTLS readiness
+  # =========================================================================
+  epic-133: done  # Runtime-gated registry-state DB mTLS support plus contract/checker/docs/artifacts/closure evidence is complete locally; production activation, Postgres provisioning, production host mutation, real certificate material, and split-deployment/remote Postgres activation remain operator-gated/fail-closed
+  133-1-db-mtls-static-readiness-contract: done  # Adds docs/db-mtls-readiness.json and scripts/check_db_mtls_readiness.py for exact server-side Postgres evidence, approved canonical secret prefixes, symlink rejection, no plaintext fallback, rotation/revocation, failure classes, redaction, docs/status/artifact/just/CI wiring, and checker tests
+  133-2-postgres-server-client-mtls-runtime: done  # Adds runtime-gated registry-state asyncpg mTLS wiring; production activation remains deferred until operator server evidence and approved secrets are supplied
+  133-3-certificate-rotation-revocation-flow: done  # Local runtime-gated certificate expiry, CRL revocation, hostname, approved-prefix, and rotation-warning evidence is implemented and tested; production rotation drill/operator evidence remains deferred/fail-closed
+  133-4-failure-mode-observability-tests: done  # Local sanitized failure diagnostics, bounded retry metadata, canonical failure classes, no-plaintext-fallback URL policy, registry/Alembic wiring, and checker tests are implemented; scanner/code-review/UltraQA evidence is recorded by Story 133.5 closure
+  133-5-db-mtls-closure-evidence: done  # Closure artifact records targeted pytest 75 passed, checker/self-test passed, Ruff/mypy/format passed, just gates passed, isolated mtls import ok, secret scan exit 0 with scancode warning only, code-review cycle 3 APPROVE/CLEAR, and UltraQA closure/status/checker rework evidence
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+  - date: "2026-07-07"
+    event: story-133-1-db-mtls-static-readiness-contract-local-done
+    from: planned
+    to: done
+    epic: epic-133
+    story: 133-1-db-mtls-static-readiness-contract
+    source: scoped-epic-133-static-readiness
+    operation_id: story-133-1-db-mtls-static-readiness-contract
+    operation_class: db_connection_mtls_readiness
+    target_environment: repo-static-readiness
+    target_repository_or_service: registry-state-postgres-mtls-contract
+    authority_source: .omx/specs/epic-133-db-connection-mtls-plan.md
+    dry_run_evidence_ref: scripts/check_db_mtls_readiness.py
+    approval_ref: _bmad-output/implementation-artifacts/133-db-mtls-architect-approval-cycle-3.md and _bmad-output/implementation-artifacts/133-db-mtls-critic-approval-cycle-3.md
+    request_trace_correlation_id: epic-133-db-connection-mtls
+    emergency_disable_state: fail-closed-no-production-db-mtls-activation
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 133.1 records DB connection mTLS readiness evidence only. It requires
+      exact server-side Postgres TLS evidence, approved canonical secret prefixes,
+      symlink escape rejection, no plaintext fallback, rotation/revocation drills,
+      sanitized failure classes, and closure gates. It adds runtime-gated registry-state DB
+      mTLS code, while live Postgres provisioning, production host mutation, real
+      certificate material, and deployment/profile activation remain deferred.
+    rollback_ref: revert-story-133-1-db-mtls-static-readiness-contract-diff
+    expiry_freshness: runtime-gated-entry-refresh-on-production-activation-evidence
+    status: done
+    summary: >-
+      Story 133.1 defines the DB mTLS readiness contract with runtime-gated
+      registry-state support implemented and closed locally. Verification is
+      executable through scripts/check_db_mtls_readiness.py, its self-test,
+      focused pytest, just check-gates, and CI wiring; production activation
+      remains deferred until operator server evidence and approved secrets are supplied.
 
 
   - date: "2026-07-07"

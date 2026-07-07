@@ -34,6 +34,23 @@ Design notes
 from __future__ import annotations
 
 from mtls._exceptions import MTLSConfigError
+from mtls.db import (
+    DBMTLSConfigError,
+    DBMTLSDiagnostic,
+    DBMTLSSettings,
+    build_asyncpg_connect_args,
+    build_asyncpg_ssl_context,
+    build_db_mtls_connect_args,
+    create_asyncpg_connect_args,
+    create_db_mtls_connect_args,
+    create_db_mtls_ssl_context,
+    db_mtls_enabled,
+    db_mtls_failure_record,
+    validate_certificate_hostname,
+    validate_db_mtls_database_url,
+    validate_postgres_server_contract,
+    validate_static_server_contract,
+)
 from mtls.mtls import (
     create_httpx_verify_arg,
     create_ssl_context,
@@ -42,6 +59,21 @@ from mtls.mtls import (
 from mtls.settings import MTLSSettings
 
 __all__ = [
+    "validate_static_server_contract",
+    "validate_db_mtls_database_url",
+    "db_mtls_failure_record",
+    "db_mtls_enabled",
+    "create_db_mtls_ssl_context",
+    "create_db_mtls_connect_args",
+    "build_db_mtls_connect_args",
+    "build_asyncpg_ssl_context",
+    "create_asyncpg_connect_args",
+    "build_asyncpg_connect_args",
+    "DBMTLSSettings",
+    "DBMTLSDiagnostic",
+    "DBMTLSConfigError",
+    "validate_certificate_hostname",
+    "validate_postgres_server_contract",
     "MTLSConfigError",
     "MTLSSettings",
     "create_httpx_verify_arg",

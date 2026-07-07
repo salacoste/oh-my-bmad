@@ -1600,3 +1600,49 @@ The Phase 17 Story 82.1 contract requires any future apply authorization to incl
 The Phase 17 Story 83.1 contract requires durable replay proof and rollback evidence before any future mutation. Replay proof must identify the validated hot log directory or volume, archive manifest digest, retained hot segments, archive coverage segments, validation input digest, validation timestamp, explicit snapshot/archive replay boundary, and fail-closed archive error evidence. Current routes express those implementation details through `HOT_ONLY_REPLAY` snapshot behavior and route-local archive ProblemDetails, but the durable apply invariant is explicit replay scope plus preserved fail-closed error evidence. Rollback evidence must identify backup artifacts outside the hot event-log directory, affected segment checksums/sizes, restore instructions, and restore drill evidence. Operator acknowledgement alone is not enough unless a future implementation story defines an auditable bounded risk-acceptance exception with expiry, reviewer identity, risk rationale, and affected segment scope. Missing, stale, failed, ambiguous, or unverifiable replay/rollback evidence blocks apply before mutation.
 
 Until a future apply implementation story exists, operators must treat all lifecycle output as advisory. Phase 17 documents readiness requirements only; it does not add an apply command. `get_task_history` may read validated archives when archive manifest configuration is present, but it remains a read-only query and does not authorize lifecycle apply.
+
+## DB mTLS readiness Story 133
+
+Story 133 defines runtime-gated registry-state DB mTLS support and the production-readiness contract. Run the gate with:
+
+```bash
+uv run python scripts/check_db_mtls_readiness.py
+uv run python scripts/check_db_mtls_readiness.py --self-test
+```
+
+Do not provision live Postgres or mutate production hosts for this readiness
+slice. Keep the local default profile unchanged unless `REGISTRY_DB_MTLS_ENABLED`
+is explicitly true and operator evidence is supplied. If `REGISTRY_DB_MTLS_ENABLED`
+is false, existing SQLite and no-SSL connection behavior is the only supported
+local behavior.
+
+Before any production DB mTLS activation, collect operator evidence for:
+
+1. Postgres server settings: `ssl=on`, `ssl_cert_file`, `ssl_key_file`,
+   `ssl_ca_file`, and `ssl_crl_file` or `ssl_crl_dir` when revocation is
+   claimed.
+2. Approved secret storage: server certificate, server private key, root CA,
+   client CA, client certificate, client private key, CRL/revocation material,
+   and rotation staging references resolve by canonical realpath under approved
+   prefixes such as `/run/secrets/` or `/certs/db/`; symlink escapes are rejected.
+3. Key safety: private keys are not group/world readable and owner expectations
+   are recorded for secret-mounted material.
+4. `pg_hba.conf`: application role/database uses `hostssl` plus cert-based
+   client verification with `clientcert`; no earlier matching plaintext `host`
+   rule can bypass it.
+5. Plaintext rejection: an explicit non-SSL attempt with `sslmode=disable` is
+   rejected by the server.
+6. Client behavior: registry-state and Alembic use the same asyncpg SSL context
+   builder or fail closed; diagnostics stay sanitized.
+7. Rotation/revocation: replacement certs from the approved CA, old client cert
+   rejected by server, revoked/old server cert rejected by client, old serials
+   rejected through CRL metadata, reload/restart/reconnect evidence, expiry
+   warning evidence, and rollback without private key commits.
+8. Failure handling: audit events record bounded failure classes such as
+   `invalid_ca`, `expired_cert`, `hostname_mismatch`, `missing_client_cert`,
+   `wrong_permissions`, `unreadable_material`, `plaintext_attempt`, and
+   `revoked_cert`; retry metadata is bounded and fails closed.
+
+Never log or paste passwords, private-key bytes, PEM blocks, full DSNs, full
+filesystem paths, cert/key filenames, certificate subjects/CNs, SAN hostnames,
+or production hostnames in DB mTLS diagnostics or readiness artifacts.

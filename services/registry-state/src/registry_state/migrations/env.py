@@ -23,6 +23,7 @@ from logging.config import fileConfig
 from typing import Any
 
 from alembic import context
+from mtls.db import build_db_mtls_connect_args
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
@@ -79,6 +80,18 @@ def _resolve_url() -> str:
 config.set_main_option("sqlalchemy.url", _resolve_url())
 
 
+def build_migration_engine_kwargs(url: str | None = None) -> dict[str, Any]:
+    """Return Alembic engine kwargs, including DB mTLS asyncpg SSL when enabled."""
+    resolved_url = url if url is not None else (config.get_main_option("sqlalchemy.url") or "")
+    kwargs: dict[str, Any] = {}
+    connect_args = build_db_mtls_connect_args(resolved_url)
+    if connect_args:
+        kwargs["connect_args"] = connect_args
+    if not resolved_url.startswith(_POSTGRES_PREFIX):
+        kwargs["poolclass"] = pool.NullPool
+    return kwargs
+
+
 def do_run_migrations(connection: Connection) -> None:
     """Synchronous inner function passed to ``connection.run_sync``."""
     context.configure(connection=connection, target_metadata=target_metadata)
@@ -94,10 +107,7 @@ async def run_migrations_online() -> None:
     connection management.
     """
     url = config.get_main_option("sqlalchemy.url") or ""
-    kwargs: dict[str, Any] = {}
-    if not url.startswith(_POSTGRES_PREFIX):
-        # SQLite path: NullPool avoids "database is locked" surprises.
-        kwargs["poolclass"] = pool.NullPool
+    kwargs = build_migration_engine_kwargs(url)
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section) or {},
         prefix="sqlalchemy.",

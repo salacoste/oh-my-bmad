@@ -38,7 +38,9 @@ not start with ``postgresql+asyncpg://`` is routed to the SQLite path.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
 
+from mtls.db import build_db_mtls_connect_args
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -81,9 +83,16 @@ def create_engine(
         ValueError: If ``read_only=True`` with a non-``sqlite+aiosqlite://``
             URL or with an in-memory SQLite path.
     """
+    # Fail closed for SQLite/non-asyncpg URLs when DB mTLS is explicitly enabled.
+    connect_args = build_db_mtls_connect_args(url)
     if url.startswith("postgresql+asyncpg://"):
-        return _create_postgres_engine(url, read_only=read_only, worker_count=worker_count)
-    # Default: SQLite path (P6-I1 backward compat)
+        return _create_postgres_engine(
+            url,
+            read_only=read_only,
+            worker_count=worker_count,
+            connect_args=connect_args,
+        )
+    # Default: SQLite path (P6-I1 backward compat) when DB mTLS is disabled.
     return _create_sqlite_engine(url, read_only=read_only)
 
 
@@ -92,17 +101,22 @@ def _create_postgres_engine(
     *,
     read_only: bool,
     worker_count: int,
+    connect_args: dict[str, Any],
 ) -> AsyncEngine:
     """Create an ``AsyncEngine`` for Postgres with connection pooling."""
     if read_only:
-        raise ValueError(f"read_only=True requires a sqlite+aiosqlite URL; got {url!r}")
+        raise ValueError("read_only=True requires a sqlite+aiosqlite URL; got postgresql+asyncpg")
     pool_size = 5 + 2 * worker_count
+    kwargs: dict[str, Any] = {}
+    if connect_args:
+        kwargs["connect_args"] = connect_args
     return create_async_engine(
         url,
         pool_size=pool_size,
         max_overflow=5,
         pool_pre_ping=True,
         future=True,
+        **kwargs,
     )
 
 
@@ -117,7 +131,10 @@ def _create_sqlite_engine(url: str, *, read_only: bool) -> AsyncEngine:
         # URL query string — the dialect promotes it to a sqlite3 kwarg.
         prefix = "sqlite+aiosqlite:///"
         if not url.startswith(prefix):
-            raise ValueError(f"read_only=True requires a sqlite+aiosqlite URL; got {url!r}")
+            raise ValueError(
+                "read_only=True requires a sqlite+aiosqlite URL; "
+                f"got scheme {_safe_url_scheme(url)}"
+            )
         path_part = url[len(prefix) :]
         if path_part == ":memory:" or path_part.startswith(":memory:"):
             raise ValueError("read_only=True is incompatible with in-memory SQLite")
@@ -142,6 +159,12 @@ def _create_sqlite_engine(url: str, *, read_only: bool) -> AsyncEngine:
         cursor.close()
 
     return engine
+
+
+def _safe_url_scheme(url: str) -> str:
+    """Return a URL scheme label safe for diagnostics (no host/userinfo/path)."""
+    scheme = urlsplit(url).scheme or "<missing>"
+    return repr(scheme)
 
 
 def get_session(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

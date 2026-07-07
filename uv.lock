@@ -1972,11 +1972,17 @@ name = "mtls"
 version = "0.1.0"
 source = { editable = "packages/mtls" }
 dependencies = [
+    { name = "cryptography" },
     { name = "pydantic" },
+    { name = "structlog" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "pydantic", specifier = ">=2.0" }]
+requires-dist = [
+    { name = "cryptography", specifier = ">=48.0.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "structlog", specifier = ">=24.1" },
+]
 
 [[package]]
 name = "multidict"
@@ -2982,23 +2988,19 @@ source = { editable = "services/registry-state" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "alembic" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-]
-
-[package.dev-dependencies]
-dev = [
     { name = "asyncpg" },
+    { name = "mtls" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "alembic", specifier = ">=1.13" },
+    { name = "asyncpg", specifier = ">=0.30" },
+    { name = "mtls", editable = "packages/mtls" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.30" },
 ]
-
-[package.metadata.requires-dev]
-dev = [{ name = "asyncpg", specifier = ">=0.30" }]
 
 [[package]]
 name = "replay"

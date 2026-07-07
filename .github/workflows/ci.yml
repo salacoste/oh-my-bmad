@@ -89,6 +89,9 @@ jobs:
       - name: Check split deployment topology readiness (Story 132.1)
         run: uv run python scripts/check_split_deployment_topology.py
 
+      - name: Check DB mTLS readiness (Epic 133)
+        run: uv run python scripts/check_db_mtls_readiness.py
+
       - name: Check-scripts self-tests
         run: |
           uv run python scripts/check_imports.py --self-test
@@ -106,6 +109,7 @@ jobs:
           uv run python scripts/check_production_command_surface.py --self-test
           uv run python scripts/check_production_operations_closure.py --self-test
           uv run python scripts/check_split_deployment_topology.py --self-test
+          uv run python scripts/check_db_mtls_readiness.py --self-test
 
       - name: Check secrets (full tree)
         run: git ls-files -z | xargs -0 uv run secret-hygiene-precommit

@@ -342,3 +342,44 @@ evidence.
 
 Epic 129/PR #100 docs reconciliation was merged separately; this
 production-operations contract does not reclassify Epic 129 support or PR #100 status.
+
+## Epic 133 DB connection mTLS readiness
+
+Epic 133 adds runtime-gated registry-state DB mTLS support plus a production-readiness contract in
+`docs/db-mtls-readiness.json` and enforces it with:
+
+```bash
+uv run python scripts/check_db_mtls_readiness.py
+```
+
+This is not production activation. The current local SQLite/default profile remains
+unchanged while DB mTLS is disabled. When `REGISTRY_DB_MTLS_ENABLED=true`,
+registry-state must fail closed unless the database URL is
+`postgresql+asyncpg://` and the DB-specific mTLS material is supplied through
+approved secret locations. SQLite, non-Postgres URLs, non-asyncpg Postgres URLs,
+and insecure sslmode values including `sslmode=disable` must be rejected rather
+than silently downgrading to plaintext.
+
+The operator evidence contract for remote Postgres requires exact server-side
+proof before activation: `ssl=on`, `ssl_cert_file`, `ssl_key_file`,
+`ssl_ca_file`, and `ssl_crl_file` or `ssl_crl_dir` whenever revocation is
+claimed. Server certificate, server private key, root CA, client CA, CRL, and
+rotation staging references must resolve by canonical realpath under approved
+secret prefixes such as `/run/secrets/` or `/certs/db/`; symlink escapes fail
+closed. `pg_hba.conf` evidence must target the application role/database with
+`hostssl`, cert-based client verification using `clientcert`, no earlier
+matching plaintext `host` bypass rule, and explicit server rejection of a
+non-SSL attempt.
+
+Runtime CRL checks are code-gated for the client path; production rotation and revocation evidence remains an operator gate: replacement server and
+client certificates from the approved CA, distribution only through approved
+secret locations, safe reconnect after staged replacement, old client
+certificate rejection by the server, revoked/old server certificate rejection by
+the registry-state client, old serial rejection through CRL metadata, reload or
+restart evidence, expiry warnings, and rollback that never commits private key
+material or mutates production hosts during local validation.
+
+The contract composes with Epic 132 split deployment/remote Postgres topology:
+remote Postgres can be described as future topology evidence, but DB mTLS must
+not be treated as live until the checker, runtime implementation, scanner,
+code-review, and UltraQA gates produce explicit closure evidence.
