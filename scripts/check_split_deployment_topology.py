@@ -298,6 +298,10 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
             r"postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
             r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\?|\s|['\"}\]]|$))"
             r"[^\s'\"]+|"
+            r"\bvalue\s*:\s*['\"]?postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
+            r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\?|\s|['\"}\]]|$))"
+            r"[^\s'\"]+(?:\n|.){0,160}?\bname\s*:\s*(?:['\"])?"
+            r"(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)(?:['\"])?|"
             r"\b(?:POSTGRES_HOST|PGHOST)\b[\s'\"\]]*[:=]\s*['\"]?"
             r"(?!(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|\s|['\"}\]]|$))[^\s'\"]+"
         ),
