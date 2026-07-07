@@ -24,6 +24,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT_PATH = Path("docs/split-deployment-topology-readiness.json")
@@ -172,7 +173,6 @@ SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"gh[pousr]_[A-Za-z0-9_]{20,}"),
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
     re.compile(r"AKIA[0-9A-Z]{16}"),
-    re.compile(r"postgres(?:ql)?://[^\s:/@]+:[^\s/@]{8,}@", re.IGNORECASE),
     re.compile(r"(?i)\b(?:password|secret|token)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{24,}"),
 )
 OVERCLAIM_SUBJECT_PATTERN = r"(?:split[-_ ]deployment|remote[-_ ]postgres)"
@@ -294,10 +294,10 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
             r"REMOTE_PG_DSN)\b|"
             r"\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b[\s'\"\]]*[:=]\s*['\"]?"
             r"postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
-            r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\s|$))"
+            r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\s|['\"}\]]|$))"
             r"[^\s'\"]+|"
             r"\b(?:POSTGRES_HOST|PGHOST)\b[\s'\"\]]*[:=]\s*['\"]?"
-            r"(?!(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|\s|$))[^\s'\"]+"
+            r"(?!(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|\s|['\"}\]]|$))[^\s'\"]+"
         ),
         (
             ".py",
@@ -368,8 +368,32 @@ def _walk_strings(value: object) -> Iterable[str]:
             yield from _walk_strings(item)
 
 
+POSTGRES_URL_PATTERN = re.compile(r"""(?i)\bpostgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://[^\s'"<>]+""")
+PLACEHOLDER_PASSWORDS = frozenset({"password", "example", "changeme", "placeholder"})
+LOCAL_POSTGRES_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+def _postgres_url_contains_secret(value: str) -> bool:
+    for match in POSTGRES_URL_PATTERN.finditer(value):
+        try:
+            parsed = urlsplit(match.group(0))
+        except ValueError:
+            continue
+        password = parsed.password or ""
+        hostname = parsed.hostname or ""
+        if (
+            len(password) >= 8
+            and password.lower() not in PLACEHOLDER_PASSWORDS
+            and hostname.lower() not in LOCAL_POSTGRES_HOSTS
+        ):
+            return True
+    return False
+
+
 def _contains_secret_value(value: str) -> bool:
-    return any(pattern.search(value) for pattern in SECRET_VALUE_PATTERNS)
+    return _postgres_url_contains_secret(value) or any(
+        pattern.search(value) for pattern in SECRET_VALUE_PATTERNS
+    )
 
 
 def _ref_path(ref: str) -> str:

@@ -355,6 +355,23 @@ def test_secret_like_value_fails(tmp_path: Path) -> None:
     assert any("credential" in v.message or "secret-like" in v.message for v in violations)
 
 
+@pytest.mark.parametrize(
+    "secret_url",
+    [
+        "postgresql+asyncpg://app:supersecretpassword@example.invalid:5432/app",
+        "postgresql+psycopg://app:supersecretpassword@example.invalid:5432/app",
+    ],
+)
+def test_driver_qualified_postgres_secret_like_value_fails(tmp_path: Path, secret_url: str) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    data = _load_contract(tmp_path, mod)
+    data["example_secret"] = secret_url
+    _write_contract(tmp_path, mod, data)
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("credential" in v.message or "secret-like" in v.message for v in violations)
+
+
 def test_missing_docs_status_references_fail(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
@@ -600,11 +617,14 @@ def test_forbidden_runtime_expansion_surfaces_fail(
         (".env.production", "DATABASE_URL=postgres://127.0.0.1:5432/app\n"),
         (".env.production", "DATABASE_URL=postgres://[::1]:5432/app\n"),
         (".env.production", "POSTGRES_HOST=localhost\n"),
+        (".env.production", 'PGHOST="localhost"\n'),
+        ("config/runtime.json", '{"PGHOST":"localhost"}'),
         (".env.production", "POSTGRES_HOST=127.0.0.1\n"),
         (".env.production", "POSTGRES_HOST=localhost:5432\n"),
         (".env.production", "POSTGRES_HOST=127.0.0.1:5432\n"),
         (".env.production", "POSTGRES_HOST=[::1]\n"),
         ("config/runtime.json", '{"DATABASE_URL":"postgres://localhost:5432/app"}'),
+        ("config/runtime.json", '{"DATABASE_URL":"postgres://localhost"}'),
     ],
 )
 def test_local_postgres_dsn_and_host_values_do_not_false_positive(
