@@ -515,6 +515,16 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
             "DATABASE_URL = 'postgres://prod-db.example.invalid/app'",
             "connection code",
         ),
+        (
+            "packages/replay/src/replay/db.py",
+            'os.environ["DATABASE_URL"] = "postgres://prod-db.example.invalid/app"',
+            "connection code",
+        ),
+        (
+            "config/runtime.json",
+            '{"DATABASE_URL":"postgres://prod-db.example.invalid/app"}',
+            "connection code",
+        ),
         (".env.production", "DATABASE_URL=postgres://192.0.2.10/app", "connection code"),
         (
             ".env.production",
@@ -526,6 +536,7 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
         (".env.production", "POSTGRES_HOST=192.0.2.10", "connection code"),
         (".env.production", "PGHOST=remote-postgres.example.invalid", "connection code"),
         (".env.production", "PGHOST=prod-db.example.invalid", "connection code"),
+        ("config/runtime.json", '{"PGHOST": "prod-db.example.invalid"}', "connection code"),
         (
             ".env.production",
             "POSTGRES_URL=postgres://remote-postgres.example.invalid/app",
@@ -534,6 +545,11 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
         (
             ".env.production",
             "POSTGRES_URL=postgres://prod-db.example.invalid/app",
+            "connection code",
+        ),
+        (
+            "config/runtime.toml",
+            '"POSTGRES_URL" = "postgres://prod-db.example.invalid/app"',
             "connection code",
         ),
         (
@@ -556,3 +572,27 @@ def test_forbidden_runtime_expansion_surfaces_fail(
     target.write_text(content, encoding="utf-8")
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any(expected in v.message for v in violations)
+
+
+@pytest.mark.parametrize(
+    ("relpath", "content"),
+    [
+        (".env.production", "DATABASE_URL=postgres://localhost:5432/app\n"),
+        (".env.production", "DATABASE_URL=postgres://127.0.0.1:5432/app\n"),
+        (".env.production", "DATABASE_URL=postgres://[::1]:5432/app\n"),
+        (".env.production", "POSTGRES_HOST=localhost\n"),
+        (".env.production", "POSTGRES_HOST=127.0.0.1\n"),
+        (".env.production", "POSTGRES_HOST=[::1]\n"),
+        ("config/runtime.json", '{"DATABASE_URL":"postgres://localhost:5432/app"}'),
+    ],
+)
+def test_local_postgres_dsn_and_host_values_do_not_false_positive(
+    tmp_path: Path, relpath: str, content: str
+) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    target = tmp_path / relpath
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert not any("connection code" in v.message for v in violations)
