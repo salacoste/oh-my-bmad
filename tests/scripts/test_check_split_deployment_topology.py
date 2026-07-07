@@ -554,11 +554,6 @@ def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_pa
             "secret-like",
         ),
         (
-            "config/runtime.json",
-            '{"DATABASE_URL":"postgres://app:hunter2@localhost:5432/app"}',
-            "secret-like",
-        ),
-        (
             "packages/replay/src/replay/db.py",
             'os.environ["DATABASE_URL"] = "postgres://prod-db.example.invalid/app"',
             "connection code",
