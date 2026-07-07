@@ -1,0 +1,180 @@
+{
+  "version": 1,
+  "story": "132.1",
+  "epic": "132",
+  "mode": "static_readiness_only",
+  "production_activation": "deferred_fail_closed",
+  "operation_class": "split_deployment_remote_postgres_topology_contract",
+  "summary": "Static/readiness-only topology contract for future split deployment and remote Postgres work. Current single-host compose/local defaults remain authoritative and no runtime deployment behavior is enabled by this story.",
+  "checker": "scripts/check_split_deployment_topology.py",
+  "current_default_preservation": {
+    "status": "preserved",
+    "required_statement": "Current single-host/local compose defaults remain the only supported runtime topology for Story 132.1.",
+    "single_host_default": true,
+    "no_compose_profile_change": true,
+    "no_env_activation_flag": true,
+    "no_remote_postgres_connection_code": true,
+    "future_activation_requires_new_story": true
+  },
+  "service_placement": {
+    "status": "contract_only",
+    "required_services": [
+      "registry_api",
+      "registry_state",
+      "telegram_gateway",
+      "orchestrator_adapter",
+      "worker_wrapper",
+      "clawhip_daemon"
+    ],
+    "placement_rules": [
+      "Only one registry_state writer placement may own mutable state at a time.",
+      "clawhip_daemon placement must be explicit before any split profile can activate.",
+      "worker_wrapper and orchestrator_adapter placement must preserve task idempotency and lock ownership.",
+      "telegram_gateway ingress placement must not bypass registry_api authorization boundaries."
+    ]
+  },
+  "network_boundaries": {
+    "status": "contract_only",
+    "required_boundaries": [
+      "public ingress terminates before registry_api",
+      "internal service-to-service traffic stays on an explicitly named private network",
+      "database traffic is restricted to approved application writers/readers",
+      "clawhip_daemon network reachability is explicit and least-privilege",
+      "external host commands are not introduced by this story"
+    ]
+  },
+  "remote_postgres_data_authority": {
+    "status": "deferred_fail_closed",
+    "authority_rules": [
+      "remote Postgres is a future data authority only after a later approved activation story",
+      "current local database defaults remain authoritative for runtime behavior",
+      "schema migrations require single-writer ownership and backup evidence before remote execution",
+      "event-log append authority must stay append-only and auditable across topology changes"
+    ],
+    "data_boundary_coverage": [
+      "state mutation authority",
+      "append-only event-log authority",
+      "migration authority",
+      "backup and restore authority",
+      "read replica or analytics authority remains unsupported until separately approved"
+    ]
+  },
+  "pooling_migration_backup_prerequisites": {
+    "status": "future_required_evidence",
+    "pooling": [
+      "connection pool ownership and max-connection budget per service",
+      "transaction timeout and retry semantics",
+      "pooler failover behavior and observability"
+    ],
+    "migration": [
+      "single migration runner identity",
+      "pre-migration backup evidence",
+      "rollback or fix-forward plan",
+      "schema compatibility window for every service placement"
+    ],
+    "backup": [
+      "remote backup schedule and restore drill evidence",
+      "checksum or integrity evidence",
+      "retention and access-scope evidence",
+      "fallback to current single-host default documented before activation"
+    ]
+  },
+  "ingress": {
+    "status": "contract_only",
+    "requirements": [
+      "public ingress routes only to approved edge services",
+      "registry_api remains the control boundary for production operations",
+      "dashboard or command-surface activation is not added by this story"
+    ]
+  },
+  "secrets_handling": {
+    "status": "metadata_only",
+    "requirements": [
+      "no real secret values in contract docs tests or status artifacts",
+      "remote database credentials must come from a future approved secret store contract",
+      "connection strings with embedded passwords are forbidden in repository files",
+      "Story 131.2 credential readiness remains the production credential boundary"
+    ]
+  },
+  "observability": {
+    "status": "future_required_evidence",
+    "requirements": [
+      "per-service topology identity labels",
+      "database connection pool metrics",
+      "migration and backup audit evidence",
+      "network-boundary health checks",
+      "event-log append and idempotency-lock metrics"
+    ]
+  },
+  "unsupported_topologies": {
+    "status": "fail_closed",
+    "entries": [
+      "multi-writer registry_state",
+      "multiple migration runners",
+      "remote Postgres without backup and restore evidence",
+      "read/write split without explicit consistency semantics",
+      "clawhip_daemon omitted from placement decisions",
+      "ad hoc external host networking commands",
+      "compose profile activation in Story 132.1"
+    ]
+  },
+  "rollback_fallback": {
+    "status": "future_required_evidence",
+    "requirements": [
+      "fallback to current single-host/local default remains documented",
+      "rollback identifies previous image and configuration references",
+      "remote database rollback requires backup restore or fix-forward evidence",
+      "split topology activation must be reversible before any production use"
+    ]
+  },
+  "db_mtls_deferment": {
+    "status": "deferred_to_epic_133",
+    "epic": "133",
+    "required_statement": "Database mTLS design and activation are deferred to Epic 133 and are not implemented by Story 132.1."
+  },
+  "core_invariants": {
+    "single_writer_state_mutation": "Exactly one state mutation writer may be authoritative before any future split profile can activate.",
+    "append_only_event_log_authority": "Event-log authority remains append-only; topology changes must not rewrite or fork event history.",
+    "idempotency_and_locking": "Task idempotency keys and distributed lock ownership must be preserved across service placement and database boundaries.",
+    "capability_tiers": "Capability tiers and production-operation approvals remain enforced before split topology commands or writes can exist."
+  },
+  "forbidden_runtime_expansion_surfaces": [
+    "compose profile or compose overlay activation",
+    "environment activation flag for split deployment or remote Postgres",
+    "new deploy target for split deployment or remote Postgres",
+    "migration runner for remote Postgres",
+    "service route activation for topology or database switching",
+    "Dockerfile activation for split deployment",
+    "remote Postgres connection code or DSN defaults",
+    "external host or network command surface"
+  ],
+  "fail_closed_checks": [
+    "contract remains static_readiness_only",
+    "current single-host default is preserved",
+    "unsupported topologies are explicitly fail-closed",
+    "DB mTLS is deferred to Epic 133",
+    "no live split deployment or remote Postgres support is claimed",
+    "no runtime/deployment expansion surface is added by Story 132.1",
+    "mandatory justfile and CI checker wiring is present"
+  ],
+  "non_goals": [
+    "no live split deployment activation",
+    "no remote Postgres connection code",
+    "no docker compose profile or overlay activation",
+    "no deployment target or external host command",
+    "no migration runner or database migration execution",
+    "no service route or command surface activation",
+    "no Dockerfile behavior change",
+    "no DB mTLS implementation before Epic 133"
+  ],
+  "docs_refs": [
+    "docs/operator-runbook.md#split-deployment-and-remote-postgres-topology-readiness-story-1321",
+    "docs/production-operations.md#epic-132-split-deployment-and-remote-postgres-readiness",
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/132-1-split-deployment-remote-postgres-topology-contract.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}
