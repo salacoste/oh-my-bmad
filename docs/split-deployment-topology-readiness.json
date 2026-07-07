@@ -170,11 +170,11 @@
   "docs_refs": [
     "docs/operator-runbook.md#split-deployment-and-remote-postgres-topology-readiness-story-1321",
     "docs/production-operations.md#epic-132-split-deployment-and-remote-postgres-readiness",
-    "docs/feature-status.md",
-    "_bmad-output/implementation-artifacts/132-1-split-deployment-remote-postgres-topology-contract.md"
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/132-1-split-deployment-remote-postgres-topology-contract.md#summary"
   ],
   "status_refs": [
-    "_bmad-output/implementation-artifacts/sprint-status.yaml",
-    "docs/feature-status.md"
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
   ]
 }

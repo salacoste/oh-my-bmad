@@ -103,6 +103,35 @@ def test_missing_service_placement_fails(tmp_path: Path) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("section", "bad_status"),
+    [
+        ("service_placement", "implemented"),
+        ("service_placement", "active"),
+        ("network_boundaries", "implemented"),
+        ("network_boundaries", "active"),
+        ("remote_postgres_data_authority", "implemented"),
+        ("remote_postgres_data_authority", "active"),
+        ("pooling_migration_backup_prerequisites", "implemented"),
+        ("pooling_migration_backup_prerequisites", "active"),
+        ("rollback_fallback", "implemented"),
+        ("rollback_fallback", "active"),
+    ],
+)
+def test_guarded_contract_section_implemented_or_active_status_fails(
+    tmp_path: Path, section: str, bad_status: str
+) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    data = _load_contract(tmp_path, mod)
+    section_data = data[section]
+    assert isinstance(section_data, dict)
+    section_data["status"] = bad_status
+    _write_contract(tmp_path, mod, data)
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any(f"{section} status must be" in v.message for v in violations)
+
+
 def test_missing_network_boundary_fails(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
@@ -248,6 +277,18 @@ def test_missing_docs_status_references_fail(tmp_path: Path) -> None:
     assert any("status_refs missing" in v.message for v in violations)
 
 
+def test_stale_docs_anchor_fails(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    data = _load_contract(tmp_path, mod)
+    docs_refs = data["docs_refs"]
+    assert isinstance(docs_refs, list)
+    docs_refs[0] = "docs/operator-runbook.md#stale-split-deployment-anchor"
+    _write_contract(tmp_path, mod, data)
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("referenced markdown anchor does not exist" in v.message for v in violations)
+
+
 def test_missing_mandatory_justfile_and_ci_wiring_fails(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
@@ -266,11 +307,31 @@ def test_missing_mandatory_justfile_and_ci_wiring_fails(tmp_path: Path) -> None:
     assert any("CI missing" in v.message for v in violations)
 
 
+def test_ci_missing_normal_checker_step_fails_even_with_self_test_present(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    ci = tmp_path / mod.CI_PATH  # type: ignore[attr-defined]
+    ci.write_text(
+        ci.read_text(encoding="utf-8").replace(
+            "      - name: Check split deployment topology readiness (Story 132.1)\n"
+            "        run: uv run python scripts/check_split_deployment_topology.py\n\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("CI missing split topology checker step" in v.message for v in violations)
+    assert not any("CI missing split topology checker self-test" in v.message for v in violations)
+
+
 @pytest.mark.parametrize(
     ("relpath", "content", "expected"),
     [
         ("docker-compose.split.yml", "services: {} # split deployment", "compose profile/overlay"),
+        ("compose.yaml", "services: {} # split deployment", "compose profile/overlay"),
         (".env.production", "SPLIT_DEPLOYMENT_ENABLED=true", "environment activation"),
+        ("pyproject.toml", "REMOTE_POSTGRES_ENABLED=true", "environment activation"),
         ("justfile", "deploy-split:\n    echo nope\n", "deploy target"),
         ("scripts/run_remote_pg.py", "remote_postgres_migration_runner = True", "migration runner"),
         ("services/registry-api/routes.py", "'/remote-postgres/enable'", "service route"),

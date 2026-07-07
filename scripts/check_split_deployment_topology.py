@@ -93,13 +93,18 @@ REQUIRED_FORBIDDEN_SURFACES = frozenset(
 )
 REQUIRED_DOC_REFS = frozenset(
     {
-        str(OPERATOR_RUNBOOK_PATH),
-        str(PRODUCTION_OPS_PATH),
-        str(FEATURE_STATUS_PATH),
-        str(ARTIFACT_PATH),
+        f"{OPERATOR_RUNBOOK_PATH}#split-deployment-and-remote-postgres-topology-readiness-story-1321",
+        f"{PRODUCTION_OPS_PATH}#epic-132-split-deployment-and-remote-postgres-readiness",
+        f"{FEATURE_STATUS_PATH}#current-bmad-status",
+        f"{ARTIFACT_PATH}#summary",
     }
 )
-REQUIRED_STATUS_REFS = frozenset({str(SPRINT_STATUS_PATH), str(FEATURE_STATUS_PATH)})
+REQUIRED_STATUS_REFS = frozenset(
+    {
+        f"{SPRINT_STATUS_PATH}#development_status",
+        f"{FEATURE_STATUS_PATH}#current-bmad-status",
+    }
+)
 REQUIRED_DEFAULT_PRESERVATION_FLAGS = (
     "single_host_default",
     "no_compose_profile_change",
@@ -107,6 +112,13 @@ REQUIRED_DEFAULT_PRESERVATION_FLAGS = (
     "no_remote_postgres_connection_code",
     "future_activation_requires_new_story",
 )
+REQUIRED_SECTION_STATUSES = {
+    "service_placement": "contract_only",
+    "network_boundaries": "contract_only",
+    "remote_postgres_data_authority": "deferred_fail_closed",
+    "pooling_migration_backup_prerequisites": "future_required_evidence",
+    "rollback_fallback": "future_required_evidence",
+}
 REQUIRED_INGRESS_PHRASES = (
     "public ingress",
     "approved edge services",
@@ -176,24 +188,39 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
     (
         "compose profile/overlay activation",
         re.compile(r"(?i)\b(?:split[-_ ]deployment|remote[-_ ]postgres)\b"),
-        ("docker-compose", ".compose."),
+        ("docker-compose", ".compose.", "compose.yaml", "compose.yml"),
     ),
     (
         "environment activation flag",
         re.compile(
             r"(?i)\b(?:SPLIT_DEPLOYMENT_ENABLED|REMOTE_POSTGRES_ENABLED|ENABLE_REMOTE_POSTGRES)\b"
         ),
-        (".env", "justfile", ".yml", ".yaml", ".py", ".ts", ".js"),
+        (
+            ".env",
+            "justfile",
+            ".yml",
+            ".yaml",
+            ".toml",
+            ".json",
+            ".ini",
+            ".cfg",
+            ".sh",
+            ".bash",
+            ".zsh",
+            ".py",
+            ".ts",
+            ".js",
+        ),
     ),
     (
         "deploy target",
         re.compile(r"(?im)^deploy-(?:split|remote-postgres|split-deployment)\b"),
-        ("justfile",),
+        ("justfile", ".sh", ".bash", ".zsh"),
     ),
     (
         "migration runner",
         re.compile(r"(?i)\b(?:remote_postgres_migration_runner|migrate-remote-postgres)\b"),
-        ("justfile", ".py", ".sh"),
+        ("justfile", ".py", ".sh", ".bash", ".zsh"),
     ),
     (
         "service route activation",
@@ -208,12 +235,26 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
     (
         "remote Postgres connection code",
         re.compile(r"(?i)\b(?:REMOTE_POSTGRES_URL|REMOTE_DATABASE_URL|remote_postgres_dsn)\b"),
-        (".py", ".ts", ".js", ".env", ".yml", ".yaml"),
+        (
+            ".py",
+            ".ts",
+            ".js",
+            ".sh",
+            ".bash",
+            ".zsh",
+            ".env",
+            ".yml",
+            ".yaml",
+            ".toml",
+            ".json",
+            ".ini",
+            ".cfg",
+        ),
     ),
     (
         "external host/network command surface",
         re.compile(r"(?i)\b(?:ssh\s+.*remote-postgres|tailscale\s+.*split|scp\s+.*postgres)\b"),
-        ("justfile", ".sh", ".md"),
+        ("justfile", ".sh", ".bash", ".zsh", ".md"),
     ),
 )
 FORBIDDEN_SCAN_EXCLUDE_PREFIXES = (
@@ -271,6 +312,65 @@ def _ref_path(ref: str) -> str:
     return ref.split("#", 1)[0]
 
 
+def _ref_anchor(ref: str) -> str:
+    return ref.split("#", 1)[1] if "#" in ref else ""
+
+
+def _github_heading_anchor(heading: str) -> str:
+    anchor = heading.strip().lower()
+    anchor = re.sub(r"[^\w\s-]", "", anchor)
+    anchor = re.sub(r"\s", "-", anchor)
+    return anchor
+
+
+def _markdown_heading_anchors(text: str) -> set[str]:
+    anchors: set[str] = set()
+    seen: dict[str, int] = {}
+    for line in text.splitlines():
+        match = re.match(r"^#{1,6}\s+(.+?)\s*#*\s*$", line)
+        if not match:
+            continue
+        base_anchor = _github_heading_anchor(match.group(1))
+        count = seen.get(base_anchor, 0)
+        seen[base_anchor] = count + 1
+        anchors.add(base_anchor if count == 0 else f"{base_anchor}-{count}")
+    return anchors
+
+
+def _structured_text_anchor_exists(text: str, anchor: str) -> bool:
+    key_pattern = re.compile(rf"(?m)^\s*{re.escape(anchor)}\s*:")
+    return bool(key_pattern.search(text))
+
+
+def _validate_ref_target(root: Path, ref: str) -> list[Violation]:
+    relpath = _ref_path(ref)
+    anchor = _ref_anchor(ref)
+    if not relpath:
+        return [Violation(str(CONTRACT_PATH), f"reference missing file path: {ref!r}")]
+
+    path = root / relpath
+    if not path.exists():
+        return [Violation(str(CONTRACT_PATH), f"referenced file does not exist: {relpath}")]
+    if not anchor:
+        return [
+            Violation(
+                str(CONTRACT_PATH), f"referenced docs/status entry must include an anchor: {ref}"
+            )
+        ]
+
+    text = path.read_text(encoding="utf-8")
+    if path.suffix == ".md":
+        if anchor not in _markdown_heading_anchors(text):
+            return [
+                Violation(str(CONTRACT_PATH), f"referenced markdown anchor does not exist: {ref}")
+            ]
+    elif not _structured_text_anchor_exists(text, anchor):
+        return [
+            Violation(str(CONTRACT_PATH), f"referenced structured anchor does not exist: {ref}")
+        ]
+    return []
+
+
 def _section(data: dict[str, Any], name: str) -> Mapping[str, Any]:
     value = data.get(name)
     return value if isinstance(value, Mapping) else {}
@@ -284,6 +384,14 @@ def _string_set(value: object) -> set[str]:
 
 def _lower_text(value: object) -> str:
     return "\n".join(_walk_strings(value)).lower()
+
+
+def _validate_section_status(data: dict[str, Any], name: str) -> list[Violation]:
+    expected_status = REQUIRED_SECTION_STATUSES[name]
+    actual_status = _section(data, name).get("status")
+    if actual_status != expected_status:
+        return [Violation(str(CONTRACT_PATH), f"{name} status must be {expected_status}")]
+    return []
 
 
 def _validate_requirements_section(
@@ -335,6 +443,8 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
                 str(CONTRACT_PATH), f"required topology sections missing {sorted(missing_sections)}"
             )
         )
+    for section_name in REQUIRED_SECTION_STATUSES:
+        violations.extend(_validate_section_status(data, section_name))
 
     current_default = _section(data, "current_default_preservation")
     for flag in REQUIRED_DEFAULT_PRESERVATION_FLAGS:
@@ -511,23 +621,20 @@ def _validate_contract(root: Path, data: dict[str, Any]) -> list[Violation]:
         if phrase not in non_goals:
             violations.append(Violation(str(CONTRACT_PATH), f"non_goals missing {phrase!r}"))
 
-    doc_refs = {_ref_path(ref) for ref in _string_set(data.get("docs_refs"))}
+    doc_refs = _string_set(data.get("docs_refs"))
     missing_doc_refs = REQUIRED_DOC_REFS - doc_refs
     if missing_doc_refs:
         violations.append(
             Violation(str(CONTRACT_PATH), f"docs_refs missing {sorted(missing_doc_refs)}")
         )
-    status_refs = {_ref_path(ref) for ref in _string_set(data.get("status_refs"))}
+    status_refs = _string_set(data.get("status_refs"))
     missing_status_refs = REQUIRED_STATUS_REFS - status_refs
     if missing_status_refs:
         violations.append(
             Violation(str(CONTRACT_PATH), f"status_refs missing {sorted(missing_status_refs)}")
         )
     for ref in doc_refs | status_refs:
-        if ref and not (root / ref).exists():
-            violations.append(
-                Violation(str(CONTRACT_PATH), f"referenced file does not exist: {ref}")
-            )
+        violations.extend(_validate_ref_target(root, ref))
 
     for value in _walk_strings(data):
         if _contains_secret_value(value):
@@ -559,6 +666,17 @@ def _validate_docs_and_status(root: Path) -> list[Violation]:
     return violations
 
 
+def _contains_exact_command(text: str, command: str) -> bool:
+    for line in text.splitlines():
+        candidate = line.strip()
+        if candidate.startswith("run:"):
+            candidate = candidate.removeprefix("run:").strip()
+        candidate = candidate.split("#", 1)[0].strip()
+        if candidate == command:
+            return True
+    return False
+
+
 def _validate_wiring(root: Path) -> list[Violation]:
     violations: list[Violation] = []
     justfile = _read(root, JUSTFILE_PATH)
@@ -580,9 +698,9 @@ def _validate_wiring(root: Path) -> list[Violation]:
         violations.append(
             Violation(str(JUSTFILE_PATH), "check-gates-self-test missing split topology self-test")
         )
-    if CHECKER_COMMAND not in ci:
+    if not _contains_exact_command(ci, CHECKER_COMMAND):
         violations.append(Violation(str(CI_PATH), "CI missing split topology checker step"))
-    if CHECKER_SELF_TEST_COMMAND not in ci:
+    if not _contains_exact_command(ci, CHECKER_SELF_TEST_COMMAND):
         violations.append(Violation(str(CI_PATH), "CI missing split topology checker self-test"))
     return violations
 
@@ -616,7 +734,34 @@ def _should_scan_runtime_file(relpath: Path) -> bool:
     rel = relpath.as_posix()
     if any(rel.startswith(prefix) for prefix in FORBIDDEN_SCAN_EXCLUDE_PREFIXES):
         return False
-    return (not rel.startswith(".")) or rel.startswith((".github/", ".env"))
+    return _is_relevant_runtime_text_file(relpath)
+
+
+def _is_relevant_runtime_text_file(relpath: Path) -> bool:
+    name = relpath.name
+    lower_name = name.lower()
+    if name in {"justfile", "Justfile", "pyproject.toml"}:
+        return True
+    if lower_name.startswith(("dockerfile", ".env")):
+        return True
+    if lower_name in {"compose.yaml", "compose.yml"}:
+        return True
+    return relpath.suffix in {
+        ".bash",
+        ".cfg",
+        ".env",
+        ".ini",
+        ".js",
+        ".json",
+        ".md",
+        ".py",
+        ".sh",
+        ".toml",
+        ".ts",
+        ".yaml",
+        ".yml",
+        ".zsh",
+    }
 
 
 def _iter_repo_files(root: Path) -> Iterable[Path]:
