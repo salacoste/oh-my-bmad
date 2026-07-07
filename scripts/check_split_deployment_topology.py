@@ -294,7 +294,7 @@ FORBIDDEN_RUNTIME_PATTERNS: tuple[tuple[str, re.Pattern[str], tuple[str, ...]], 
             r"REMOTE_PG_DSN)\b|"
             r"\b(?:DATABASE_URL|POSTGRES_DSN|POSTGRES_URL)\b[\s'\"\]]*[:=]\s*['\"]?"
             r"postgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://"
-            r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\s|['\"}\]]|$))"
+            r"(?!(?:[^@/\s]+@)?(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|/|\?|\s|['\"}\]]|$))"
             r"[^\s'\"]+|"
             r"\b(?:POSTGRES_HOST|PGHOST)\b[\s'\"\]]*[:=]\s*['\"]?"
             r"(?!(?:localhost|127\.0\.0\.1|::1|\[::1\])(?::|\s|['\"}\]]|$))[^\s'\"]+"
@@ -380,12 +380,7 @@ def _postgres_url_contains_secret(value: str) -> bool:
         except ValueError:
             continue
         password = parsed.password or ""
-        hostname = parsed.hostname or ""
-        if (
-            len(password) >= 8
-            and password.lower() not in PLACEHOLDER_PASSWORDS
-            and hostname.lower() not in LOCAL_POSTGRES_HOSTS
-        ):
+        if len(password) >= 8 and password.lower() not in PLACEHOLDER_PASSWORDS:
             return True
     return False
 

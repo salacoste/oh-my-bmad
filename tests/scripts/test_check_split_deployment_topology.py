@@ -360,6 +360,7 @@ def test_secret_like_value_fails(tmp_path: Path) -> None:
     [
         "postgresql+asyncpg://app:supersecretpassword@example.invalid:5432/app",
         "postgresql+psycopg://app:supersecretpassword@example.invalid:5432/app",
+        "postgresql+asyncpg://app:supersecretpassword@localhost:5432/app",
     ],
 )
 def test_driver_qualified_postgres_secret_like_value_fails(tmp_path: Path, secret_url: str) -> None:
@@ -625,6 +626,8 @@ def test_forbidden_runtime_expansion_surfaces_fail(
         (".env.production", "POSTGRES_HOST=[::1]\n"),
         ("config/runtime.json", '{"DATABASE_URL":"postgres://localhost:5432/app"}'),
         ("config/runtime.json", '{"DATABASE_URL":"postgres://localhost"}'),
+        (".env.production", "DATABASE_URL=postgres://localhost?sslmode=disable\n"),
+        ("config/runtime.json", '{"DATABASE_URL":"postgres://localhost?sslmode=disable"}'),
     ],
 )
 def test_local_postgres_dsn_and_host_values_do_not_false_positive(
