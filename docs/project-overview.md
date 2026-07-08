@@ -4,17 +4,18 @@
 
 **oh-my-bmad** is a self-hosted personal autonomous-development platform. Telegram and a local console drive supervised CLI workers through a typed event spine, backed by an append-only JSONL event log and a single-writer materialized state store. The platform is designed so runtimes, MCP tools, browser automation, transports, and deployment hardening can evolve without breaking the spine.
 
-The current repository state is **Phase 17 shipped** (2026-06-13): Destructive Lifecycle Apply Readiness, a planning/safety-contract continuation of Phase 12-17 replay/lifecycle work. The latest tagged release remains `v1.3.0`; this checkout contains later Phase 10–17 work.
+The current repository state is **Phase 50 complete / Phase 51 planning** as of 2026-07-08: Phase 50 / Epic 133 DB mTLS readiness is complete locally, and Phase 51 / Epic 134 controlled production activation evidence planning is open. The latest tagged release remains `v1.3.0`; this checkout contains later BMad work through Phase 51 planning.
 
 ## Status
 
-- **Current phase:** 17 shipped — Destructive Lifecycle Apply Readiness (planning/readiness only; no destructive apply implementation).
+- **Current phase:** 51 planning — controlled production activation evidence planning for future/operator-gated split deployment, remote Postgres, and DB mTLS smoke evidence.
+- **Recently complete:** Phase 50 / Epic 133 — DB mTLS readiness complete locally; production activation remains operator-gated/deferred.
 - **Repository type:** monorepo (`uv` workspace, 24 Python members).
 - **Language:** Python 3.12 (locked).
-- **Deployment:** Docker Compose v2 with named volume (`oh-my-bmad-data`); optional profiles for fleet features.
+- **Deployment:** Docker Compose v2 with named volume (`oh-my-bmad-data`); optional profiles remain operator-gated and inactive until future approved activation evidence exists.
 - **Canonical state:** `_bmad-output/implementation-artifacts/sprint-status.yaml`.
 
-## Shipped phase map
+## Shipped and planning phase map
 
 | Phase | Scope |
 |---|---|
@@ -35,6 +36,40 @@ The current repository state is **Phase 17 shipped** (2026-06-13): Destructive L
 | 15 | Lifecycle documentation reconciliation and backlog triage |
 | 16 | Archive-aware task history — read-only hot+archive task-history query |
 | 17 | Destructive lifecycle apply readiness — plan-hash/operator-gate/replay/rollback contract only |
+| 18 | Destructive lifecycle apply product scope and next non-destructive candidate selection |
+| 19 | Read-only dashboard shell and panel/read-only guardrails |
+| 20 | Dashboard live-read contracts and aggregate/session unavailable decision |
+| 21 | Dashboard rendering readiness and live-read wiring decision gate |
+| 22 | Health/readiness runtime boundary for `GET /v1/health` |
+| 23 | Task-detail runtime boundary for `GET /v1/tasks/{task_id}` |
+| 24 | Event timeline/transitions runtime boundary |
+| 25 | Trace correlation runtime boundary |
+| 26 | History/replay runtime boundary |
+| 27 | Lifecycle/snapshot listing and passive lifecycle-readiness display |
+| 28 | Snapshot creation authorization runtime boundary |
+| 29 | Aggregate/session/digest route-selection |
+| 30 | Aggregate task-list route-selection/runtime boundary |
+| 31 | Session-list runtime boundary |
+| 32 | Session-detail runtime boundary |
+| 33 | Digest-stream route-selection/runtime boundary |
+| 34 | Task status filter route-selection/runtime boundary |
+| 35 | Task-list limit route-selection/runtime boundary |
+| 36 | Task status+limit route-selection/runtime boundary |
+| 37 | Task status+limit browser consumption |
+| 38 | Task-list pagination / next-window API boundary |
+| 39 | Task-list pagination browser consumption |
+| 40 | Manual task-list pagination navigation |
+| 41 | Task status+limit+offset API-local composition |
+| 42 | Task status+limit+offset browser consumption |
+| 43 | Task-list sort API-local boundary |
+| 44 | Task-list sort browser controls |
+| 45 | API-local finite task-list sort vocabulary |
+| 46 | Browser sort vocabulary, API sort composition, search/discovery planning, dashboard wiring guard |
+| 47 | Browser full selector composition |
+| 48 | Production-readiness portfolio: search/discovery, dashboard cleanup, lifecycle mutation, retention, production ops, split deployment, DB mTLS |
+| 49 | Production-readiness execution/reconciliation toward split deployment and remote Postgres readiness |
+| 50 | DB connection mTLS readiness complete locally; production activation remains operator-gated |
+| 51 | Controlled production activation evidence planning for future/operator-gated activation proof |
 
 ## Tech stack summary
 
@@ -76,14 +111,15 @@ The current member catalog is in [component-inventory.md](./component-inventory.
 
 ## Architecture in one paragraph
 
-A typed event spine connects operator surfaces to runtime workers and MCP tools. All durable task/session state derives from append-only event records. `registry-state` owns the materialized database projection and the single-writer rules; `registry-api` exposes versioned HTTP read/write surfaces; MCP servers expose bounded tool/resource contracts to workers under capability tiers and approval gates. Replay packages can reconstruct historical state from hot logs and validated archived segments referenced by `lifecycle-manifest.json`. Phase 14 adds the operator-safe lifecycle operations boundary: ADR-0025 permits planning/validation and non-destructive dry-runs only. Phase 16 makes task history archive-aware only when archive manifest configuration is present. Phase 17 shipped destructive lifecycle apply readiness as planning/readiness only: snapshots remain hot-log-only, apply remains unimplemented, and any future mutation must satisfy plan-hash, replay-validation, rollback-evidence, and operator-gate preconditions.
+A typed event spine connects operator surfaces to runtime workers and MCP tools. All durable task/session state derives from append-only event records. `registry-state` owns the materialized database projection and single-writer rules; `registry-api` exposes versioned HTTP read/write surfaces; MCP servers expose bounded tool/resource contracts to workers under capability tiers and approval gates. Replay packages reconstruct historical state from hot logs and validated archived segments referenced by `lifecycle-manifest.json`. Recent production-readiness work added bounded lifecycle mutation controls, object-storage retention readiness, production operations readiness, split-deployment/remote Postgres readiness, and Phase 50 DB mTLS readiness. Phase 51 is only controlled activation evidence planning: split deployment, remote Postgres, and DB mTLS smoke evidence remain future/operator-gated and are not proof activation occurred.
 
 ## Where to start
 
 - **Operating it?** → [operator-runbook.md](./operator-runbook.md), [backup-restore.md](./backup-restore.md), and [deployment-guide.md](./deployment-guide.md).
 - **Developing on it?** → `_bmad-output/project-context.md`, [development-guide.md](./development-guide.md), and [testing-guide.md](./testing-guide.md).
 - **Understanding decisions?** → [adr/](./adr/), [architecture.md](./architecture.md), and `_bmad-output/planning-artifacts/`.
-- **Working on replay/lifecycle?** → [data-models.md](./data-models.md) §“Historical replay and event-log lifecycle” plus Phase 12–17 planning artifacts and ADR-0025.
+- **Working on replay/lifecycle?** → [data-models.md](./data-models.md) §“Historical replay and event-log lifecycle” plus ADR-0025.
+- **Working on controlled activation planning?** → `_bmad-output/planning-artifacts/phase-51-prd-amendment.md`, `_bmad-output/planning-artifacts/phase-51-architecture-amendment.md`, and `_bmad-output/planning-artifacts/phase-51-controlled-activation-epics.md`.
 
 ## License
 
