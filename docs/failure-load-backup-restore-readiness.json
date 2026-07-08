@@ -1,0 +1,175 @@
+{
+  "version": 1,
+  "epic": "132",
+  "story": "132.7",
+  "operation_class": "failure_load_backup_restore_validation_readiness",
+  "mode": "readiness_only",
+  "production_activation": "deferred",
+  "summary": "Story 132.7 records failure, load, backup, and restore validation readiness only. It inventories required future failure scenarios, bounded synthetic load evidence, backup/restore validation evidence, observability/audit requirements, and fail-closed non-goals without executing drills, generating load, running destructive restores, mutating production hosts, or activating production.",
+  "execution_policy": {
+    "status": "readiness_only_static_contract",
+    "live_drill_execution": false,
+    "destructive_restore": false,
+    "load_generation": false,
+    "production_mutation": false,
+    "production_activation_deferred": true,
+    "forbidden_actions": [
+      "live drill execution",
+      "destructive restore",
+      "load generation",
+      "production mutation",
+      "production host mutation",
+      "production restore",
+      "backup pruning",
+      "runtime audit emitter"
+    ],
+    "required_statement": "Story 132.7 is a readiness-only validation contract; live failure drills, destructive restores, load generation, and production mutation remain deferred until a later approved activation story supplies operator evidence."
+  },
+  "failure_scenarios": [
+    {
+      "id": "database_outage",
+      "status": "future_validation_required",
+      "expected_evidence": "Health/readiness degradation, retry/backoff behavior, operator-facing recovery notes, and no production mutation."
+    },
+    {
+      "id": "network_partition",
+      "status": "future_validation_required",
+      "expected_evidence": "Trace-correlated service boundary failure, backpressure behavior, and fail-closed recovery decision evidence."
+    },
+    {
+      "id": "pool_exhaustion",
+      "status": "future_validation_required",
+      "expected_evidence": "Pool saturation thresholds, rate-limit preservation, bounded queue/backpressure metrics, and no unbounded retries."
+    },
+    {
+      "id": "worker_crash",
+      "status": "future_validation_required",
+      "expected_evidence": "Task/session recovery timeline, sanitized logs, trace IDs, and idempotency evidence."
+    },
+    {
+      "id": "orchestrator_crash",
+      "status": "future_validation_required",
+      "expected_evidence": "Spawner recovery timeline, worktree lock ownership evidence, sanitized logs, and no duplicate authority."
+    },
+    {
+      "id": "registry_restart",
+      "status": "future_validation_required",
+      "expected_evidence": "Registry API/state health/readiness recovery, event replay status, and trace-correlated operator timeline."
+    },
+    {
+      "id": "mcp_service_unavailable",
+      "status": "future_validation_required",
+      "expected_evidence": "MCP boundary failure classification, fail-closed approval/capability behavior, and sanitized logs."
+    },
+    {
+      "id": "event_log_append_failure",
+      "status": "future_validation_required",
+      "expected_evidence": "Append-authority error evidence, replay/order preservation, recovery timeline, and no secret material."
+    },
+    {
+      "id": "migration_failure_rollback",
+      "status": "future_validation_required",
+      "expected_evidence": "Pre-migration backup identity, single-runner failure evidence, rollback/fix-forward decision, and schema revision state."
+    },
+    {
+      "id": "backup_restore_failure",
+      "status": "future_validation_required",
+      "expected_evidence": "Checksum or manifest mismatch handling, isolated restore refusal/rollback evidence, and destructive restore confirmation boundary."
+    }
+  ],
+  "load_validation": {
+    "status": "future_operator_evidence_required",
+    "target_surfaces": [
+      "registry-api task/session read-write paths",
+      "registry-state materializer/readiness paths",
+      "worker-wrapper task lifecycle path",
+      "orchestrator-adapter spawn/recovery path",
+      "MCP service availability boundary",
+      "operator dashboard/read-only ingress boundary"
+    ],
+    "bounded_synthetic_load_only": true,
+    "no_external_production_load": true,
+    "metrics": {
+      "latency": "required p50/p95/p99 latency budget evidence for each approved target surface",
+      "error": "required error-rate and failure-class evidence with fail-closed thresholds",
+      "backpressure": "required queue, retry, event-log lag, and worker backpressure metrics"
+    },
+    "pool_saturation_thresholds": "required per-instance and aggregate DB pool saturation thresholds below database limits",
+    "rate_limit_preservation": "required evidence that existing rate limits and fairness remain preserved under bounded synthetic load",
+    "trace_correlation": "required trace IDs across load driver, ingress, registry, worker, MCP, event-log, and recovery events",
+    "external_production_load": false
+  },
+  "backup_restore_validation": {
+    "status": "future_operator_evidence_required",
+    "pre_migration_backup": "required before any future migration or restore drill",
+    "checksum_manifest_validation": "required checksum or immutable manifest validation before restore proceeds",
+    "isolated_restore": "required scratch/isolated restore target; live production restore remains forbidden by this story",
+    "schema_version_compatibility": "required Alembic/schema version compatibility evidence between source, backup, and restored target",
+    "point_in_time_freshness": "required recovery point objective timestamp/freshness evidence for the selected backup or replica",
+    "rollback_fix_forward_decision": "required operator decision record choosing rollback or fix-forward after partial/failing restore evidence",
+    "destructive_restore_confirmation": "required explicit future confirmation boundary before any destructive restore; Story 132.7 does not provide or execute it",
+    "production_restore": false,
+    "backup_pruning": false
+  },
+  "observability_and_audit": {
+    "status": "future_operator_evidence_required",
+    "health_readiness_signals": "required service health/readiness degradation and recovery signals for each failure scenario",
+    "sanitized_logs": "required logs with secrets, credentials, DSNs, hostnames, certificate data, and token material redacted",
+    "trace_ids": "required trace IDs linking request, worker, MCP, event-log, backup/restore, and recovery evidence",
+    "recovery_timeline": "required timeline with detection, mitigation, recovery, and operator decision timestamps",
+    "audit_metadata_only": true,
+    "no_secret_material": true,
+    "runtime_audit_emitter": false
+  },
+  "safety_boundaries": {
+    "status": "fail_closed",
+    "no_live_destructive_operation": true,
+    "no_backup_pruning": true,
+    "no_production_restore": true,
+    "no_host_mutation": true,
+    "no_credential_values": true,
+    "no_runtime_audit_emitter": true,
+    "local_single_host_sqlite_default_preserved": true,
+    "required_statement": "Failure/load/backup/restore validation is readiness-only and fail-closed; live destructive operation, backup pruning, production restore, host mutation, credential values, and runtime audit emitters are not added."
+  },
+  "readiness_checks": {
+    "status": "static_gate_required",
+    "checker_command": "uv run python scripts/check_failure_load_backup_restore_readiness.py",
+    "self_test_command": "uv run python scripts/check_failure_load_backup_restore_readiness.py --self-test",
+    "validates": [
+      "readiness-only mode, deferred production activation, and execution policy forbidding live drills destructive restores load generation and production mutation",
+      "failure scenario inventory for database outage network partition pool exhaustion worker crash orchestrator crash registry restart MCP unavailable event-log append failure migration failure/rollback and backup restore failure",
+      "load validation target surfaces bounded synthetic load only latency/error/backpressure metrics pool saturation thresholds rate-limit preservation trace correlation and no external production load",
+      "backup/restore validation for pre-migration backup checksum/manifest validation isolated restore schema/version compatibility point-in-time freshness rollback/fix-forward decision and destructive restore confirmation boundary",
+      "observability and audit requirements for health/readiness signals sanitized logs trace IDs recovery timeline audit metadata only and no secret material",
+      "fail-closed safety boundaries and non-goals with no live destructive operation backup pruning production restore host mutation credential values or runtime audit emitter"
+    ]
+  },
+  "non_goals": [
+    "no live drill execution",
+    "no live destructive operation",
+    "no destructive restore",
+    "no load generation",
+    "no external production load",
+    "no backup pruning",
+    "no production restore",
+    "no production mutation",
+    "no production host mutation",
+    "no credential values",
+    "no runtime audit emitter",
+    "no production activation",
+    "no provisioning",
+    "no external host mutation"
+  ],
+  "docs_refs": [
+    "docs/operator-runbook.md#failure-load-backup-restore-validation-readiness-story-1327",
+    "docs/production-operations.md#story-1327-failure-load-backup-restore-validation-readiness",
+    "docs/backup-restore.md#failure-load-backuprestore-validation-readiness-story-1327",
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/132-7-failure-load-backup-restore-validation.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

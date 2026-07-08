@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "epic": "132",
+  "story": "132.3",
+  "operation_class": "registry_remote_postgres_deployment_profile",
+  "mode": "opt_in_profile_fail_closed",
+  "production_activation": "deferred_operator_evidence_required",
+  "summary": "Story 132.3 adds an opt-in Docker Compose overlay/profile that wires registry-api and registry-state to an operator-supplied remote Postgres DSN. SQLite/local dev remains the root default and live production activation remains fail-closed until operator evidence is supplied.",
+  "profile_artifact": {
+    "status": "present_opt_in_only",
+    "compose_file": "docker-compose.registry-remote-postgres.yml",
+    "profile_name": "registry-remote-postgres",
+    "activation_command_reference": "docker compose -f docker-compose.yml -f docker-compose.registry-remote-postgres.yml --profile registry-remote-postgres config",
+    "root_compose_default_unchanged": true,
+    "no_embedded_dsn": true,
+    "no_postgres_provisioning": true,
+    "no_live_host_mutation": true
+  },
+  "sqlite_default_preservation": {
+    "status": "preserved",
+    "root_compose_uses_sqlite_defaults": true,
+    "env_example_keeps_registry_db_path": true,
+    "remote_postgres_requires_overlay_and_registry_database_url": true,
+    "required_statement": "Without docker-compose.registry-remote-postgres.yml and an explicit REGISTRY_DATABASE_URL, the supported local/dev backend remains SQLite."
+  },
+  "registry_service_wiring": {
+    "status": "shared_remote_postgres_dsn_required",
+    "services": [
+      "registry-state",
+      "registry-api"
+    ],
+    "required_env": [
+      "REGISTRY_DATABASE_URL",
+      "REGISTRY_STATE_DB_URL",
+      "REGISTRY_API_DB_URL",
+      "REGISTRY_API_IDEMPOTENCY_DB_URL"
+    ],
+    "idempotency_uses_same_remote_dsn": true,
+    "registry_api_not_migration_runner": true,
+    "registry_state_materializer_authority_unchanged": true
+  },
+  "migration_strategy": {
+    "status": "operator_gated_single_runner",
+    "schema_authority": "Alembic",
+    "startup_schema_creation_disabled": true,
+    "migration_command_reference": "just migrate",
+    "required_evidence_before_activation": [
+      "pre-migration backup or managed snapshot identity",
+      "sha256 checksum or provider snapshot identity",
+      "single migration runner identity",
+      "Alembic current/head revision evidence before and after migration",
+      "rollback or fix-forward decision record"
+    ],
+    "forbidden": [
+      "automatic migration on registry service startup",
+      "parallel migration runners",
+      "registry-api Alembic execution",
+      "production migration execution by this story"
+    ]
+  },
+  "db_mtls_policy_composition": {
+    "status": "composes_with_epic_133_runtime_gate",
+    "enabled_key": "REGISTRY_DB_MTLS_ENABLED",
+    "default_enabled": false,
+    "required_when_enabled": [
+      "REGISTRY_DB_MTLS_SSLMODE=verify-full",
+      "REGISTRY_DB_MTLS_ROOT_CA",
+      "REGISTRY_DB_MTLS_CLIENT_CERT",
+      "REGISTRY_DB_MTLS_CLIENT_KEY",
+      "REGISTRY_DB_MTLS_SERVER_HOSTNAME",
+      "REGISTRY_DB_MTLS_REVOCATION_LIST",
+      "REGISTRY_DB_MTLS_APPROVED_PREFIXES"
+    ],
+    "failure_policy": "fail closed with sanitized diagnostics and no plaintext fallback",
+    "disabled_behavior": "local SQLite/no-DB-mTLS behavior remains unchanged when this profile is absent or DB mTLS is disabled"
+  },
+  "backup_restore_hooks": {
+    "status": "operator_evidence_required_before_activation",
+    "required_hooks": [
+      "pre_migration_backup",
+      "restore_to_scratch_target",
+      "checksum_or_snapshot_identity_verification",
+      "postgres_integrity_or_logical_consistency_check",
+      "event_log_materialized_state_reconciliation",
+      "rollback_or_fix_forward_record"
+    ],
+    "automation_boundary": "this story documents hooks and checker evidence only; it does not execute backups or restores"
+  },
+  "readiness_checks": {
+    "status": "static_gate_required",
+    "checker_command": "uv run python scripts/check_registry_remote_postgres_profile.py",
+    "self_test_command": "uv run python scripts/check_registry_remote_postgres_profile.py --self-test",
+    "validates": [
+      "overlay/profile is opt-in",
+      "REGISTRY_DATABASE_URL is required and redacted",
+      "registry-api and registry-state share the remote DSN",
+      "startup schema creation is disabled",
+      "DB mTLS variables compose with Epic 133",
+      "root SQLite defaults remain unchanged",
+      "docs/status/artifact/just/CI wiring is present",
+      "no production credentials or live activation overclaims are present"
+    ]
+  },
+  "non_goals": [
+    "no live remote Postgres production activation",
+    "no live Postgres provisioning",
+    "no production credentials or DSN values",
+    "no production host mutation",
+    "no automatic migration execution",
+    "no backup or restore execution",
+    "no registry-api migration runner",
+    "no DB mTLS production activation",
+    "no runtime production audit emitter"
+  ],
+  "docs_refs": [
+    "docs/operator-runbook.md#registry-remote-postgres-deployment-profile-story-1323",
+    "docs/production-operations.md#story-1323-registry-remote-postgres-deployment-profile",
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/132-3-registry-remote-postgres-deployment-profile.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

@@ -1,0 +1,123 @@
+{
+  "version": 1,
+  "epic": "132",
+  "story": "132.4",
+  "operation_class": "worker_mcp_event_bus_split_profile",
+  "mode": "opt_in_profile_fail_closed",
+  "production_activation": "deferred_operator_evidence_required",
+  "summary": "Story 132.4 adds an opt-in compose overlay/profile that makes worker-wrapper and orchestrator-adapter use remote HTTP MCP services on the internal compose network and assigns event-log append authority to the remote clawhip bridge. Single-host/stdin MCP defaults remain unchanged without the overlay.",
+  "profile_artifact": {
+    "status": "present_opt_in_only",
+    "compose_file": "docker-compose.worker-mcp-event-bus-split.yml",
+    "profile_name": "worker-mcp-event-bus-split",
+    "activation_command_reference": "JWT_SECRET_KEY=<redacted> MCP_AUTH_TOKEN=<redacted> docker compose -f docker-compose.yml -f docker-compose.worker-mcp-event-bus-split.yml --profile worker-mcp-event-bus-split config",
+    "root_compose_default_unchanged": true,
+    "no_external_ports": true,
+    "no_external_broker": true,
+    "no_live_host_mutation": true
+  },
+  "default_preservation": {
+    "status": "preserved",
+    "stdio_mcp_default": true,
+    "single_host_compose_default": true,
+    "remote_mcp_requires_overlay_profile_and_auth": true,
+    "required_statement": "Without docker-compose.worker-mcp-event-bus-split.yml and --profile worker-mcp-event-bus-split, worker-wrapper and orchestrator-adapter keep the existing stdio MCP/local event-log behavior."
+  },
+  "spawner_remote_mcp_wiring": {
+    "status": "internal_http_mcp_urls_required",
+    "spawners": [
+      "worker-wrapper",
+      "orchestrator-adapter"
+    ],
+    "required_auth_env": "MCP_AUTH_TOKEN",
+    "required_urls": [
+      "TASK_REGISTRY_URL",
+      "SESSION_REGISTRY_URL",
+      "GIT_URL",
+      "GITHUB_URL",
+      "VERIFICATION_URL",
+      "MEMORY_URL",
+      "ARTIFACT_URL",
+      "BROWSER_URL",
+      "CLAWHIP_BRIDGE_URL"
+    ],
+    "url_scope": "internal compose service URLs only",
+    "no_stdio_fallback_when_profile_is_active": true
+  },
+  "mcp_server_profile": {
+    "status": "profile_gated_internal_only",
+    "required_server_auth_env": "JWT_SECRET_KEY",
+    "services": [
+      "task-registry-mcp",
+      "session-registry-mcp",
+      "git-mcp",
+      "github-mcp",
+      "verification-mcp",
+      "memory-mcp",
+      "artifact-mcp",
+      "browser-mcp",
+      "clawhip-bridge-mcp"
+    ],
+    "transport": "streamable-http",
+    "host_ports_published": false,
+    "compose_network_only": true
+  },
+  "event_bus_boundary": {
+    "status": "remote_clawhip_bridge_append_authority",
+    "event_log_dir": "/var/lib/oh-my-bmad/registry/events",
+    "writer_service": "clawhip-bridge-mcp",
+    "writer_volume_mode": "rw",
+    "spawner_event_env": [
+      "REGISTRY_EVENTS_DIR",
+      "CLAWHIP_BRIDGE_LOG_DIR"
+    ],
+    "registry_state_materializer_authority_unchanged": true,
+    "registry_api_spine_writer_authority_unchanged": true,
+    "no_external_event_bus_broker": true
+  },
+  "security_policy_composition": {
+    "status": "jwt_required_mtls_optional_existing_gate",
+    "jwt_required": true,
+    "jwt_secret_key_required_for_servers": true,
+    "mcp_auth_token_required_for_spawners": true,
+    "mtls_env_key": "MTLS_ENABLED",
+    "mtls_default_enabled": false,
+    "failure_policy": "fail closed at compose interpolation for missing JWT_SECRET_KEY or MCP_AUTH_TOKEN; existing mTLS runtime policy remains unchanged"
+  },
+  "readiness_checks": {
+    "status": "static_gate_required",
+    "checker_command": "uv run python scripts/check_worker_mcp_event_bus_split.py",
+    "self_test_command": "uv run python scripts/check_worker_mcp_event_bus_split.py --self-test",
+    "validates": [
+      "overlay/profile is opt-in",
+      "worker-wrapper and orchestrator-adapter receive all internal MCP URLs",
+      "MCP_AUTH_TOKEN and JWT_SECRET_KEY are required but never embedded",
+      "remote MCP services are profile-gated and internal-only",
+      "clawhip-bridge-mcp has RW event-log authority",
+      "root stdio/local defaults remain unchanged",
+      "docs/status/artifact/just/CI wiring is present",
+      "no external broker, host port, credential, or live split activation overclaim is present"
+    ]
+  },
+  "non_goals": [
+    "no live split deployment activation",
+    "no external worker host",
+    "no external MCP host",
+    "no external event-bus broker",
+    "no host port publishing",
+    "no production credentials or token values",
+    "no production host mutation",
+    "no registry authority change",
+    "no runtime production audit emitter"
+  ],
+  "docs_refs": [
+    "docs/operator-runbook.md#worker-mcp-event-bus-split-profile-story-1324",
+    "docs/production-operations.md#story-1324-workermcpevent-bus-split-profile",
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/132-4-worker-mcp-event-bus-split-profile.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "story": "132.8",
+  "purpose": "Durable non-leader source records for Story 132.8 closure quality gates. The closure checker may resolve quality_gates.*.source_reference entries here only when the record is backed by native subagent provenance: local OMX subagent tracking plus agent-turn-complete logs when present, or the committed sanitized native-subagent provenance bundle when local runtime state is absent. Pattern-shaped fake records and artifact-only summaries cannot satisfy final closure.",
+  "records": {
+    "subagent:019f40a4-0e28-7a63-83f3-a2321befea1d": {
+      "source_reference": "subagent:019f40a4-0e28-7a63-83f3-a2321befea1d",
+      "source_type": "native_subagent",
+      "thread_id": "019f40a4-0e28-7a63-83f3-a2321befea1d",
+      "agent_role": "code-reviewer",
+      "status": "completed",
+      "completed_at": "2026-07-08T07:36:54.616Z",
+      "recommendation": "APPROVE",
+      "architectural_status": "CLEAR",
+      "reviewed_by_non_leader": true,
+      "raw_completed": "Recommendation: APPROVE  \nArchitectural status: CLEAR\n\nEvidence summary:\n- Reviewed Story 132.6/132.7 readiness-only checkers, tests, contracts, docs, and Story 132.8 closure checker/docs/tests/artifa"
+    },
+    "subagent:019f40a4-3ace-79e0-90d5-d514119be247": {
+      "source_reference": "subagent:019f40a4-3ace-79e0-90d5-d514119be247",
+      "source_type": "native_subagent",
+      "thread_id": "019f40a4-3ace-79e0-90d5-d514119be247",
+      "agent_role": "verifier",
+      "status": "completed",
+      "completed_at": "2026-07-08T07:34:08.188Z",
+      "verdict": "PASS",
+      "clean": true,
+      "reviewed_by_non_leader": true,
+      "raw_completed": "Verdict: PASS\n\nEvidence summary:\n- 132.8 targeted tests: `26 passed`.\n- 132.8 checker self-test: exit 0.\n- Ruff check/format for 132.8 checker/tests: passed.\n- 132.6/132.7 compatibility tests: `25 pas"
+    }
+  }
+}

@@ -1,0 +1,91 @@
+# Story 132.4 — worker/MCP/event-bus split profile overlay.
+#
+# Opt-in static profile for running worker/orchestrator against HTTP MCP server
+# containers and the remote clawhip bridge event-log writer. It preserves the
+# root compose default: stdio MCP subprocesses and local single-host SQLite/event
+# log behavior when this overlay/profile is absent.
+#
+# Preflight only (does not contact external hosts):
+#
+#   JWT_SECRET_KEY=<32+ byte secret> MCP_AUTH_TOKEN=<jwt> docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.worker-mcp-event-bus-split.yml \
+#     --profile worker-mcp-event-bus-split config
+
+name: omb
+
+x-worker-mcp-event-bus-split-spawner-env: &worker_mcp_event_bus_split_spawner_env
+  profiles: ["worker-mcp-event-bus-split"]
+  environment: &worker_mcp_event_bus_split_url_env
+    # Required client auth for remote MCP HTTP transport. Keep the actual token
+    # outside committed files; this overlay fails during compose interpolation if
+    # it is absent.
+    MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:?Story 132.4 worker/MCP/event-bus split profile requires MCP_AUTH_TOKEN}
+    TASK_REGISTRY_URL: http://omb-task-registry-mcp:8081/mcp
+    SESSION_REGISTRY_URL: http://omb-session-registry-mcp:8082/mcp
+    GIT_URL: http://omb-git-mcp:8083/mcp
+    GITHUB_URL: http://omb-github-mcp:8084/mcp
+    VERIFICATION_URL: http://omb-verification-mcp:8085/mcp
+    MEMORY_URL: http://omb-memory-mcp:8086/mcp
+    ARTIFACT_URL: http://omb-artifact-mcp:8087/mcp
+    BROWSER_URL: http://omb-browser-mcp:8088/mcp
+    CLAWHIP_BRIDGE_URL: http://omb-clawhip-bridge-mcp:8089/mcp
+    # Event-bus paths remain inside the shared data volume; no external broker is
+    # introduced by this profile.
+    REGISTRY_EVENTS_DIR: /var/lib/oh-my-bmad/registry/events
+    CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+    # HTTP mTLS composition stays governed by the existing Phase 11 profile/env.
+    MTLS_ENABLED: ${MTLS_ENABLED:-false}
+
+x-worker-mcp-event-bus-split-server-env: &worker_mcp_event_bus_split_server_env
+  profiles: ["worker-mcp-event-bus-split"]
+  environment:
+    # Required server-side JWT verification key for MCP HTTP services. Do not
+    # commit a real value.
+    JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Story 132.4 worker/MCP/event-bus split profile requires JWT_SECRET_KEY}
+    MTLS_ENABLED: ${MTLS_ENABLED:-false}
+
+services:
+  orchestrator-adapter:
+    <<: *worker_mcp_event_bus_split_spawner_env
+
+  worker-wrapper:
+    <<: *worker_mcp_event_bus_split_spawner_env
+
+  task-registry-mcp:
+    <<: *worker_mcp_event_bus_split_server_env
+
+  session-registry-mcp:
+    <<: *worker_mcp_event_bus_split_server_env
+
+  git-mcp:
+    <<: *worker_mcp_event_bus_split_server_env
+
+  github-mcp:
+    <<: *worker_mcp_event_bus_split_server_env
+
+  verification-mcp:
+    <<: *worker_mcp_event_bus_split_server_env
+
+  memory-mcp:
+    <<: *worker_mcp_event_bus_split_server_env
+
+  artifact-mcp:
+    <<: *worker_mcp_event_bus_split_server_env
+
+  browser-mcp:
+    <<: *worker_mcp_event_bus_split_server_env
+
+  clawhip-bridge-mcp:
+    <<: *worker_mcp_event_bus_split_server_env
+    environment:
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Story 132.4 worker/MCP/event-bus split profile requires JWT_SECRET_KEY}
+      MTLS_ENABLED: ${MTLS_ENABLED:-false}
+      CLAWHIP_BRIDGE_LOG_DIR: /var/lib/oh-my-bmad/registry/events
+      REGISTRY_EVENTS_DIR: /var/lib/oh-my-bmad/registry/events
+    # The remote clawhip bridge is the event-log appender in this split profile;
+    # it needs RW access to the registry events directory. Other MCP services
+    # retain the root profile's read-only data mount.
+    volumes:
+      - oh-my-bmad-data:/var/lib/oh-my-bmad
+      - oh-my-bmad-certs:/certs:ro

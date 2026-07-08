@@ -1137,8 +1137,15 @@ development_status:
   # =========================================================================
   # Epic 132: Split deployment and remote Postgres topology readiness
   # =========================================================================
-  epic-132: done  # Story 132.1 defines static/readiness-only split deployment and remote Postgres topology prerequisites; no split deployment, remote Postgres runtime, DB mTLS, compose/profile/env/deploy/migration/service/Docker/remote-host command, credential, or runtime audit emitter behavior is enabled
+  epic-132: done  # readiness-contract-complete_not_live_activation only; Stories 132.1-132.8 are done as static/readiness contracts, SQLite/local defaults remain unchanged, and no live split/remote production activation, horizontal scaling activation, provisioning, credential, production migration, production host mutation, operator/dashboard live ingress, external load balancer, external worker pool, live drill execution, load generation, destructive restore, production restore, backup pruning, DB mTLS production activation, or runtime audit emitter behavior is enabled
   132-1-split-deployment-remote-postgres-topology-contract: done  # Adds executable topology-readiness contract/checker for current single-host default preservation, service placement including clawhip_daemon, network/data authority, pooling/migration/backup prerequisites, unsupported topologies, rollback/fallback, DB mTLS deferment to Epic 133, core invariants, docs/status refs, just/CI wiring, secret absence, overclaim prevention, and forbidden runtime expansion surfaces
+  132-2-remote-postgres-production-mode: done  # Story 132.2 adds docs/remote-postgres-production-readiness.json, scripts/check_remote_postgres_readiness.py, checker tests, docs/status/artifact/just/CI wiring for opt-in remote Postgres readiness, SQLite default preservation, exact bounded pool contract, Alembic/single-runner/pre-migration-backup evidence, redaction, REGISTRY_DB_MTLS_ENABLED composition, backup/restore checksum/integrity rollback/fix-forward evidence, registry-api read-side support, and no live activation/provisioning/credentials; Epic 132 remains open for Stories 132.3-132.8
+  132-3-registry-remote-postgres-deployment-profile: done  # Adds docker-compose.registry-remote-postgres.yml opt-in profile/overlay, docs/registry-remote-postgres-profile-readiness.json, checker/tests, .env.example placeholders, docs/status/artifact/just/CI wiring for registry-api and registry-state shared REGISTRY_DATABASE_URL, startup schema creation disabled, DB mTLS composition, migration/backup/restore evidence hooks, SQLite default preservation, and no live activation/provisioning/credentials/production host mutation
+  132-4-worker-mcp-event-bus-split-profile: done  # Adds docker-compose.worker-mcp-event-bus-split.yml opt-in overlay/profile, docs/worker-mcp-event-bus-split-readiness.json, checker/tests, docs/status/artifact/just/CI wiring for worker-wrapper/orchestrator-adapter remote MCP URLs, required MCP_AUTH_TOKEN/JWT_SECRET_KEY, profile-gated internal MCP services, remote clawhip-bridge event-log append authority, default stdio/local preservation, and no external broker/host ports/live split activation/credentials/production host mutation
+  132-5-operator-dashboard-split-profile: done  # Adds docker-compose.operator-dashboard-split.yml opt-in readiness overlay/profile, docs/operator-dashboard-split-readiness.json, checker/tests, docs/status/artifact/just/CI wiring for Telegram/clawhip compose-only operator-surface split readiness, console-cli host-side boundary, dashboard/static future-ingress boundary, OPERATOR_DASHBOARD_AUTH_TOKEN placeholder-only auth evidence, Story 132.3/132.4 prerequisites, health/readiness/trace/version evidence, browser/log secret hygiene, no host ports/live ingress/runtime auth enforcement/credentials/production host mutation/authority change
+  132-6-horizontal-scaling: done  # Adds docs/horizontal-scaling-readiness.json, scripts/check_horizontal_scaling_readiness.py, checker tests, docs/status/artifact/just/CI wiring for readiness-only horizontal scaling classification, singleton authorities, coordination boundaries, load-balancer readiness, unsupported scaling modes, rollback/observability, and no live scaling activation/external worker pool/external load balancer/host ports/production credentials/production host mutation/live load or restore/runtime audit emitter
+  132-7-failure-load-backup-restore-validation: done  # Adds docs/failure-load-backup-restore-readiness.json, scripts/check_failure_load_backup_restore_readiness.py, checker tests, docs/status/artifact/just/CI wiring for readiness-only failure/load/backup/restore validation, required failure scenarios, bounded synthetic load-only evidence, backup/restore validation, observability/audit metadata, and no live drill execution/load generation/destructive restore/production restore/backup pruning/production host mutation/credential values/runtime audit emitter
+  132-8-closure-evidence: done  # Adds docs/split-deployment-remote-postgres-closure-readiness.json, scripts/check_split_deployment_remote_postgres_closure.py, checker tests, docs/status/artifact/just/CI wiring, readiness-domain inventory, Story 132.1-132.7 source evidence, fail-closed unsupported activation inventory, and non-leader code-review/UltraQA quality gate evidence for readiness-contract-complete_not_live_activation closure only; no live activation/provisioning/credentials/production migration/host mutation/DB mTLS production activation/load/restore/scaling/runtime audit emitter
 
   # =========================================================================
   # Epic 133: DB connection mTLS readiness
@@ -5823,3 +5830,30 @@ recent_activity:
       GET with credentials omitted on search-button click, renders selected search and
       provenance metadata, and fails closed for hidden, malformed, response-mismatched,
       URL/hash/storage/cookie-derived, and row-derived selector attempts without traversal.
+
+  - date: "2026-07-08"
+    event: story-132-8-closure-evidence-local-done
+    from: backlog
+    to: done
+    epic: epic-132
+    story: 132-8-closure-evidence
+    source: scoped-story-132-8
+    operation_id: story-132-8-split-deployment-remote-postgres-closure
+    operation_class: split_deployment_remote_postgres_closure_readiness
+    target_environment: repo-static-readiness
+    target_repository_or_service: epic-132-closure-evidence
+    authority_source: .omx/specs/epic-132-open-stories-plan.md
+    dry_run_evidence_ref: scripts/check_split_deployment_remote_postgres_closure.py
+    approval_ref: docs/production-operations.md#story-1328-epic-132-closure-evidence-readiness
+    request_trace_correlation_id: epic-132-story-132-8
+    emergency_disable_state: fail-closed-no-live-split-deployment-or-remote-postgres-activation
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 132.8 records Epic 132 closure as readiness-contract-complete_not_live_activation.
+      It requires all Story 132.1-132.8 gates plus durable non-leader code-review and UltraQA
+      evidence, preserves local SQLite defaults, and does not add live activation, provisioning,
+      credentials, production migrations, production host mutation, DB mTLS production activation,
+      load, restore, scaling, or runtime audit emitter behavior.
+    rollback_ref: revert-story-132-8-closure-evidence-diff
+    expiry_freshness: static-readiness-entry-refresh-on-live-split-deployment-or-remote-postgres-activation-story
+    status: done

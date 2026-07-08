@@ -1,0 +1,32 @@
+# Story 132.5 — operator/dashboard split profile overlay.
+#
+# Opt-in static/readiness profile for operator-facing compose services. It keeps
+# root single-host defaults unchanged when absent. Console CLI and dashboard
+# static assets are not compose services; their split boundary is documented in
+# docs/operator-dashboard-split-readiness.json.
+#
+# Static preflight only (does not start services or configure ingress):
+#
+#   OPERATOR_DASHBOARD_AUTH_TOKEN=<redacted> docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.operator-dashboard-split.yml \
+#     --profile operator-dashboard-split config
+
+name: omb
+
+x-operator-dashboard-split-env: &operator_dashboard_split_env
+  profiles: ["operator-dashboard-split"]
+  environment:
+    # Future ingress/proxy auth evidence only. This does not add in-process auth
+    # enforcement to Telegram, console, dashboard static assets, or registry API.
+    OPERATOR_DASHBOARD_AUTH_TOKEN: ${OPERATOR_DASHBOARD_AUTH_TOKEN:?Story 132.5 operator/dashboard split profile requires OPERATOR_DASHBOARD_AUTH_TOKEN}
+    OPERATOR_DASHBOARD_INGRESS_MODE: internal-only-readiness
+    OPERATOR_DASHBOARD_TRACE_EVIDENCE: existing-surface-contracts
+    OPERATOR_DASHBOARD_VERSION_EVIDENCE: existing-version-contracts
+
+services:
+  telegram-gateway:
+    <<: *operator_dashboard_split_env
+
+  clawhip-daemon:
+    <<: *operator_dashboard_split_env

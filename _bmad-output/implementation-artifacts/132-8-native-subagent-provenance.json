@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "story": "132.8",
+  "purpose": "Sanitized committed native subagent provenance for Story 132.8 closure quality gates. Used by the closure checker only when local .omx runtime state is absent, preserving CI-safe validation of native_subagent source_type, thread_id, completed status, completed_at, and exact output_preview equality.",
+  "records": {
+    "subagent:019f40a4-0e28-7a63-83f3-a2321befea1d": {
+      "source_reference": "subagent:019f40a4-0e28-7a63-83f3-a2321befea1d",
+      "source_type": "native_subagent",
+      "thread_id": "019f40a4-0e28-7a63-83f3-a2321befea1d",
+      "status": "completed",
+      "completed_at": "2026-07-08T07:36:54.616Z",
+      "tracker_thread": {
+        "thread_id": "019f40a4-0e28-7a63-83f3-a2321befea1d",
+        "kind": "subagent",
+        "first_seen_at": "2026-07-08T07:36:54.613Z",
+        "last_seen_at": "2026-07-08T07:36:54.613Z",
+        "last_turn_id": "019f40a4-0e6e-74d2-9502-40c3273af23e",
+        "turn_count": 1
+      },
+      "completion_event": {
+        "timestamp": "2026-07-08T07:36:54.616Z",
+        "type": "agent-turn-complete",
+        "thread_id": "019f40a4-0e28-7a63-83f3-a2321befea1d",
+        "turn_id": "019f40a4-0e6e-74d2-9502-40c3273af23e",
+        "output_preview": "Recommendation: APPROVE  \nArchitectural status: CLEAR\n\nEvidence summary:\n- Reviewed Story 132.6/132.7 readiness-only checkers, tests, contracts, docs, and Story 132.8 closure checker/docs/tests/artifa"
+      }
+    },
+    "subagent:019f40a4-3ace-79e0-90d5-d514119be247": {
+      "source_reference": "subagent:019f40a4-3ace-79e0-90d5-d514119be247",
+      "source_type": "native_subagent",
+      "thread_id": "019f40a4-3ace-79e0-90d5-d514119be247",
+      "status": "completed",
+      "completed_at": "2026-07-08T07:34:08.188Z",
+      "tracker_thread": {
+        "thread_id": "019f40a4-3ace-79e0-90d5-d514119be247",
+        "kind": "subagent",
+        "first_seen_at": "2026-07-08T07:34:08.184Z",
+        "last_seen_at": "2026-07-08T07:34:08.184Z",
+        "last_turn_id": "019f40a4-3b14-7a93-9936-14069eadb238",
+        "turn_count": 1
+      },
+      "completion_event": {
+        "timestamp": "2026-07-08T07:34:08.188Z",
+        "type": "agent-turn-complete",
+        "thread_id": "019f40a4-3ace-79e0-90d5-d514119be247",
+        "turn_id": "019f40a4-3b14-7a93-9936-14069eadb238",
+        "output_preview": "Verdict: PASS\n\nEvidence summary:\n- 132.8 targeted tests: `26 passed`.\n- 132.8 checker self-test: exit 0.\n- Ruff check/format for 132.8 checker/tests: passed.\n- 132.6/132.7 compatibility tests: `25 pas"
+      }
+    }
+  }
+}

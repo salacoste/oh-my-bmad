@@ -89,6 +89,27 @@ jobs:
       - name: Check split deployment topology readiness (Story 132.1)
         run: uv run python scripts/check_split_deployment_topology.py
 
+      - name: Check remote Postgres readiness (Story 132.2)
+        run: uv run python scripts/check_remote_postgres_readiness.py
+
+      - name: Check registry remote Postgres profile readiness (Story 132.3)
+        run: uv run python scripts/check_registry_remote_postgres_profile.py
+
+      - name: Check worker/MCP/event-bus split readiness (Story 132.4)
+        run: uv run python scripts/check_worker_mcp_event_bus_split.py
+
+      - name: Check operator/dashboard split readiness (Story 132.5)
+        run: uv run python scripts/check_operator_dashboard_split.py
+
+      - name: Check horizontal scaling readiness (Story 132.6)
+        run: uv run python scripts/check_horizontal_scaling_readiness.py
+
+      - name: Check failure/load/backup/restore readiness (Story 132.7)
+        run: uv run python scripts/check_failure_load_backup_restore_readiness.py
+
+      - name: Check split deployment remote Postgres closure readiness (Story 132.8)
+        run: uv run python scripts/check_split_deployment_remote_postgres_closure.py
+
       - name: Check DB mTLS readiness (Epic 133)
         run: uv run python scripts/check_db_mtls_readiness.py
 
@@ -109,6 +130,13 @@ jobs:
           uv run python scripts/check_production_command_surface.py --self-test
           uv run python scripts/check_production_operations_closure.py --self-test
           uv run python scripts/check_split_deployment_topology.py --self-test
+          uv run python scripts/check_remote_postgres_readiness.py --self-test
+          uv run python scripts/check_registry_remote_postgres_profile.py --self-test
+          uv run python scripts/check_worker_mcp_event_bus_split.py --self-test
+          uv run python scripts/check_operator_dashboard_split.py --self-test
+          uv run python scripts/check_horizontal_scaling_readiness.py --self-test
+          uv run python scripts/check_failure_load_backup_restore_readiness.py --self-test
+          uv run python scripts/check_split_deployment_remote_postgres_closure.py --self-test
           uv run python scripts/check_db_mtls_readiness.py --self-test
 
       - name: Check secrets (full tree)

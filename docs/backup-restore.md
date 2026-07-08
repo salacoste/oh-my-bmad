@@ -226,6 +226,58 @@ operational log.
 
 ---
 
+
+## Remote Postgres backup/restore drill readiness (Story 132.2)
+
+Story 132.2 records readiness requirements for future remote Postgres
+production mode. It does not provision a database, create credentials, run a
+restore, or activate production.
+
+Before any future production remote Postgres activation, record a drill with:
+
+1. Backup artifact identity from `pg_dump` or the managed database snapshot
+   provider, plus a `sha256` checksum or immutable provider snapshot id.
+2. Verification that restore refuses to continue on checksum mismatch or unknown
+   snapshot identity.
+3. Isolated scratch restore target identity; never drill over the live target.
+4. Integrity evidence such as Postgres logical consistency queries and service
+   read-side health checks.
+5. Alembic revision parity between source and restored target.
+6. Event-log/materialized-state reconciliation evidence for registry-state data.
+7. A rollback/fix-forward decision record for failed or partial drills.
+
+Readiness artifacts must redact passwords, full DSNs, private keys, full
+filesystem paths, production hostnames, certificate subjects, and SAN hostnames.
+
+
+## Failure-load-backup/restore validation readiness (Story 132.7)
+
+Story 132.7 adds `docs/failure-load-backup-restore-readiness.json` and the static
+checker:
+
+```bash
+uv run python scripts/check_failure_load_backup_restore_readiness.py
+uv run python scripts/check_failure_load_backup_restore_readiness.py --self-test
+```
+
+This is readiness-only backup/restore validation evidence. It does not run a
+restore, execute a live drill, generate load, prune backups, restore production,
+mutate production hosts, provision infrastructure, add credential values, or
+activate runtime audit emitters.
+
+Before any future failure/load/backup/restore validation activation, record:
+
+1. Pre-migration backup identity and point-in-time freshness evidence.
+2. Checksum/manifest validation that fails closed on mismatch or unknown
+   identity.
+3. Isolated restore target identity; this isolated restore evidence must never drill over the live production target.
+4. Schema/version compatibility evidence for source, backup, and restored target.
+5. Rollback/fix-forward decision evidence after a failed or partial restore.
+6. Separate destructive restore confirmation before any future destructive
+   operation; this story supplies only the fail-closed boundary, not approval.
+7. Sanitized logs, trace IDs, health/readiness signals, recovery timeline, audit
+   metadata only, and no secret material.
+
 ## See also
 
 - [Operator runbook](./operator-runbook.md) — SQLite WAL recovery + per-service restart procedures.
@@ -239,3 +291,23 @@ profiles must use the digest-pinned recipes `just deploy-vps-digest` or
 `just deploy-macos-digest` after `just backup`, release digest verification,
 and rollback-profile review. Tag-based deployment recipes remain local/dev or
 deprecated production paths only.
+
+
+## Epic 132 closure evidence readiness (Story 132.8)
+
+Epic 132 closure includes failure/load/backup/restore validation readiness only.
+Run the closure checker alongside the Story 132.7 gate:
+
+```bash
+uv run python scripts/check_split_deployment_remote_postgres_closure.py
+uv run python scripts/check_split_deployment_remote_postgres_closure.py --self-test
+```
+
+The closure contract in `docs/split-deployment-remote-postgres-closure-readiness.json`
+requires Story 132.7 backup/restore readiness evidence, Story 132.1-132.6
+source evidence, all 132 checker/self-test CI wiring, and non-leader code-review
+and UltraQA source evidence before Epic 132 can be considered
+`readiness-contract-complete_not_live_activation`. It does not run live backup
+restores, destructive restores, load execution, production restores, backup
+pruning, provisioning, credentials, production host mutation, or runtime audit
+emitters.

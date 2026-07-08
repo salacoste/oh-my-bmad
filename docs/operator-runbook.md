@@ -377,6 +377,252 @@ runner, no service route, no Dockerfile behavior, no remote Postgres connection
 code, no external host command, no credential value, and no live split deployment
 or remote Postgres activation.
 
+
+### Remote Postgres production readiness (Story 132.2)
+
+Story 132.2 defines the bounded remote Postgres production-readiness
+contract. The canonical contract is
+[`remote-postgres-production-readiness.json`](remote-postgres-production-readiness.json)
+and the gate is:
+
+```bash
+uv run python scripts/check_remote_postgres_readiness.py
+uv run python scripts/check_remote_postgres_readiness.py --self-test
+```
+
+This is not a live activation runbook. Keep SQLite as the default unless a later
+approved production activation story supplies operator evidence and an explicit
+`REGISTRY_DATABASE_URL` for a `postgresql+asyncpg://` backend. Do not paste or
+commit production DSNs, passwords, private keys, full filesystem paths, or
+production hostnames into readiness artifacts.
+
+Before any future production activation, collect all of the following evidence:
+
+1. Current SQLite default remains available as rollback/fallback.
+2. Remote Postgres selection is explicit opt-in through `REGISTRY_DATABASE_URL`;
+   unset or SQLite URLs preserve local behavior.
+3. Bounded pool settings are exact: `pool_size = 5 + 2 * num_workers`,
+   `max_overflow = 5`, `pool_timeout = 30`, `pool_recycle = 1800`, and pre-ping
+   enabled.
+4. Alembic is run by exactly one migration runner after a pre-migration backup
+   with checksum, with pre/post revision evidence.
+5. Registry-api read-side support uses the shared SQLAlchemy session factory for
+   materialized reads and does not run Alembic or become a second materializer.
+6. The `REGISTRY_DB_MTLS_ENABLED` runtime gate remains fail-closed and off
+   by default under Epic 133; future operator evidence must supply approved
+   secret locations and verify-full material before production use. Local
+   SQLite/default behavior remains unchanged.
+7. Backup/restore drill evidence includes checksum verification, isolated
+   restore target identity, integrity or logical consistency checks, Alembic
+   revision parity, event-log/materialized-state reconciliation, and
+   rollback/fix-forward outcome.
+
+No live Postgres provisioning, production credential creation, production host
+mutation, compose profile activation, deployment target mutation, production
+migration execution, or runtime production audit emitter is authorized by this
+slice.
+
+
+### Registry remote Postgres deployment profile (Story 132.3)
+
+Story 132.3 adds an opt-in profile/overlay for registry services:
+
+```bash
+uv run python scripts/check_registry_remote_postgres_profile.py
+uv run python scripts/check_registry_remote_postgres_profile.py --self-test
+```
+
+Static compose preflight uses the overlay and profile explicitly:
+
+```bash
+docker compose -f docker-compose.yml \
+  -f docker-compose.registry-remote-postgres.yml \
+  --profile registry-remote-postgres config
+```
+
+Keep `REGISTRY_DATABASE_URL` blank in `.env.example` and unset in local dev. For
+a future approved activation, source it only from an operator-approved secret or
+environment system; do not paste DSNs, passwords, private keys, full filesystem
+paths, certificate subjects, SANs, or production hostnames into committed files.
+
+The overlay wires `registry-state`, `registry-api`, and registry-api idempotency
+storage to the same `REGISTRY_DATABASE_URL`. It also disables registry service
+startup schema creation so Alembic remains the only schema authority. Before any
+future production activation, collect:
+
+1. A pre-migration backup or managed snapshot identity.
+2. A checksum or provider snapshot identity.
+3. Exactly one migration runner identity and approval record.
+4. Alembic current/head revision evidence before and after migration.
+5. A restore-to-scratch drill with integrity/logical consistency evidence.
+6. Event-log/materialized-state reconciliation evidence.
+7. A rollback or fix-forward decision record.
+
+The DB mTLS runtime gate remains fail-closed and off by default under Epic 133.
+Future operator evidence must supply verify-full material through approved
+secret prefixes before production use; without that evidence, local
+SQLite/default behavior remains unchanged and the runtime must not downgrade to
+plaintext.
+
+This slice does not authorize live Postgres provisioning, production credential
+creation, production host mutation, production migration execution, backup or
+restore execution, DB mTLS production activation, or runtime production audit
+emitters.
+
+
+### Worker/MCP/event-bus split profile (Story 132.4)
+
+Story 132.4 adds an opt-in split overlay for worker/orchestrator remote MCP
+transport and the event-log writer boundary:
+
+```bash
+uv run python scripts/check_worker_mcp_event_bus_split.py
+uv run python scripts/check_worker_mcp_event_bus_split.py --self-test
+```
+
+Static compose preflight uses redacted operator-supplied auth material:
+
+```bash
+JWT_SECRET_KEY=<redacted> MCP_AUTH_TOKEN=<redacted> docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.worker-mcp-event-bus-split.yml \
+  --profile worker-mcp-event-bus-split config
+```
+
+Default local operation remains unchanged: leave the overlay absent to keep
+stdio MCP subprocesses. When the split profile is selected, `worker-wrapper` and
+`orchestrator-adapter` use the internal compose URLs for task/session registry,
+git, GitHub, verification, memory, artifact, browser, and clawhip bridge MCP
+servers. `MCP_AUTH_TOKEN` and `JWT_SECRET_KEY` must come from operator-approved
+secret/env sources and must never be committed.
+
+The profile keeps all MCP services on the internal compose network with no host
+ports. `clawhip-bridge-mcp` is the event-log appender and receives RW access to
+`/var/lib/oh-my-bmad/registry/events`; no external event-bus broker is added.
+Registry-state and registry-api authorities remain unchanged.
+
+This slice does not authorize live split deployment to external hosts, external
+MCP hosts, external worker hosts, production credential creation, production host
+mutation, host-port publishing, or runtime production audit emitters.
+
+### Operator/dashboard split profile (Story 132.5)
+
+Story 132.5 adds an opt-in readiness profile for operator-facing surfaces:
+
+```bash
+uv run python scripts/check_operator_dashboard_split.py
+uv run python scripts/check_operator_dashboard_split.py --self-test
+```
+
+Static compose preflight uses redacted operator-supplied placeholder material:
+
+```bash
+OPERATOR_DASHBOARD_AUTH_TOKEN=<redacted> docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.operator-dashboard-split.yml \
+  --profile operator-dashboard-split config
+```
+
+This is a static readiness contract, not live operator/dashboard production
+activation. The overlay applies only to actual compose services
+`telegram-gateway` and `clawhip-daemon`. `console-cli` remains host-side
+operator invocation, and `dashboard/static` remains a static browser asset
+boundary with future ingress evidence only. No dashboard compose service is
+introduced.
+
+`OPERATOR_DASHBOARD_AUTH_TOKEN` is placeholder-only future ingress/proxy
+evidence. It does not add runtime auth enforcement to Telegram, console,
+dashboard static assets, registry API, or a proxy. Telegram continues to rely on
+`TELEGRAM_BOT_TOKEN` and `TG_ALLOWLIST_USER_IDS`; console continues to rely on
+host-side actor identity, trace, idempotency, and approval controls; dashboard
+route families keep their existing fail-closed browser/API boundaries.
+
+The readiness contract validates Telegram/console/dashboard ingress boundaries,
+auth boundary preservation, health/readiness evidence, trace propagation,
+version compatibility, Story 132.3/132.4 prerequisites, and secret hygiene across
+browser payloads, Telegram/console source, docs, artifacts, and logs. The
+overlay publishes no host ports and configures no external dashboard host,
+reverse proxy, tunnel, runtime audit emitter, production credential, production
+host mutation, registry authority change, worker authority change, MCP authority
+change, or event-bus authority change.
+
+
+### Horizontal scaling readiness (Story 132.6)
+
+Story 132.6 defines a readiness-only horizontal scaling contract. The canonical
+contract is `docs/horizontal-scaling-readiness.json`
+and the gate is:
+
+```bash
+uv run python scripts/check_horizontal_scaling_readiness.py
+uv run python scripts/check_horizontal_scaling_readiness.py --self-test
+```
+
+This is not live scaling activation. Keep local single-host SQLite defaults unless
+a later approved activation story supplies operator evidence for shared storage,
+load balancing, lock ownership, bounded pools, credentials, and rollback. Do not
+add host ports, external load balancers, external worker pools, production hosts,
+production credentials, live load generation, live restores, or runtime
+production audit emitters through this readiness slice.
+
+Before any future horizontal scaling activation, collect all of the following
+evidence:
+
+1. Scale-safety classes and limits for `registry-api`, `registry-state`,
+   `telegram-gateway`, `orchestrator-adapter`, `worker-wrapper`, and
+   `clawhip-daemon`.
+2. Singleton authorities for mutable registry-state writer/materializer, Alembic
+   migration runner, retention/apply/destructive lifecycle runner, event append
+   authority per event log, and clawhip bridge authority.
+3. Shared coordination boundaries for idempotency storage, worktree lock
+   ownership, task/session registry consistency, event ordering/replay,
+   capability tier preservation, and bounded DB pool composition.
+4. Load-balancer readiness for health/readiness endpoints, trace propagation,
+   auth header preservation, rate-limit behavior, sticky-session stance, no host
+   ports, and no external load balancer added by the readiness story.
+5. Unsupported modes remain fail-closed: external worker pool, multi-writer
+   registry-state, multi-runner migration, multi-clawhip appenders, dashboard
+   live scaling, and runtime audit emitter activation.
+6. Rollback/observability evidence for scale-down fallback, version skew,
+   lag/backpressure, pool saturation, and forbidden credential rendering.
+
+
+### Failure/load/backup/restore validation readiness (Story 132.7)
+
+Story 132.7 defines a readiness-only validation contract for future failure
+drills, bounded load validation, and backup/restore validation. The canonical
+contract is `docs/failure-load-backup-restore-readiness.json` and the gate is:
+
+```bash
+uv run python scripts/check_failure_load_backup_restore_readiness.py
+uv run python scripts/check_failure_load_backup_restore_readiness.py --self-test
+```
+
+This is not live drill execution. Keep local single-host SQLite defaults unless
+a later approved activation story supplies operator evidence. Do not execute live
+failure drills, generate load, run destructive restores, prune backups, restore
+production, mutate production hosts, add credential values, provision hosts, or
+activate runtime production audit emitters through this readiness slice.
+
+Before any future validation activation, collect all of the following evidence:
+
+1. Failure scenario coverage for database outage, network partition, pool
+   exhaustion, worker crash, orchestrator crash, registry restart, MCP service
+   unavailable, event-log append failure, migration failure/rollback, and backup
+   restore failure.
+2. Bounded synthetic load-only evidence for target surfaces, latency/error/
+   backpressure metrics, pool saturation thresholds, rate-limit preservation,
+   trace correlation, and no external production load.
+3. Backup/restore validation evidence for pre-migration backup,
+   checksum/manifest validation, isolated restore, schema/version compatibility,
+   point-in-time freshness, rollback/fix-forward decision, and separate
+   destructive restore confirmation.
+4. Observability and audit metadata for health/readiness signals, sanitized logs,
+   trace IDs, recovery timeline, audit metadata only, and no secret material.
+5. Fail-closed boundaries for no live destructive operation, backup pruning,
+   production restore, host mutation, credential values, or runtime audit
+   emitter.
+
 ### Retention policy and object-storage adapter contract (Story 130.1)
 
 Story 130.1 is a static/readiness-only Epic 130 gate. Run it with:
@@ -1611,10 +1857,10 @@ uv run python scripts/check_db_mtls_readiness.py --self-test
 ```
 
 Do not provision live Postgres or mutate production hosts for this readiness
-slice. Keep the local default profile unchanged unless `REGISTRY_DB_MTLS_ENABLED`
-is explicitly true and operator evidence is supplied. If `REGISTRY_DB_MTLS_ENABLED`
-is false, existing SQLite and no-SSL connection behavior is the only supported
-local behavior.
+slice. The DB mTLS runtime gate remains fail-closed and off by default; future
+operator evidence must supply the approved Postgres URL, verify-full material,
+and approved secret locations before production use. Local SQLite/default and
+no-SSL connection behavior remains unchanged while that evidence is absent.
 
 Before any production DB mTLS activation, collect operator evidence for:
 
@@ -1646,3 +1892,27 @@ Before any production DB mTLS activation, collect operator evidence for:
 Never log or paste passwords, private-key bytes, PEM blocks, full DSNs, full
 filesystem paths, cert/key filenames, certificate subjects/CNs, SAN hostnames,
 or production hostnames in DB mTLS diagnostics or readiness artifacts.
+
+
+## Epic 132 closure evidence readiness (Story 132.8)
+
+Run the closure gate before treating Epic 132 as closed:
+
+```bash
+uv run python scripts/check_split_deployment_remote_postgres_closure.py
+uv run python scripts/check_split_deployment_remote_postgres_closure.py --self-test
+```
+
+The gate records Epic 132 as `readiness-contract-complete_not_live_activation`
+only, with source contract `docs/split-deployment-remote-postgres-closure-readiness.json`. It requires Stories 132.1-132.7 artifacts, contracts, checker/tests,
+Story 132.3-132.5 compose overlays, docs/status refs, all Story 132.1-132.8
+just/CI gates and self-tests, readiness-domain coverage, fail-closed closure
+statements, and durable non-leader code-review plus UltraQA evidence. Pending
+quality gate placeholders are allowed only as owed-gate notes; they do not
+satisfy final closure.
+
+Do not use this closure as production activation authority. It adds no live activation, provisioning, credentials, production migration,
+production host mutation, production database mTLS activation, load execution,
+restore execution, scaling activation, or runtime audit emitter. Preserve local
+single-host SQLite defaults until a later approved activation story supplies
+operator evidence.

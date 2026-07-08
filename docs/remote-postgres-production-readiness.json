@@ -1,0 +1,159 @@
+{
+  "version": 1,
+  "epic": "132",
+  "story": "132.2",
+  "operation_class": "remote_postgres_production_readiness_contract",
+  "mode": "readiness_contract_runtime_opt_in",
+  "production_activation": "deferred_fail_closed",
+  "summary": "Story 132.2 records the bounded remote Postgres production-readiness contract. SQLite remains the default; remote Postgres remains opt-in and production activation requires later operator evidence, backups, migrations, DB mTLS composition, and approval.",
+  "current_default_preservation": {
+    "status": "preserved",
+    "sqlite_default": true,
+    "default_database_url": "sqlite+aiosqlite local state path",
+    "remote_postgres_requires_explicit_database_url": true,
+    "no_default_remote_dsn": true,
+    "no_compose_profile_activation": true,
+    "no_production_credentials": true,
+    "required_statement": "SQLite remains the default runtime backend unless REGISTRY_DATABASE_URL is explicitly set by an operator-approved environment. Documentation does not activate remote Postgres."
+  },
+  "opt_in_remote_postgres_runtime_support": {
+    "status": "opt_in_supported_local_only",
+    "activation_key": "REGISTRY_DATABASE_URL",
+    "required_scheme": "postgresql+asyncpg://",
+    "sqlite_fallback_policy": "unset or sqlite+aiosqlite URL preserves SQLite behavior",
+    "fail_closed_rules": [
+      "remote postgres is never selected by default",
+      "non-asyncpg Postgres URLs are not production-ready for this contract",
+      "operator evidence is required before any production activation",
+      "no live database is provisioned by this story"
+    ]
+  },
+  "bounded_pool_contract": {
+    "status": "required_before_production_activation",
+    "pool_size_formula": "5 + 2 * num_workers",
+    "max_overflow": 5,
+    "pool_timeout_seconds": 30,
+    "pool_recycle_seconds": 1800,
+    "pool_pre_ping": true,
+    "overflow_policy": "bounded_no_unlimited_growth",
+    "sqlite_pool_policy": "SQLite keeps its existing NullPool/local behavior"
+  },
+  "migration_and_backup_gate": {
+    "status": "operator_contract_required",
+    "alembic_required": true,
+    "single_migration_runner_required": true,
+    "pre_migration_backup_required": true,
+    "migration_command_reference": "just migrate",
+    "required_evidence": [
+      "single migration runner identity and lock/election evidence",
+      "pre-migration backup artifact with checksum",
+      "Alembic head/current revision evidence before and after migration",
+      "no registry-api or worker migration runner",
+      "rollback or fix-forward decision record for failed migrations"
+    ],
+    "forbidden": [
+      "automatic migration on service startup",
+      "parallel migration runners",
+      "migration without backup/checksum evidence",
+      "production migration execution by this story"
+    ]
+  },
+  "redaction_and_secret_hygiene": {
+    "status": "required",
+    "required_surfaces": [
+      "readiness checker output",
+      "operator runbook examples",
+      "migration diagnostics",
+      "pool diagnostics",
+      "backup and restore drill records",
+      "registry-api read-side diagnostics"
+    ],
+    "forbidden_diagnostics": [
+      "password",
+      "secret",
+      "token",
+      "private key",
+      "full DSN",
+      "full filesystem path",
+      "production hostname",
+      "certificate subject",
+      "SAN hostname"
+    ]
+  },
+  "db_mtls_composition": {
+    "status": "compose_with_epic_133_runtime_gate",
+    "env_key": "REGISTRY_DB_MTLS_ENABLED",
+    "required_when_enabled": [
+      "postgresql+asyncpg URL",
+      "Epic 133 approved secret prefixes",
+      "verify-full equivalent client validation",
+      "no plaintext fallback",
+      "sanitized failure diagnostics"
+    ],
+    "disabled_behavior": "REGISTRY_DB_MTLS_ENABLED=false preserves existing SQLite/no-SSL behavior",
+    "activation_boundary": "DB mTLS support alone does not activate remote Postgres production mode"
+  },
+  "backup_restore_drill": {
+    "status": "required_before_production_activation",
+    "required_evidence": [
+      "pg_dump or managed snapshot reference",
+      "sha256 checksum for backup artifact or provider snapshot identity",
+      "restored scratch target identity",
+      "Postgres integrity check or logical consistency query evidence",
+      "Alembic revision parity after restore",
+      "event-log/materialized-state reconciliation evidence",
+      "rollback or fix-forward decision record"
+    ],
+    "integrity_checks": [
+      "checksum verification before restore",
+      "restore exits on checksum mismatch",
+      "restored database accepts read-side health query",
+      "failed drill records rollback/fix-forward path instead of continuing"
+    ]
+  },
+  "registry_api_read_side_support": {
+    "status": "read_side_contract_required",
+    "requirements": [
+      "registry-api reads registry-state materialized tables through the shared SQLAlchemy session factory",
+      "registry-api task/event/session reads must work with the selected backend",
+      "registry-api must not run Alembic migrations",
+      "registry-api must not become a second state materializer",
+      "idempotency-cache write boundaries remain explicit and separate from registry-state materialization"
+    ]
+  },
+  "non_goals": [
+    "no live remote Postgres production activation",
+    "no live Postgres provisioning",
+    "no production credentials or DSN values",
+    "no compose profile or overlay activation",
+    "no deployment target mutation",
+    "no automatic migration execution",
+    "no multiple migration runners",
+    "no runtime production audit emitter",
+    "no DB mTLS production activation"
+  ],
+  "fail_closed_checks": [
+    "SQLite default is preserved",
+    "remote Postgres remains explicit opt-in only",
+    "production activation is deferred/fail-closed",
+    "bounded pool contract is exact: pool_size formula, max_overflow 5, pool_timeout 30, pool_recycle 1800, pre_ping true",
+    "Alembic has a single migration runner with pre-migration backup evidence",
+    "backup/restore drill requires checksum, integrity, and rollback/fix-forward evidence",
+    "Epic 133 REGISTRY_DB_MTLS_ENABLED composition is documented",
+    "registry-api read-side support is documented without creating a second migration/materialization writer",
+    "redaction forbids DSNs, passwords, private keys, paths, and hostnames",
+    "no live activation, provisioning, credentials, or overclaims are present",
+    "justfile and CI checker wiring is present"
+  ],
+  "docs_refs": [
+    "docs/operator-runbook.md#remote-postgres-production-readiness-story-1322",
+    "docs/production-operations.md#story-1322-remote-postgres-production-readiness",
+    "docs/feature-status.md#current-bmad-status",
+    "docs/backup-restore.md#remote-postgres-backuprestore-drill-readiness-story-1322",
+    "_bmad-output/implementation-artifacts/132-2-remote-postgres-production-mode.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

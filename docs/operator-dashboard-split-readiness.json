@@ -1,0 +1,189 @@
+{
+  "version": 1,
+  "epic": "132",
+  "story": "132.5",
+  "operation_class": "operator_dashboard_split_profile",
+  "mode": "opt_in_profile_fail_closed",
+  "production_activation": "deferred_operator_evidence_required",
+  "summary": "Story 132.5 adds an opt-in readiness-only operator/dashboard split profile. Compose scope is limited to telegram-gateway and clawhip-daemon; console-cli remains host-side and dashboard/static remains a static browser asset boundary. No live ingress, runtime auth enforcement, host port, production credential, or production host mutation is introduced.",
+  "profile_artifact": {
+    "status": "present_opt_in_only",
+    "compose_file": "docker-compose.operator-dashboard-split.yml",
+    "profile_name": "operator-dashboard-split",
+    "activation_command_reference": "OPERATOR_DASHBOARD_AUTH_TOKEN=<redacted> docker compose -f docker-compose.yml -f docker-compose.operator-dashboard-split.yml --profile operator-dashboard-split config",
+    "root_compose_default_unchanged": true,
+    "compose_services": [
+      "telegram-gateway",
+      "clawhip-daemon"
+    ],
+    "forbidden_compose_services": [
+      "console-cli",
+      "dashboard"
+    ],
+    "no_external_ports": true,
+    "no_live_host_mutation": true,
+    "no_runtime_auth_enforcement_added": true
+  },
+  "default_preservation": {
+    "status": "preserved",
+    "single_host_compose_default": true,
+    "operator_surface_split_requires_overlay_profile_and_auth": true,
+    "required_statement": "Without docker-compose.operator-dashboard-split.yml and --profile operator-dashboard-split, Telegram, console, dashboard static assets, registry, worker, and MCP defaults remain unchanged."
+  },
+  "core_split_prerequisites": {
+    "status": "required_static_prerequisites",
+    "required_stories": [
+      "132.3",
+      "132.4"
+    ],
+    "required_checkers": [
+      "scripts/check_registry_remote_postgres_profile.py",
+      "scripts/check_worker_mcp_event_bus_split.py"
+    ],
+    "required_contracts": [
+      "docs/registry-remote-postgres-profile-readiness.json",
+      "docs/worker-mcp-event-bus-split-readiness.json"
+    ],
+    "required_overlays": [
+      "docker-compose.registry-remote-postgres.yml",
+      "docker-compose.worker-mcp-event-bus-split.yml"
+    ],
+    "required_statuses": [
+      "132-3-registry-remote-postgres-deployment-profile: done",
+      "132-4-worker-mcp-event-bus-split-profile: done"
+    ]
+  },
+  "telegram_ingress": {
+    "status": "internal_compose_service_future_operator_ingress_only",
+    "surface": "telegram-gateway",
+    "compose_service": "telegram-gateway",
+    "ingress_mode": "internal compose network plus operator-managed tunnel or reverse proxy evidence only",
+    "host_ports_published": false,
+    "runtime_auth_boundary_preserved": "TELEGRAM_BOT_TOKEN and TG_ALLOWLIST_USER_IDS remain the runtime Telegram auth boundary",
+    "health_readiness_ref": "services/telegram-gateway/src/telegram_gateway/app/webhook.py GET /v1/health",
+    "trace_ref": "services/telegram-gateway/src/telegram_gateway/app/middleware.py derives and propagates tg:<update_id>",
+    "version_ref": "services/telegram-gateway/src/telegram_gateway/__init__.py and /v1/health version"
+  },
+  "console_boundary": {
+    "status": "host_side_cli_not_compose_service",
+    "surface": "console-cli",
+    "compose_service": null,
+    "ingress_mode": "host-side operator CLI invocation only",
+    "not_compose_evidence": "docker-compose.digest.yml states console-cli is not a compose service",
+    "runtime_auth_boundary_preserved": "existing host-side actor identity, trace, idempotency, and approval controls remain authoritative",
+    "health_readiness_ref": "bootstrap import/version availability for console_cli",
+    "trace_ref": "console trace command and existing caller trace/idempotency controls",
+    "version_ref": "services/console-cli/src/console_cli/__init__.py __version__"
+  },
+  "dashboard_boundary": {
+    "status": "static_browser_assets_future_ingress_only",
+    "surface": "dashboard/static",
+    "compose_service": null,
+    "ingress_mode": "future external operator proxy/tunnel readiness only; no live dashboard service is added",
+    "not_metrics_subscriber": true,
+    "host_ports_published": false,
+    "runtime_auth_boundary_preserved": "existing dashboard/API route-family boundaries remain unchanged; this story adds no in-process dashboard auth enforcement",
+    "health_readiness_ref": "dashboard/static/health-readiness.js consumes the approved /v1/health boundary",
+    "trace_ref": "dashboard route families keep visible-selector/fail-closed browser contracts and add no hidden trace or credential side channels",
+    "version_ref": "dashboard/static/health-readiness.js renders health version; dashboard/static/replay-lifecycle-contract.json carries static contract version"
+  },
+  "auth_policy": {
+    "status": "placeholder_only_no_runtime_enforcement_added",
+    "required_ingress_auth_env": "OPERATOR_DASHBOARD_AUTH_TOKEN",
+    "compose_interpolation_required": true,
+    "runtime_auth_enforcement_added": false,
+    "preserved_boundaries": [
+      "Telegram bot token and allowlist",
+      "console host-side actor identity trace idempotency and approval controls",
+      "dashboard/API route-family auth and fail-closed boundaries"
+    ],
+    "failure_policy": "fail closed at compose interpolation for missing OPERATOR_DASHBOARD_AUTH_TOKEN; no production value is committed"
+  },
+  "health_readiness": {
+    "status": "surface_specific_existing_evidence_required",
+    "telegram": "GET /v1/health on telegram-gateway includes status service version",
+    "console": "host-side console_cli import/version availability, not compose healthcheck",
+    "dashboard": "static health-readiness.js plus approved /v1/health backend boundary; no live dashboard service health"
+  },
+  "trace_propagation": {
+    "status": "existing_surface_contracts_required",
+    "telegram": "AllowlistMiddleware derives and propagates tg:<update_id>",
+    "console": "console trace command and caller trace/idempotency controls remain host-side",
+    "dashboard": "visible-selector/fail-closed dashboard contracts add no hidden trace or credential side channels"
+  },
+  "version_compatibility": {
+    "status": "existing_version_sources_required",
+    "compose_images": "operator-facing compose services continue to use ${OMB_VERSION:-dev}",
+    "telegram": "telegram_gateway.__version__ and /v1/health version",
+    "console": "console_cli.__version__; console-cli is excluded from digest compose because it is not a compose service",
+    "dashboard": "dashboard/static/health-readiness.js version rendering and replay-lifecycle-contract.json version",
+    "digest_caveat_preserved": true
+  },
+  "network_boundary": {
+    "status": "internal_only_no_host_ports",
+    "compose_network_only": true,
+    "host_ports_published": false,
+    "external_hostnames_committed": false,
+    "reverse_proxy_or_tunnel_activation": "deferred_operator_evidence_required"
+  },
+  "secret_hygiene": {
+    "status": "browser_payloads_logs_docs_static_scanned",
+    "scan_paths": [
+      "dashboard/static",
+      "services/telegram-gateway/src/telegram_gateway",
+      "services/console-cli/src/console_cli",
+      "docs/operator-dashboard-split-readiness.json",
+      "docs/operator-runbook.md",
+      "docs/production-operations.md",
+      "docs/feature-status.md",
+      "docker-compose.operator-dashboard-split.yml",
+      ".env.example",
+      "_bmad-output/implementation-artifacts/sprint-status.yaml",
+      "_bmad-output/implementation-artifacts/132-5-operator-dashboard-split-profile.md"
+    ],
+    "browser_payload_secrets_forbidden": true,
+    "log_secret_material_forbidden": true,
+    "production_credential_values_forbidden": true
+  },
+  "readiness_checks": {
+    "status": "static_gate_required",
+    "checker_command": "uv run python scripts/check_operator_dashboard_split.py",
+    "self_test_command": "uv run python scripts/check_operator_dashboard_split.py --self-test",
+    "validates": [
+      "operator/dashboard overlay is opt-in and compose-scoped to telegram-gateway and clawhip-daemon only",
+      "OPERATOR_DASHBOARD_AUTH_TOKEN is required as placeholder-only future ingress evidence",
+      "console-cli remains host-side and dashboard/static remains static future-ingress readiness only",
+      "Story 132.3 and 132.4 prerequisite artifacts remain present and done",
+      "Telegram/console/dashboard ingress auth health/readiness trace propagation and version compatibility evidence is explicit",
+      "secret hygiene covers dashboard/static browser payloads, Telegram/console code, docs, artifacts, and logs with no production secret values",
+      "no host ports, external hostname, reverse-proxy activation, live production activation, or runtime auth overclaim is present"
+    ]
+  },
+  "non_goals": [
+    "no live split deployment activation",
+    "no live operator/dashboard production activation",
+    "no runtime auth enforcement added",
+    "no dashboard compose service",
+    "no console-cli compose service",
+    "no host port publishing",
+    "no external operator host",
+    "no external dashboard host",
+    "no reverse-proxy or tunnel activation",
+    "no production credentials or token values",
+    "no browser payload secrets",
+    "no log secret material",
+    "no production host mutation",
+    "no registry worker MCP or event-bus authority change",
+    "no runtime production audit emitter"
+  ],
+  "docs_refs": [
+    "docs/operator-runbook.md#operatordashboard-split-profile-story-1325",
+    "docs/production-operations.md#story-1325-operatordashboard-split-profile",
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/132-5-operator-dashboard-split-profile.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

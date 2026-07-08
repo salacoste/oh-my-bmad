@@ -1,0 +1,277 @@
+{
+  "version": 1,
+  "epic": "132",
+  "story": "132.8",
+  "operation_class": "split_deployment_remote_postgres_closure_readiness",
+  "mode": "readiness_contract_complete_not_live_activation",
+  "production_activation": "deferred_fail_closed",
+  "summary": "Story 132.8 closes Epic 132 as readiness-contract-complete_not_live_activation only. It records source evidence for Stories 132.1-132.7, gate wiring plus executed subordinate Story 132.1-132.7 checkers and self-tests, readiness-domain coverage, fail-closed unsupported surfaces, and non-leader code-review/UltraQA quality gates without live activation, provisioning, production migration, host mutation, credentials, load/restore/scaling execution, DB mTLS production activation, or runtime audit emitters.",
+  "epic_closure": {
+    "status": "readiness_contract_complete_not_live_activation",
+    "activation_state": "deferred_fail_closed",
+    "live_activation": false,
+    "future_activation_required": true,
+    "local_single_host_sqlite_default_preserved": true,
+    "required_statement": "Epic 132 is readiness-contract-complete_not_live_activation; split deployment, remote Postgres, scaling, load/restore execution, production DB mTLS activation, provisioning, production credentials, production migrations, production host mutation, and runtime audit emitters remain deferred/fail-closed until later approved activation stories."
+  },
+  "required_story_evidence": {
+    "132.1": {
+      "artifact": "_bmad-output/implementation-artifacts/132-1-split-deployment-remote-postgres-topology-contract.md",
+      "contract": "docs/split-deployment-topology-readiness.json",
+      "checker": "scripts/check_split_deployment_topology.py",
+      "test": "tests/scripts/test_check_split_deployment_topology.py",
+      "docs_refs": [
+        "docs/production-operations.md#epic-132-split-deployment-and-remote-postgres-readiness",
+        "docs/operator-runbook.md#split-deployment-and-remote-postgres-topology-readiness-story-1321"
+      ],
+      "status": "done"
+    },
+    "132.2": {
+      "artifact": "_bmad-output/implementation-artifacts/132-2-remote-postgres-production-mode.md",
+      "contract": "docs/remote-postgres-production-readiness.json",
+      "checker": "scripts/check_remote_postgres_readiness.py",
+      "test": "tests/scripts/test_check_remote_postgres_readiness.py",
+      "docs_refs": [
+        "docs/production-operations.md#story-1322-remote-postgres-production-readiness",
+        "docs/operator-runbook.md#remote-postgres-production-readiness-story-1322"
+      ],
+      "status": "done"
+    },
+    "132.3": {
+      "artifact": "_bmad-output/implementation-artifacts/132-3-registry-remote-postgres-deployment-profile.md",
+      "contract": "docs/registry-remote-postgres-profile-readiness.json",
+      "checker": "scripts/check_registry_remote_postgres_profile.py",
+      "test": "tests/scripts/test_check_registry_remote_postgres_profile.py",
+      "compose_overlay": "docker-compose.registry-remote-postgres.yml",
+      "docs_refs": [
+        "docs/production-operations.md#story-1323-registry-remote-postgres-deployment-profile",
+        "docs/operator-runbook.md#registry-remote-postgres-deployment-profile-story-1323"
+      ],
+      "status": "done"
+    },
+    "132.4": {
+      "artifact": "_bmad-output/implementation-artifacts/132-4-worker-mcp-event-bus-split-profile.md",
+      "contract": "docs/worker-mcp-event-bus-split-readiness.json",
+      "checker": "scripts/check_worker_mcp_event_bus_split.py",
+      "test": "tests/scripts/test_check_worker_mcp_event_bus_split.py",
+      "compose_overlay": "docker-compose.worker-mcp-event-bus-split.yml",
+      "docs_refs": [
+        "docs/production-operations.md#story-1324-workermcpevent-bus-split-profile",
+        "docs/operator-runbook.md#workermcpevent-bus-split-profile-story-1324"
+      ],
+      "status": "done"
+    },
+    "132.5": {
+      "artifact": "_bmad-output/implementation-artifacts/132-5-operator-dashboard-split-profile.md",
+      "contract": "docs/operator-dashboard-split-readiness.json",
+      "checker": "scripts/check_operator_dashboard_split.py",
+      "test": "tests/scripts/test_check_operator_dashboard_split.py",
+      "compose_overlay": "docker-compose.operator-dashboard-split.yml",
+      "docs_refs": [
+        "docs/production-operations.md#story-1325-operatordashboard-split-profile",
+        "docs/operator-runbook.md#operatordashboard-split-profile-story-1325"
+      ],
+      "status": "done"
+    },
+    "132.6": {
+      "artifact": "_bmad-output/implementation-artifacts/132-6-horizontal-scaling.md",
+      "contract": "docs/horizontal-scaling-readiness.json",
+      "checker": "scripts/check_horizontal_scaling_readiness.py",
+      "test": "tests/scripts/test_check_horizontal_scaling_readiness.py",
+      "docs_refs": [
+        "docs/production-operations.md#story-1326-horizontal-scaling-readiness",
+        "docs/operator-runbook.md#horizontal-scaling-readiness-story-1326"
+      ],
+      "status": "done"
+    },
+    "132.7": {
+      "artifact": "_bmad-output/implementation-artifacts/132-7-failure-load-backup-restore-validation.md",
+      "contract": "docs/failure-load-backup-restore-readiness.json",
+      "checker": "scripts/check_failure_load_backup_restore_readiness.py",
+      "test": "tests/scripts/test_check_failure_load_backup_restore_readiness.py",
+      "docs_refs": [
+        "docs/production-operations.md#story-1327-failure-load-backup-restore-validation-readiness",
+        "docs/operator-runbook.md#failure-load-backup-restore-validation-readiness-story-1327"
+      ],
+      "status": "done"
+    }
+  },
+  "required_ci_gates": {
+    "status": "all_story_gates_required",
+    "commands": {
+      "132.1": {
+        "checker_command": "uv run python scripts/check_split_deployment_topology.py",
+        "self_test_command": "uv run python scripts/check_split_deployment_topology.py --self-test",
+        "just_wired": true,
+        "ci_wired": true
+      },
+      "132.2": {
+        "checker_command": "uv run python scripts/check_remote_postgres_readiness.py",
+        "self_test_command": "uv run python scripts/check_remote_postgres_readiness.py --self-test",
+        "just_wired": true,
+        "ci_wired": true
+      },
+      "132.3": {
+        "checker_command": "uv run python scripts/check_registry_remote_postgres_profile.py",
+        "self_test_command": "uv run python scripts/check_registry_remote_postgres_profile.py --self-test",
+        "just_wired": true,
+        "ci_wired": true
+      },
+      "132.4": {
+        "checker_command": "uv run python scripts/check_worker_mcp_event_bus_split.py",
+        "self_test_command": "uv run python scripts/check_worker_mcp_event_bus_split.py --self-test",
+        "just_wired": true,
+        "ci_wired": true
+      },
+      "132.5": {
+        "checker_command": "uv run python scripts/check_operator_dashboard_split.py",
+        "self_test_command": "uv run python scripts/check_operator_dashboard_split.py --self-test",
+        "just_wired": true,
+        "ci_wired": true
+      },
+      "132.6": {
+        "checker_command": "uv run python scripts/check_horizontal_scaling_readiness.py",
+        "self_test_command": "uv run python scripts/check_horizontal_scaling_readiness.py --self-test",
+        "just_wired": true,
+        "ci_wired": true
+      },
+      "132.7": {
+        "checker_command": "uv run python scripts/check_failure_load_backup_restore_readiness.py",
+        "self_test_command": "uv run python scripts/check_failure_load_backup_restore_readiness.py --self-test",
+        "just_wired": true,
+        "ci_wired": true
+      },
+      "132.8": {
+        "checker_command": "uv run python scripts/check_split_deployment_remote_postgres_closure.py",
+        "self_test_command": "uv run python scripts/check_split_deployment_remote_postgres_closure.py --self-test",
+        "just_wired": true,
+        "ci_wired": true
+      }
+    }
+  },
+  "required_readiness_domains": {
+    "topology": {
+      "status": "complete",
+      "evidence": "Story 132.1 topology contract preserves service placement, network boundaries, data authority, unsupported topologies, rollback/fallback, and DB mTLS deferment."
+    },
+    "remote_postgres": {
+      "status": "complete",
+      "evidence": "Story 132.2 remote Postgres contract preserves SQLite defaults and requires bounded pool, migration, backup/restore, redaction, and mTLS composition evidence."
+    },
+    "registry_profile": {
+      "status": "complete",
+      "evidence": "Story 132.3 registry remote Postgres profile overlay remains opt-in and requires shared REGISTRY_DATABASE_URL, migration evidence, and DB mTLS composition."
+    },
+    "worker_mcp_event_bus_profile": {
+      "status": "complete",
+      "evidence": "Story 132.4 worker/MCP/event-bus split profile remains opt-in, internal-only, token-placeholder gated, and preserves stdio/local defaults."
+    },
+    "operator_dashboard_profile": {
+      "status": "complete",
+      "evidence": "Story 132.5 operator/dashboard split profile remains opt-in with Telegram/clawhip compose scope, host-side console-cli, and future dashboard ingress readiness."
+    },
+    "horizontal_scaling": {
+      "status": "complete",
+      "evidence": "Story 132.6 horizontal scaling readiness records scale classes, singleton authorities, coordination boundaries, load-balancer readiness, rollback, and observability."
+    },
+    "failure_load_backup_restore_validation": {
+      "status": "complete",
+      "evidence": "Story 132.7 failure/load/backup/restore validation readiness records required scenarios, bounded synthetic-load evidence, isolated restore, checksum/manifest, observability, and safety boundaries."
+    },
+    "db_mtls_epic_133_composition": {
+      "status": "composed",
+      "evidence": "Epic 132 composes with Epic 133 DB mTLS readiness through deferred REGISTRY_DB_MTLS_* evidence and explicitly does not activate DB mTLS in production."
+    }
+  },
+  "unsupported_until_later_activation": [
+    "live activation",
+    "provisioning",
+    "credentials",
+    "production migration",
+    "production host mutation",
+    "DB mTLS production activation",
+    "load execution",
+    "restore execution",
+    "scaling activation",
+    "runtime audit emitter"
+  ],
+  "required_fail_closed_statements": [
+    "no live activation",
+    "no provisioning",
+    "no credentials",
+    "no production migration",
+    "no production host mutation",
+    "no DB mTLS production activation",
+    "no load execution",
+    "no restore execution",
+    "no scaling activation",
+    "no runtime audit emitter",
+    "local single-host SQLite defaults preserved",
+    "future activation requires a later approved activation story"
+  ],
+  "quality_gates": {
+    "local_checker": {
+      "status": "passed",
+      "commands": [
+        "uv run python scripts/check_split_deployment_remote_postgres_closure.py --self-test",
+        "uv run python scripts/check_split_deployment_remote_postgres_closure.py --verbose",
+        "uv run pytest -q tests/scripts/test_check_split_deployment_remote_postgres_closure.py",
+        "uv run ruff check scripts/check_split_deployment_remote_postgres_closure.py tests/scripts/test_check_split_deployment_remote_postgres_closure.py",
+        "uv run ruff format --check scripts/check_split_deployment_remote_postgres_closure.py tests/scripts/test_check_split_deployment_remote_postgres_closure.py"
+      ],
+      "evidence": "Focused local closure checker, pytest, ruff check, ruff format, and executed subordinate Story 132.1-132.7 checker/self-test gates are required before final closure."
+    },
+    "ci_wiring": {
+      "status": "passed",
+      "evidence": "justfile check-gates/check-gates-self-test and .github/workflows/ci.yml include Story 132.1-132.8 checker and self-test commands."
+    },
+    "code_review": {
+      "status": "passed",
+      "source_type": "native_subagent",
+      "source": "multi_agent_v1.spawn_agent",
+      "source_reference": "subagent:019f40a4-0e28-7a63-83f3-a2321befea1d",
+      "agent_role": "code-reviewer",
+      "reviewed_by_non_leader": true,
+      "recommendation": "APPROVE",
+      "architectural_status": "CLEAR",
+      "evidence": "Non-leader code-reviewer source must approve the Story 132.8 closure checker, docs, status, and wiring as readiness-only closure evidence; source_reference must be backed by native subagent provenance: local OMX subagent tracking plus agent-turn-complete logs when present, or the committed sanitized native-subagent provenance bundle when local runtime state is absent.",
+      "source_record_path": "_bmad-output/implementation-artifacts/132-8-quality-gate-source-records.json"
+    },
+    "ultraqa": {
+      "status": "passed",
+      "source_type": "native_subagent",
+      "source": "multi_agent_v1.spawn_agent",
+      "source_reference": "subagent:019f40a4-3ace-79e0-90d5-d514119be247",
+      "agent_role": "verifier",
+      "reviewed_by_non_leader": true,
+      "clean": true,
+      "evidence": "Non-leader verifier/UltraQA source must validate mutation coverage, closure semantics, gate wiring, and fail-closed non-live activation boundaries; source_reference must be backed by native subagent provenance: local OMX subagent tracking plus agent-turn-complete logs when present, or the committed sanitized native-subagent provenance bundle when local runtime state is absent.",
+      "source_record_path": "_bmad-output/implementation-artifacts/132-8-quality-gate-source-records.json"
+    }
+  },
+  "readiness_checks": {
+    "status": "static_gate_required",
+    "checker_command": "uv run python scripts/check_split_deployment_remote_postgres_closure.py",
+    "self_test_command": "uv run python scripts/check_split_deployment_remote_postgres_closure.py --self-test",
+    "validates": [
+      "readiness_contract_complete_not_live_activation closure semantics with deferred/fail-closed activation",
+      "Stories 132.1-132.7 artifacts contracts checkers tests docs refs and compose overlays where applicable, plus successful execution of each subordinate checker and self-test command",
+      "Story 132.1-132.8 checker and self-test wiring in justfile and CI",
+      "required readiness domains for topology remote Postgres registry worker/MCP/event-bus operator/dashboard horizontal scaling failure/load/backup/restore and Epic 133 DB mTLS composition",
+      "unsupported activation surfaces and fail-closed statements for no live activation provisioning credentials production migration host mutation DB mTLS production activation load restore scaling or runtime audit emitter",
+      "sprint status marks 132.6 132.7 132.8 and epic-132 done using readiness-only wording",
+      "code-review and UltraQA quality gates require non-leader durable native subagent evidence and reject pending placeholders leader summaries self-attestation manual summaries or artifact-only summaries"
+    ]
+  },
+  "docs_refs": [
+    "docs/operator-runbook.md#epic-132-closure-evidence-readiness-story-1328",
+    "docs/production-operations.md#story-1328-epic-132-closure-evidence-readiness",
+    "docs/backup-restore.md#epic-132-closure-evidence-readiness-story-1328",
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/132-8-closure-evidence.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

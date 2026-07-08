@@ -1,0 +1,205 @@
+{
+  "version": 1,
+  "epic": "132",
+  "story": "132.6",
+  "operation_class": "horizontal_scaling_readiness",
+  "mode": "readiness_only",
+  "production_activation": "deferred",
+  "summary": "Story 132.6 records horizontal scaling readiness boundaries only. It classifies service scale safety, singleton authorities, coordination boundaries, ingress/load-balancer readiness, unsupported scaling modes, rollback, and observability without activating live scaling, provisioning hosts, credentials, external load balancers, or production mutations.",
+  "default_preservation": {
+    "status": "preserved",
+    "single_host_sqlite_default": true,
+    "root_compose_default_unchanged": true,
+    "no_live_scaling_activation": true,
+    "required_statement": "Local single-host SQLite defaults remain unchanged; all horizontal scaling is deferred until a later activation story supplies operator evidence."
+  },
+  "scale_safety_matrix": {
+    "registry-api": {
+      "class": "stateless_scalable",
+      "reason": "HTTP read/write facade can be horizontally scaled only after shared idempotency storage, shared registry-state database, trace propagation, auth preservation, and bounded DB pool composition evidence exist.",
+      "limit_note": "No host ports or external load balancer are added by Story 132.6; rate-limit and idempotency storage must be shared before more than one instance."
+    },
+    "registry-state": {
+      "class": "singleton_required",
+      "reason": "Mutable registry-state writer/materializer and schema authority must remain single-owner to preserve task/session consistency and ordered event replay.",
+      "limit_note": "Maximum one mutable writer/materializer and one Alembic migration runner; read-side scaling requires a later approved story."
+    },
+    "telegram-gateway": {
+      "class": "profile_gated_internal",
+      "reason": "Operator ingress remains profile-gated; webhook delivery, auth headers, trace propagation, and rate-limit behavior need explicit load-balancer evidence before scaling.",
+      "limit_note": "No live dashboard or Telegram ingress scaling is activated; sticky sessions are not generally required except Telegram webhook caveats must be evaluated."
+    },
+    "orchestrator-adapter": {
+      "class": "profile_gated_internal",
+      "reason": "Spawner coordination depends on task/session registry consistency, worktree lock ownership, capability tiers, and shared MCP/idempotency boundaries.",
+      "limit_note": "No external worker pool is supported; adapters must not create duplicate runners for a single task/session authority."
+    },
+    "worker-wrapper": {
+      "class": "profile_gated_internal",
+      "reason": "Worker instances need shared worktree lock ownership, approval/capability tier preservation, and idempotent task/session transitions.",
+      "limit_note": "External worker pools remain unsupported; local/stdin defaults remain unchanged."
+    },
+    "clawhip-daemon": {
+      "class": "singleton_required",
+      "reason": "Clawhip bridge/event append authority must remain single-owner per event log to prevent duplicate or reordered append streams.",
+      "limit_note": "Maximum one bridge appender per event log; multi-clawhip appenders are explicitly unsupported."
+    }
+  },
+  "singleton_authorities": {
+    "mutable_registry_state_writer_materializer": {
+      "owner": "registry-state",
+      "cardinality": "exactly_one",
+      "reason": "One mutable registry-state writer/materializer preserves materialized task/session consistency."
+    },
+    "alembic_migration_runner": {
+      "owner": "operator-approved migration runner",
+      "cardinality": "exactly_one",
+      "reason": "Exactly one Alembic migration runner prevents concurrent schema mutation."
+    },
+    "retention_apply_destructive_lifecycle_runner": {
+      "owner": "operator-approved lifecycle runner",
+      "cardinality": "exactly_one",
+      "reason": "Retention/apply/destructive lifecycle actions remain single-runner, approval-bound, and outside live scaling."
+    },
+    "event_append_authority": {
+      "owner": "registry-api or clawhip bridge per approved event-log boundary",
+      "cardinality": "exactly_one_per_event_log",
+      "reason": "One append authority per event log preserves event ordering, replay, and idempotency."
+    },
+    "clawhip_bridge_authority": {
+      "owner": "clawhip-daemon or clawhip-bridge-mcp per selected profile",
+      "cardinality": "exactly_one",
+      "reason": "The clawhip bridge authority must be explicit and singleton to avoid duplicate bridge appenders."
+    }
+  },
+  "coordination_boundaries": [
+    {
+      "id": "idempotency_shared_storage",
+      "status": "required_before_scaling",
+      "reason": "All stateless API instances must share idempotency state before duplicate-request replay can be safe."
+    },
+    {
+      "id": "worktree_lock_ownership",
+      "status": "required_before_scaling",
+      "reason": "Workers and orchestrators must share a lock authority before concurrent worktree mutation."
+    },
+    {
+      "id": "task_session_registry_consistency",
+      "status": "required_before_scaling",
+      "reason": "Task and session registries must observe consistent transitions across instances."
+    },
+    {
+      "id": "event_ordering_replay",
+      "status": "required_before_scaling",
+      "reason": "Append order and replay determinism must be preserved with one append authority per log."
+    },
+    {
+      "id": "capability_tier_preservation",
+      "status": "required_before_scaling",
+      "reason": "Tier and approval checks must remain fail-closed across scaled workers and MCP boundaries."
+    },
+    {
+      "id": "bounded_db_pool_composition",
+      "status": "required_before_scaling",
+      "reason": "Per-instance pools must compose to a bounded total below database limits."
+    }
+  ],
+  "load_balancer_readiness": {
+    "status": "future_operator_evidence_required",
+    "sticky_sessions": "not_required_for_stateless_apis_except_telegram_webhook_caveats",
+    "health_readiness_endpoints": [
+      "registry-api /v1/health",
+      "registry-state health/readiness",
+      "telegram-gateway /v1/health",
+      "operator/dashboard future ingress readiness endpoint"
+    ],
+    "trace_propagation": "required across load balancer and service hops",
+    "auth_header_preservation": "required; authorization, Telegram, MCP, and operator ingress headers must not be stripped",
+    "rate_limit_behavior": "required; rate limits must remain fair and fail-closed across instances",
+    "host_ports_published": false,
+    "external_load_balancer_added": false,
+    "no_host_ports": true,
+    "no_external_load_balancer": true
+  },
+  "unsupported_scaling_modes": [
+    {
+      "id": "external_worker_pool",
+      "unsupported": true,
+      "reason": "External worker pools require separate activation, lock, registry, credential, and network evidence."
+    },
+    {
+      "id": "multi_writer_registry_state",
+      "unsupported": true,
+      "reason": "Multiple mutable registry-state writers/materializers can corrupt consistency."
+    },
+    {
+      "id": "multi_runner_migration",
+      "unsupported": true,
+      "reason": "Multiple Alembic migration runners can race schema changes."
+    },
+    {
+      "id": "multi_clawhip_appenders",
+      "unsupported": true,
+      "reason": "Multiple clawhip appenders can duplicate or reorder event-log appends."
+    },
+    {
+      "id": "dashboard_live_scaling",
+      "unsupported": true,
+      "reason": "Dashboard/static remains future-ingress readiness only, not a live scalable service."
+    },
+    {
+      "id": "runtime_audit_emitter_activation",
+      "unsupported": true,
+      "reason": "Runtime production audit emitters remain deferred and are not activated by scaling readiness."
+    }
+  ],
+  "rollback_and_observability": {
+    "status": "future_required_evidence",
+    "scale_down_fallback": "required return path to single-host/local defaults and one-instance service counts",
+    "version_skew": "required detection for mixed image/schema/API versions before and during scale changes",
+    "lag_backpressure": "required metrics for event-log lag, queue/backpressure, and replay delay",
+    "pool_saturation": "required per-instance and aggregate DB pool saturation signals",
+    "credential_rendering_forbidden": true,
+    "production_host_mutation": false
+  },
+  "readiness_checks": {
+    "status": "static_gate_required",
+    "checker_command": "uv run python scripts/check_horizontal_scaling_readiness.py",
+    "self_test_command": "uv run python scripts/check_horizontal_scaling_readiness.py --self-test",
+    "validates": [
+      "readiness-only mode and deferred production activation",
+      "scale-safety matrix for registry-api registry-state telegram-gateway orchestrator-adapter worker-wrapper and clawhip-daemon",
+      "singleton authorities for registry-state materializer Alembic migrations retention/apply/destructive lifecycle event append and clawhip bridge",
+      "coordination boundaries for idempotency shared storage worktree locks registry consistency event ordering capability tiers and bounded DB pools",
+      "load-balancer readiness for health/readiness trace propagation auth header preservation rate limits no host ports and no external load balancer",
+      "unsupported scaling modes for external worker pool multi-writer registry-state multi-runner migration multi-clawhip appenders dashboard live scaling and runtime audit emitter activation",
+      "rollback and observability requirements without credential rendering"
+    ]
+  },
+  "non_goals": [
+    "no live horizontal scaling activation",
+    "no external worker pool",
+    "no external load balancer",
+    "no host port publishing",
+    "no multi-writer registry-state",
+    "no multi-runner migration",
+    "no multi-clawhip appenders",
+    "no dashboard live scaling",
+    "no production credentials or token values",
+    "no production host mutation",
+    "no provisioning",
+    "no live load generation",
+    "no live restore execution",
+    "no runtime production audit emitter"
+  ],
+  "docs_refs": [
+    "docs/operator-runbook.md#horizontal-scaling-readiness-story-1326",
+    "docs/production-operations.md#story-1326-horizontal-scaling-readiness",
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/132-6-horizontal-scaling.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

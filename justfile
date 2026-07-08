@@ -254,6 +254,13 @@ lint:
     uv run python scripts/check_production_command_surface.py
     uv run python scripts/check_production_operations_closure.py
     uv run python scripts/check_split_deployment_topology.py
+    uv run python scripts/check_remote_postgres_readiness.py
+    uv run python scripts/check_registry_remote_postgres_profile.py
+    uv run python scripts/check_worker_mcp_event_bus_split.py
+    uv run python scripts/check_operator_dashboard_split.py
+    uv run python scripts/check_horizontal_scaling_readiness.py
+    uv run python scripts/check_failure_load_backup_restore_readiness.py
+    uv run python scripts/check_split_deployment_remote_postgres_closure.py
     uv run python scripts/check_db_mtls_readiness.py
     git ls-files -z | xargs -0 uv run secret-hygiene-precommit
 
@@ -280,6 +287,13 @@ check-gates:
     uv run python scripts/check_production_command_surface.py
     uv run python scripts/check_production_operations_closure.py
     uv run python scripts/check_split_deployment_topology.py
+    uv run python scripts/check_remote_postgres_readiness.py
+    uv run python scripts/check_registry_remote_postgres_profile.py
+    uv run python scripts/check_worker_mcp_event_bus_split.py
+    uv run python scripts/check_operator_dashboard_split.py
+    uv run python scripts/check_horizontal_scaling_readiness.py
+    uv run python scripts/check_failure_load_backup_restore_readiness.py
+    uv run python scripts/check_split_deployment_remote_postgres_closure.py
     uv run python scripts/check_db_mtls_readiness.py
     uv run python scripts/check_task_fsm_only.py
 
@@ -301,6 +315,13 @@ check-gates-self-test:
     uv run python scripts/check_production_command_surface.py --self-test
     uv run python scripts/check_production_operations_closure.py --self-test
     uv run python scripts/check_split_deployment_topology.py --self-test
+    uv run python scripts/check_remote_postgres_readiness.py --self-test
+    uv run python scripts/check_registry_remote_postgres_profile.py --self-test
+    uv run python scripts/check_worker_mcp_event_bus_split.py --self-test
+    uv run python scripts/check_operator_dashboard_split.py --self-test
+    uv run python scripts/check_horizontal_scaling_readiness.py --self-test
+    uv run python scripts/check_failure_load_backup_restore_readiness.py --self-test
+    uv run python scripts/check_split_deployment_remote_postgres_closure.py --self-test
     uv run python scripts/check_db_mtls_readiness.py --self-test
     uv run python scripts/check_task_fsm_only.py --self-test
 

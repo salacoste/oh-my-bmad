@@ -26,7 +26,8 @@ Design decisions:
 - Postgres (``postgresql+asyncpg://``):
   - Uses the default ``AsyncAdaptedQueuePool`` with pool size derived from
     worker count: ``pool_size = 5 + 2 * worker_count`` (default 1 worker → 7).
-  - ``max_overflow=5`` and ``pool_pre_ping=True`` for stale-connection detection.
+  - ``max_overflow=5``, ``pool_timeout=30``, ``pool_recycle=1800``,
+    and ``pool_pre_ping=True`` for bounded stale-connection handling.
   - No SQLite pragmas or ``connect_args`` are applied.
   - ``read_only=True`` raises ``ValueError`` (read-only URI mode is
     SQLite-specific).
@@ -51,6 +52,12 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import NullPool
 
 _DEFAULT_WORKER_COUNT = 1
+_MAX_WORKER_COUNT = 128
+
+
+def is_postgres_url(url: str) -> bool:
+    """Return True when *url* targets the supported asyncpg Postgres backend."""
+    return url.lower().startswith("postgresql+asyncpg://")
 
 
 def create_engine(
@@ -85,7 +92,7 @@ def create_engine(
     """
     # Fail closed for SQLite/non-asyncpg URLs when DB mTLS is explicitly enabled.
     connect_args = build_db_mtls_connect_args(url)
-    if url.startswith("postgresql+asyncpg://"):
+    if is_postgres_url(url):
         return _create_postgres_engine(
             url,
             read_only=read_only,
@@ -106,7 +113,8 @@ def _create_postgres_engine(
     """Create an ``AsyncEngine`` for Postgres with connection pooling."""
     if read_only:
         raise ValueError("read_only=True requires a sqlite+aiosqlite URL; got postgresql+asyncpg")
-    pool_size = 5 + 2 * worker_count
+    safe_worker_count = _validate_worker_count(worker_count)
+    pool_size = 5 + 2 * safe_worker_count
     kwargs: dict[str, Any] = {}
     if connect_args:
         kwargs["connect_args"] = connect_args
@@ -114,10 +122,21 @@ def _create_postgres_engine(
         url,
         pool_size=pool_size,
         max_overflow=5,
+        pool_timeout=30,
+        pool_recycle=1800,
         pool_pre_ping=True,
         future=True,
         **kwargs,
     )
+
+
+def _validate_worker_count(worker_count: int) -> int:
+    """Validate Postgres pool sizing input without echoing caller-provided values."""
+    if isinstance(worker_count, bool) or not isinstance(worker_count, int):
+        raise ValueError("Postgres worker_count must be an integer in range 1..128")
+    if worker_count < 1 or worker_count > _MAX_WORKER_COUNT:
+        raise ValueError("Postgres worker_count must be in range 1..128")
+    return worker_count
 
 
 def _create_sqlite_engine(url: str, *, read_only: bool) -> AsyncEngine:
@@ -183,4 +202,4 @@ def get_session(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)
 
 
-__all__ = ["create_engine", "get_session"]
+__all__ = ["create_engine", "get_session", "is_postgres_url"]

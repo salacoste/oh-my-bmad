@@ -1,0 +1,51 @@
+# Story 132.3 — registry remote Postgres deployment profile overlay.
+#
+# This file is opt-in and must be merged explicitly with the root compose file:
+#
+#   docker compose -f docker-compose.yml \
+#     -f docker-compose.registry-remote-postgres.yml \
+#     --profile registry-remote-postgres config
+#
+# It does NOT provision Postgres, create credentials, run migrations, or mutate a
+# production host. It only wires registry-api and registry-state to the same
+# operator-supplied SQLAlchemy asyncpg URL. The root docker-compose.yml remains
+# the SQLite/local-dev default when this overlay/profile is absent.
+
+name: omb
+
+x-registry-remote-postgres-profile: &registry_remote_postgres_profile
+  profiles: ["registry-remote-postgres"]
+  environment: &registry_remote_postgres_env
+    # Required: fail during compose interpolation unless an operator provides a
+    # DSN from an approved secret/env source. Never commit a real value.
+    REGISTRY_DATABASE_URL: ${REGISTRY_DATABASE_URL:?Story 132.3 registry remote Postgres profile requires REGISTRY_DATABASE_URL}
+    REGISTRY_STATE_DB_URL: ${REGISTRY_DATABASE_URL:?Story 132.3 registry remote Postgres profile requires REGISTRY_DATABASE_URL}
+    REGISTRY_API_DB_URL: ${REGISTRY_DATABASE_URL:?Story 132.3 registry remote Postgres profile requires REGISTRY_DATABASE_URL}
+    REGISTRY_API_IDEMPOTENCY_DB_URL: ${REGISTRY_DATABASE_URL:?Story 132.3 registry remote Postgres profile requires REGISTRY_DATABASE_URL}
+    # Production profile keeps schema authority with the documented single
+    # Alembic migration runner; services must not create schemas on startup.
+    REGISTRY_STATE_AUTO_CREATE_SCHEMA: "0"
+    REGISTRY_API_AUTO_CREATE_IDEMPOTENCY_SCHEMA: "0"
+    # DB mTLS composition: disabled by default. When enabled, the existing Epic
+    # 133 runtime fails closed unless all required material is supplied from
+    # approved secret prefixes and sslmode remains verify-full.
+    REGISTRY_DB_MTLS_ENABLED: ${REGISTRY_DB_MTLS_ENABLED:-false}
+    REGISTRY_DB_MTLS_SSLMODE: ${REGISTRY_DB_MTLS_SSLMODE:-verify-full}
+    REGISTRY_DB_MTLS_ROOT_CA: ${REGISTRY_DB_MTLS_ROOT_CA:-}
+    REGISTRY_DB_MTLS_CLIENT_CERT: ${REGISTRY_DB_MTLS_CLIENT_CERT:-}
+    REGISTRY_DB_MTLS_CLIENT_KEY: ${REGISTRY_DB_MTLS_CLIENT_KEY:-}
+    REGISTRY_DB_MTLS_SERVER_HOSTNAME: ${REGISTRY_DB_MTLS_SERVER_HOSTNAME:-}
+    REGISTRY_DB_MTLS_REVOCATION_LIST: ${REGISTRY_DB_MTLS_REVOCATION_LIST:-}
+    REGISTRY_DB_MTLS_APPROVED_PREFIXES: ${REGISTRY_DB_MTLS_APPROVED_PREFIXES:-/run/secrets/:/certs/db/}
+
+services:
+  registry-state:
+    <<: *registry_remote_postgres_profile
+
+  registry-api:
+    <<: *registry_remote_postgres_profile
+    environment:
+      <<: *registry_remote_postgres_env
+      # Keep registry-api as a read/API service plus idempotency owner only. It
+      # shares the remote Postgres DSN but never runs Alembic migrations.
+      REGISTRY_API_AUTO_CREATE_IDEMPOTENCY_SCHEMA: "0"
