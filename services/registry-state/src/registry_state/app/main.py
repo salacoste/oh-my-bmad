@@ -22,7 +22,8 @@
      across a rollover boundary.
 
 ``main()`` is the sync wrapper for ``python -m registry_state``:
-  - reads env vars (``REGISTRY_STATE_DB_URL``, ``REGISTRY_STATE_LOG_DIR``),
+  - reads env vars (``REGISTRY_DATABASE_URL`` / ``REGISTRY_STATE_DB_URL``,
+    ``REGISTRY_STATE_LOG_DIR``),
   - installs SIGTERM/SIGINT → ``stop_event.set()`` (best-effort: on Windows
     ``loop.add_signal_handler`` raises ``NotImplementedError`` for both
     signals, so we fall back to default Python handling — only ``SIGINT``
@@ -38,7 +39,7 @@ import logging
 import os
 import signal
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from events import EventEnvelope, ensure_shared_dir
@@ -88,6 +89,17 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_LOG_DIR = "/var/lib/oh-my-bmad/registry/events"
 _DEFAULT_DB_URL = "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3"
+
+
+def resolve_registry_state_db_url(env: Mapping[str, str] = os.environ) -> str:
+    """Resolve registry-state DB URL with shared production override precedence.
+
+    Precedence: ``REGISTRY_DATABASE_URL`` > ``REGISTRY_STATE_DB_URL`` >
+    local SQLite default. The shared variable lets state/API services point at
+    the same remote Postgres DSN without losing existing service-specific
+    overrides or SQLite dev defaults.
+    """
+    return env.get("REGISTRY_DATABASE_URL") or env.get("REGISTRY_STATE_DB_URL") or _DEFAULT_DB_URL
 
 
 async def _scan_new_envelopes(base_dir: Path, offsets: dict[str, int]) -> list[EventEnvelope]:
@@ -726,7 +738,8 @@ def main() -> None:
     """Sync entrypoint for ``python -m registry_state``.
 
     Reads configuration from environment variables:
-      - ``REGISTRY_STATE_DB_URL``: SQLAlchemy async URL (default: local dev path).
+      - ``REGISTRY_DATABASE_URL``: shared SQLAlchemy async URL override.
+      - ``REGISTRY_STATE_DB_URL``: state-service SQLAlchemy async URL fallback.
       - ``REGISTRY_STATE_LOG_DIR``: Path to event-log directory (default: ``/var/lib/...``).
 
     Installs SIGTERM/SIGINT handlers that set the stop event for a clean shutdown.
@@ -739,7 +752,7 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    db_url = os.environ.get("REGISTRY_STATE_DB_URL", _DEFAULT_DB_URL)
+    db_url = resolve_registry_state_db_url()
     log_dir = Path(os.environ.get("REGISTRY_STATE_LOG_DIR", _DEFAULT_LOG_DIR))
 
     stop_event = asyncio.Event()
@@ -758,4 +771,4 @@ def main() -> None:
         asyncio.run(_run())
 
 
-__all__ = ["main", "run_subscriber"]
+__all__ = ["main", "resolve_registry_state_db_url", "run_subscriber"]

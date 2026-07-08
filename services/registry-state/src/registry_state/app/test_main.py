@@ -40,7 +40,11 @@ from sqlalchemy.pool import StaticPool
 import registry_state.domain.event_types  # noqa: F401 — side-effect: register() calls
 from registry_state.adapters.event_log import EventLogWriter
 from registry_state.adapters.sqlite_store import get_session
-from registry_state.app.main import _ensure_db_file_group_writable, run_subscriber
+from registry_state.app.main import (
+    _ensure_db_file_group_writable,
+    resolve_registry_state_db_url,
+    run_subscriber,
+)
 from registry_state.schema import Base
 
 # ---------------------------------------------------------------------------
@@ -134,6 +138,47 @@ async def _make_db(db_url: str) -> None:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+def test_resolve_registry_state_db_url_precedence() -> None:
+    """Shared REGISTRY_DATABASE_URL wins over service-specific and default URLs."""
+    default = "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3"
+    state = "sqlite+aiosqlite:////tmp/state.sqlite3"
+    shared = "postgresql+asyncpg://state:secret@db.example.com:5432/registry"
+
+    assert resolve_registry_state_db_url({}) == default
+    assert resolve_registry_state_db_url({"REGISTRY_STATE_DB_URL": state}) == state
+    assert (
+        resolve_registry_state_db_url(
+            {"REGISTRY_STATE_DB_URL": state, "REGISTRY_DATABASE_URL": shared}
+        )
+        == shared
+    )
+
+
+def test_main_uses_resolved_db_url_without_long_running_subscriber(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """main() resolves env precedence and hands the URL to run_subscriber."""
+    import registry_state.app.main as main_module
+
+    state_url = "sqlite+aiosqlite:////tmp/state-specific.sqlite3"
+    shared_url = "postgresql+asyncpg://state:secret@db.example.com:5432/registry"
+    captured: dict[str, object] = {}
+
+    async def fake_run_subscriber(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setenv("REGISTRY_STATE_DB_URL", state_url)
+    monkeypatch.setenv("REGISTRY_DATABASE_URL", shared_url)
+    monkeypatch.setenv("REGISTRY_STATE_LOG_DIR", str(tmp_path / "events"))
+    monkeypatch.setattr(main_module, "run_subscriber", fake_run_subscriber)
+    monkeypatch.setattr(main_module, "_install_signal_handlers", lambda *_args: None)
+
+    main_module.main()
+
+    assert captured["db_url"] == shared_url
+    assert captured["base_dir"] == tmp_path / "events"
 
 
 @pytest.mark.asyncio

@@ -21,8 +21,10 @@ Design notes:
   - Recovery (``recover_all_logs``) is OWNED by the registry-state
     materializer process; this read-mostly + append-only-events service
     intentionally does NOT call it (per F27 of the Story 2.9 code review).
-  - The engine is read-only (``create_engine(db_url, read_only=True)``).
-    Belt-and-braces with FR26 single-writer CI gate.
+  - SQLite state reads use ``create_engine(db_url, read_only=True)`` as
+    belt-and-braces with the FR26 single-writer gate. Remote Postgres state
+    reads use a normal engine because SQLite URI read-only mode is not
+    portable to asyncpg.
   - F10: ``session_maker`` is constructed once during lifespan startup and
     reused per-request — the GET handler reads it via
     ``request.app.state.session_maker``.
@@ -51,6 +53,7 @@ from idempotency import IdempotencyCacheStore, create_idempotency_schema
 from registry_state.adapters.sqlite_store import (  # noqa: IMP001 — services→services allowed per AC-16
     create_engine,
     get_session,
+    is_postgres_url,
 )
 from starlette.exceptions import HTTPException
 
@@ -213,10 +216,12 @@ def build_app(
                   creates ``base_dir`` on construction (``mkdir(parents=True,
                   exist_ok=True)``) so a non-existent directory is fine — the
                   writer initialization handles the bootstrap.
-        db_url:   SQLAlchemy async URL for the read-only SQLite store,
-                  e.g. ``sqlite+aiosqlite:///path/to/state.sqlite3``.
-                  Must NOT be an in-memory URL (read-only + in-memory is
-                  nonsensical per Story 2.3's ``create_engine`` contract).
+        db_url:   SQLAlchemy async URL for the state store. SQLite is opened
+                  read-only, e.g. ``sqlite+aiosqlite:///path/to/state.sqlite3``;
+                  remote Postgres is opened normally because SQLite URI
+                  read-only mode is not supported by asyncpg. SQLite must NOT
+                  be an in-memory URL (read-only + in-memory is nonsensical per
+                  Story 2.3's ``create_engine`` contract).
         clock:    Injectable clock (``SystemClock`` in production;
                   ``FrozenClock`` / ``TickingClock`` in tests).
         actor_kind: Actor kind for tier enforcement (Story 6.3). Phase 1
@@ -250,31 +255,20 @@ def build_app(
         writer construction raised — engine still gets disposed).
 
         Story 2.13: also constructs an ``IdempotencyCacheStore`` backed by a
-        SEPARATE writable engine pointing at the same SQLite file. The cache
-        owns its own table (``idempotency_cache``) per FR28 / Architecture
-        line 205; the read-only engine above continues to gate
-        tasks/events/sessions reads.
-
-        Architectural risk (review M8 — DOCUMENTED, follow-up flagged):
-            registry-state owns the writable engine for tasks/events/sessions
-            (FR26 single-writer). Story 2.13 introduces a SECOND writable
-            engine in registry-api targeting the same SQLite file. SQLite WAL
-            permits multiple readers AND a single writer at any given moment
-            — at the database level, NOT per table. Under sustained write
-            contention (e.g. high-RPS dedup hits + concurrent materializer
-            commits) the system will surface ``OperationalError: database is
-            locked``.
-
-            This is acceptable for Phase 1 (low RPS, idempotency cache
-            writes are sub-millisecond) but a follow-up story should
-            separate the idempotency cache into its own SQLite file. Until
-            then operators monitoring registry-api error rates should treat
-            ``database is locked`` as a load-shedding signal.
+        writable engine. SQLite keeps the Story 11.3.12 split-file default
+        (``state.sqlite3`` → ``idempotency.sqlite3``). Remote Postgres defaults
+        the idempotency engine to the same DSN because the migration-owned
+        ``idempotency_cache`` table is isolated at table level rather than by
+        SQLite file.
         """
         async with AsyncExitStack() as stack:
-            # Engine first — open the read-only DB before constructing the writer.
-            # If create_engine raises (bad URL, etc.) we never allocate the writer.
-            engine = create_engine(db_url, read_only=True)
+            # Engine first — open the state DB before constructing the writer.
+            # SQLite uses URI read-only mode; Postgres uses a normal asyncpg
+            # engine because registry_state.create_engine intentionally rejects
+            # read_only=True for non-SQLite URLs. If create_engine raises (bad
+            # URL, etc.) we never allocate the writer.
+            state_read_only = not is_postgres_url(db_url)
+            engine = create_engine(db_url, read_only=state_read_only)
             stack.push_async_callback(engine.dispose)
 
             # F10/F23: build the session_maker once via Story 2.3's get_session
@@ -294,7 +288,8 @@ def build_app(
             # Story 11.3.12 (M8 follow-up — closes the cross-uid WAL crash-loop):
             # this writable engine now targets a SEPARATE SQLite file
             # (``idempotency_db_url``, default ``idempotency.sqlite3`` beside the
-            # state DB) instead of ``state.sqlite3``. Previously both this
+            # SQLite state DB; for Postgres the default is the same DSN with a
+            # migration-owned table) instead of ``state.sqlite3``. Previously both this
             # writer (registry-api uid 10001) and registry-state's writer
             # (uid 10002) wrote the same file; in WAL mode the first writer
             # created the ``-wal``/``-shm`` sidecars owned by ITS uid at 0o644
@@ -304,18 +299,25 @@ def build_app(
             # writer of ``idempotency.sqlite3`` (single-uid → no cross-uid
             # sidecar gap) and registry-state the SOLE writer of
             # ``state.sqlite3`` (FR26 strengthened; M8 WAL-contention resolved).
-            resolved_idempotency_url = (
-                idempotency_db_url
-                if idempotency_db_url is not None
-                else _derive_idempotency_url(db_url)
-            )
+            if idempotency_db_url is not None:
+                resolved_idempotency_url = idempotency_db_url
+            elif is_postgres_url(db_url):
+                resolved_idempotency_url = db_url
+            else:
+                resolved_idempotency_url = _derive_idempotency_url(db_url)
+            if create_idempotency_schema_on_start and is_postgres_url(resolved_idempotency_url):
+                raise RuntimeError(
+                    "refusing to auto-create idempotency schema for Postgres; "
+                    "run the production schema bootstrap/migration before startup"
+                )
             cache_engine = create_engine(resolved_idempotency_url, read_only=False)
             stack.push_async_callback(cache_engine.dispose)
-            # The separate file needs the ``idempotency_cache`` table created.
+            # The separate SQLite file needs the ``idempotency_cache`` table created.
             # Gated like registry-state's REGISTRY_STATE_AUTO_CREATE_SCHEMA: the
             # idempotency package owns the canonical Core ``Table`` definition,
-            # so bootstrapping it here (rather than the registry-state migrator)
-            # keeps ownership local + avoids a cross-file migrator dependency.
+            # so bootstrapping it here keeps local-dev ownership local. Postgres
+            # production schema creation is intentionally migration-owned and
+            # fail-closed above.
             if create_idempotency_schema_on_start:
                 await create_idempotency_schema(cache_engine)
             # Story 11.3.12 (code-review H1): chmod the idempotency DB file to

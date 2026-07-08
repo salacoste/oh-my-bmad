@@ -81,9 +81,11 @@ from datetime import UTC, datetime, timedelta
 import cachetools
 from events.clock import Clock
 from sqlalchemy import Column, DateTime, Index, MetaData, String, Table, delete, select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from sqlalchemy.sql.dml import Insert
 
 from idempotency.errors import IdempotencyConflict
 
@@ -187,6 +189,54 @@ def _hit_from_row(row: Row[tuple[str, datetime, datetime, str, str]]) -> CacheHi
         request_id_on_first_hit=request_id_on_first_hit,
         created_at=created_at,
         expires_at=expires_at,
+    )
+
+
+def _idempotency_claim_insert_statement(
+    *,
+    dialect_name: str,
+    key: str,
+    created_at: datetime,
+    expires_at: datetime,
+    result_event_id: str,
+    request_id: str,
+) -> Insert:
+    """Build a dialect-safe idempotency claim insert statement.
+
+    SQLAlchemy's ``on_conflict_do_nothing`` is implemented on dialect-specific
+    ``insert()`` builders, not on a statement produced by one dialect and later
+    compiled/executed against another.  Keep the branch here so production code
+    chooses the correct DML builder from the actual session bind, and tests can
+    compile both supported dialects without a live database.
+
+    The unsupported-dialect error intentionally includes only the dialect name,
+    never a connection URL/DSN.
+    """
+    values = {
+        "idempotency_key": key,
+        "created_at": created_at,
+        "expires_at": expires_at,
+        "result_event_id": result_event_id,
+        "request_id_on_first_hit": request_id,
+    }
+
+    if dialect_name == "sqlite":
+        return (
+            sqlite_insert(_IDEMPOTENCY_TABLE)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["idempotency_key"])
+        )
+
+    if dialect_name == "postgresql":
+        return (
+            postgresql_insert(_IDEMPOTENCY_TABLE)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["idempotency_key"])
+        )
+
+    raise ValueError(
+        "IdempotencyCacheStore supports idempotency claim inserts only for "
+        f"sqlite and postgresql dialects; got {dialect_name!r}"
     )
 
 
@@ -345,7 +395,8 @@ class IdempotencyCacheStore:
     ) -> CacheHit:
         """Write a new cache entry and return the WINNER's ``CacheHit``.
 
-        Uses SQLite ``INSERT OR IGNORE`` (on_conflict_do_nothing) semantics.
+        Uses dialect-specific ``INSERT ... ON CONFLICT DO NOTHING`` semantics
+        for SQLite and Postgres.
         If a concurrent writer beat us to the PK:
           - Our INSERT is silently discarded.
           - The same-transaction SELECT returns the existing winner's row.
@@ -354,8 +405,8 @@ class IdempotencyCacheStore:
             (single writer) and INSERT+SELECT in one transaction, should be
             unreachable in production.
 
-        Write-through: SQLite is written FIRST; in-process is populated only
-        after a successful SQLite commit. INSERT and SELECT execute inside
+        Write-through: durable storage is written FIRST; in-process is populated
+        only after a successful DB commit. INSERT and SELECT execute inside
         the SAME transaction so a concurrent ``sweep_expired()`` cannot
         delete the row between phases.
         """
@@ -363,19 +414,17 @@ class IdempotencyCacheStore:
         created_at = now
         expires_at = self._expires_at(created_at)
 
-        stmt = (
-            sqlite_insert(_IDEMPOTENCY_TABLE)
-            .values(
-                idempotency_key=key,
+        async with self._session_maker() as session, session.begin():
+            bind = session.get_bind()
+            dialect_name = bind.dialect.name
+            stmt = _idempotency_claim_insert_statement(
+                dialect_name=dialect_name,
+                key=key,
                 created_at=created_at,
                 expires_at=expires_at,
                 result_event_id=result_event_id,
-                request_id_on_first_hit=request_id,
+                request_id=request_id,
             )
-            .on_conflict_do_nothing(index_elements=["idempotency_key"])
-        )
-
-        async with self._session_maker() as session, session.begin():
             await session.execute(stmt)
             # SELECT inside the SAME transaction — sees the just-INSERTed
             # row OR the pre-existing winner. A concurrent sweep cannot

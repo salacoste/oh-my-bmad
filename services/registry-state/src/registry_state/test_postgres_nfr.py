@@ -15,9 +15,10 @@ Contracts asserted:
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool
 
-from registry_state.adapters.sqlite_store import create_engine
+from registry_state.adapters.sqlite_store import create_engine, is_postgres_url
 
 
 def test_postgres_pool_config_size() -> None:
@@ -79,3 +80,39 @@ def test_postgres_engine_no_check_same_thread() -> None:
     assert "check_same_thread" not in cparams, (
         f"Postgres engine must not have check_same_thread in connect_args, got: {cparams}"
     )
+
+
+def test_postgres_pool_has_bounded_defaults_for_worker_count() -> None:
+    """Story 132.2: Postgres pool has explicit bounded production defaults."""
+    url = "postgresql+asyncpg://test:test@localhost:5432/test_db"
+    engine = create_engine(url, worker_count=3)
+
+    assert isinstance(engine.pool, AsyncAdaptedQueuePool)
+    assert engine.pool._pool.maxsize == 11  # 5 + 2 * 3
+    assert engine.sync_engine.pool._max_overflow == 5
+    assert engine.sync_engine.pool._timeout == 30
+    assert engine.sync_engine.pool._recycle == 1800
+    assert engine.sync_engine.pool._pre_ping is True
+
+
+@pytest.mark.parametrize("bad_worker_count", [True, False, 0, -1, 129, 1.5, "2", None])
+def test_postgres_rejects_unsafe_worker_count_without_secret_leak(
+    bad_worker_count: object,
+) -> None:
+    """Invalid worker counts fail closed without echoing DSNs or credentials."""
+    url = "postgresql+asyncpg://user:super-secret-password@db.example.com:5432/registry"
+
+    with pytest.raises(ValueError) as excinfo:
+        create_engine(url, worker_count=bad_worker_count)  # type: ignore[arg-type]
+
+    message = str(excinfo.value)
+    assert "worker_count" in message
+    for forbidden in (url, "super-secret-password", "db.example.com", "registry"):
+        assert forbidden not in message
+
+
+def test_is_postgres_url_recognizes_only_supported_asyncpg_scheme() -> None:
+    assert is_postgres_url("postgresql+asyncpg://user:pass@host/db") is True
+    assert is_postgres_url("POSTGRESQL+ASYNCPG://user:pass@host/db") is True
+    assert is_postgres_url("postgresql://user:pass@host/db") is False
+    assert is_postgres_url("sqlite+aiosqlite:////tmp/state.sqlite3") is False

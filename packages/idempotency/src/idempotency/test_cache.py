@@ -29,6 +29,8 @@ from datetime import datetime, timedelta
 import pytest
 import pytest_asyncio
 from events.clock import FROZEN_EPOCH, FrozenClock, TickingClock
+from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -41,6 +43,7 @@ from idempotency.cache import (
     _IDEMPOTENCY_TABLE,
     CacheHit,
     IdempotencyCacheStore,
+    _idempotency_claim_insert_statement,
 )
 from idempotency.errors import IdempotencyConflict
 
@@ -518,6 +521,31 @@ class TestTTL:
 class TestUPSERT:
     """Race-safe double-store and re-use after sweep (AC-5)."""
 
+    @pytest.mark.parametrize(
+        ("dialect_name", "dialect"),
+        [
+            ("sqlite", sqlite.dialect()),
+            ("postgresql", postgresql.dialect()),
+        ],
+    )
+    def test_claim_insert_compiles_for_supported_dialects(
+        self, dialect_name: str, dialect: Dialect
+    ) -> None:
+        """No-live-DB proof that idempotency claim DML matches its dialect."""
+        stmt = _idempotency_claim_insert_statement(
+            dialect_name=dialect_name,
+            key=_KEY,
+            created_at=FROZEN_EPOCH,
+            expires_at=FROZEN_EPOCH + timedelta(days=7),
+            result_event_id=_RESULT_EVT,
+            request_id=_REQUEST_ID,
+        )
+
+        compiled = str(stmt.compile(dialect=dialect))
+
+        assert "INSERT INTO idempotency_cache" in compiled
+        assert "ON CONFLICT (idempotency_key) DO NOTHING" in compiled
+
     @pytest.mark.asyncio
     async def test_double_store_returns_first_winner(self) -> None:
         """Storing the same key twice returns the first winner's CacheHit."""
@@ -555,6 +583,21 @@ class TestUPSERT:
         # Re-store the same key (TTL window has passed)
         new_hit = await sweeper.store(_KEY, result_event_id="e-" + "9" * 36, request_id=_REQUEST_ID)
         assert new_hit.result_event_id == "e-" + "9" * 36
+
+    def test_claim_insert_unsupported_dialect_error_is_sanitized(self) -> None:
+        with pytest.raises(ValueError) as exc_info:
+            _idempotency_claim_insert_statement(
+                dialect_name="unsupported",
+                key=_KEY,
+                created_at=FROZEN_EPOCH,
+                expires_at=FROZEN_EPOCH + timedelta(days=7),
+                result_event_id=_RESULT_EVT,
+                request_id=_REQUEST_ID,
+            )
+
+        message = str(exc_info.value)
+        assert "sqlite and postgresql" in message
+        assert "://" not in message
 
 
 # ---------------------------------------------------------------------------

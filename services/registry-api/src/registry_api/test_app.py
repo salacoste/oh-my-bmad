@@ -30,7 +30,7 @@ from collections.abc import AsyncGenerator
 from datetime import timedelta
 from pathlib import Path
 from random import Random
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -3013,6 +3013,118 @@ class TestErrorHandlers:
         assert "synthetic failure" not in (body.get("detail") or "")
 
 
+class TestLifespanDatabaseStartup:
+    """Focused startup wiring tests that require no live Postgres server."""
+
+    @staticmethod
+    def _install_lifespan_fakes(
+        monkeypatch: pytest.MonkeyPatch, calls: list[tuple[str, bool]]
+    ) -> None:
+        import registry_api.app as app_module
+
+        class FakeEngine:
+            def __init__(self, url: str) -> None:
+                self.url = url
+
+            async def dispose(self) -> None:
+                return None
+
+        class FakeWriter:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            async def close(self) -> None:
+                return None
+
+        def fake_create_engine(
+            url: str, *, read_only: bool = False, **_kwargs: object
+        ) -> FakeEngine:
+            calls.append((url, read_only))
+            return FakeEngine(url)
+
+        async def fake_detect_and_emit_key_rotation(**_kwargs: object) -> None:
+            return None
+
+        monkeypatch.setattr(app_module, "create_engine", fake_create_engine)
+        monkeypatch.setattr(app_module, "get_session", lambda engine: object())
+        monkeypatch.setattr(app_module, "EventLogWriter", FakeWriter)
+        monkeypatch.setattr(
+            app_module, "detect_and_emit_key_rotation", fake_detect_and_emit_key_rotation
+        )
+
+    @pytest.mark.asyncio
+    async def test_remote_postgres_startup_uses_non_read_only_state_and_cache_engines(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        calls: list[tuple[str, bool]] = []
+        self._install_lifespan_fakes(monkeypatch, calls)
+        pg_url = "postgresql+asyncpg://api:secret@db.example.com:5432/registry"
+
+        app = build_app(base_dir=tmp_path / "events", db_url=pg_url, clock=fixed_clock)
+
+        async with LifespanManager(app):
+            pass
+
+        assert calls[:2] == [(pg_url, False), (pg_url, False)]
+
+    @pytest.mark.asyncio
+    async def test_postgres_auto_create_idempotency_schema_fails_before_ddl(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        import registry_api.app as app_module
+
+        calls: list[tuple[str, bool]] = []
+        self._install_lifespan_fakes(monkeypatch, calls)
+        create_schema = AsyncMock()
+        monkeypatch.setattr(app_module, "create_idempotency_schema", create_schema)
+        pg_url = (
+            "postgresql+asyncpg://api:secret@prod-db.example.com:5432/registry"
+            "?sslcert=/run/secrets/client.crt&sslkey=/run/secrets/client.key"
+        )
+
+        app = build_app(
+            base_dir=tmp_path / "events",
+            db_url=pg_url,
+            clock=fixed_clock,
+            create_idempotency_schema_on_start=True,
+        )
+
+        with pytest.raises(RuntimeError) as exc_info:
+            async with LifespanManager(app):
+                pass
+
+        message = str(exc_info.value)
+        assert "Postgres" in message
+        assert "auto-create idempotency schema" in message
+        for forbidden in (
+            "api",
+            "secret",
+            "prod-db.example.com",
+            "registry",
+            "client.crt",
+            "client.key",
+        ):
+            assert forbidden not in message
+        create_schema.assert_not_called()
+        assert calls == [(pg_url, False)]
+
+    @pytest.mark.asyncio
+    async def test_sqlite_startup_keeps_read_only_state_and_derives_idempotency_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fixed_clock: FrozenClock
+    ) -> None:
+        calls: list[tuple[str, bool]] = []
+        self._install_lifespan_fakes(monkeypatch, calls)
+        db_url = _db_url(tmp_path / "state.sqlite3")
+        expected_idempotency_url = _db_url(tmp_path / "idempotency.sqlite3")
+
+        app = build_app(base_dir=tmp_path / "events", db_url=db_url, clock=fixed_clock)
+
+        async with LifespanManager(app):
+            pass
+
+        assert calls[:2] == [(db_url, True), (expected_idempotency_url, False)]
+
+
 # ---------------------------------------------------------------------------
 # TestEntryPoint
 # ---------------------------------------------------------------------------
@@ -3020,6 +3132,96 @@ class TestErrorHandlers:
 
 class TestEntryPoint:
     """AC-6: __main__ reads env vars and passes them to uvicorn.run."""
+
+    def test_resolve_registry_api_db_url_precedence(self) -> None:
+        from registry_api.__main__ import resolve_registry_api_db_url
+
+        default = "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3"
+        shared = "postgresql+asyncpg://shared:secret@db.example.com:5432/registry"
+        api = "postgresql+asyncpg://api:secret@db.example.com:5432/registry_api"
+
+        assert resolve_registry_api_db_url({}) == default
+        assert resolve_registry_api_db_url({"REGISTRY_API_DB_URL": api}) == api
+        assert resolve_registry_api_db_url({"REGISTRY_DATABASE_URL": shared}) == shared
+        assert (
+            resolve_registry_api_db_url(
+                {"REGISTRY_DATABASE_URL": shared, "REGISTRY_API_DB_URL": default}
+            )
+            == shared
+        )
+
+    def test_redact_url_sanitizes_userinfo_and_query_secrets(self) -> None:
+        from registry_api.__main__ import _redact_url
+
+        raw = (
+            "postgresql+asyncpg://alice:password-123@db.example.com:5432/registry"
+            "?sslpassword=ssl-secret&access_token=token-secret&api_key=key-secret"
+            "&sslcert=/run/secrets/client.crt&sslkey=/run/secrets/client.key&foo=bar"
+        )
+
+        redacted = _redact_url(raw)
+
+        assert redacted == "postgresql+asyncpg://[redacted]"
+        for forbidden in (
+            "alice",
+            "password-123",
+            "db.example.com",
+            "registry",
+            "ssl-secret",
+            "token-secret",
+            "key-secret",
+            "client.crt",
+            "client.key",
+            "foo=bar",
+        ):
+            assert forbidden not in redacted
+
+    def test_redact_url_sanitizes_sqlite_filesystem_paths(self, tmp_path: Path) -> None:
+        from registry_api.__main__ import _redact_url
+
+        db_path = tmp_path / "prod" / "state.sqlite3"
+        raw = f"sqlite+aiosqlite:///{db_path}?uri=true&sslrootcert=/run/secrets/root.crt"
+
+        redacted = _redact_url(raw)
+
+        assert redacted == "sqlite+aiosqlite://[redacted-path]"
+        assert str(db_path) not in redacted
+        assert "state.sqlite3" not in redacted
+        assert "root.crt" not in redacted
+
+    def test_main_uses_registry_database_url_when_api_url_absent(self, tmp_path: Path) -> None:
+        from registry_api import __main__ as main_module
+
+        pg_url = "postgresql+asyncpg://api:secret@db.example.com:5432/registry"
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            not in {
+                "REGISTRY_API_DB_URL",
+                "REGISTRY_DATABASE_URL",
+                "REGISTRY_API_LOG_DIR",
+                "REGISTRY_API_HOST",
+                "REGISTRY_API_PORT",
+            }
+        }
+        env["REGISTRY_DATABASE_URL"] = pg_url
+        env["REGISTRY_API_LOG_DIR"] = str(tmp_path / "events")
+
+        captured: dict[str, object] = {}
+
+        def fake_build_app(**kwargs: object) -> object:
+            captured.update(kwargs)
+            return object()
+
+        with (
+            patch.dict(os.environ, env, clear=True),
+            patch.object(main_module, "build_app", side_effect=fake_build_app),
+            patch.object(main_module.uvicorn, "run", return_value=None),
+        ):
+            main_module.main()
+
+        assert captured["db_url"] == pg_url
 
     def test_main_uses_default_host_port_with_minimal_env(self, tmp_path: Path) -> None:
         """F22: ``main()`` uses default HOST/PORT when only DB_URL/LOG_DIR are set.
@@ -3035,6 +3237,7 @@ class TestEntryPoint:
             if k
             not in {
                 "REGISTRY_API_DB_URL",
+                "REGISTRY_DATABASE_URL",
                 "REGISTRY_API_LOG_DIR",
                 "REGISTRY_API_HOST",
                 "REGISTRY_API_PORT",
@@ -3074,6 +3277,7 @@ class TestEntryPoint:
             if k
             not in {
                 "REGISTRY_API_DB_URL",
+                "REGISTRY_DATABASE_URL",
                 "REGISTRY_API_LOG_DIR",
                 "REGISTRY_API_HOST",
                 "REGISTRY_API_PORT",

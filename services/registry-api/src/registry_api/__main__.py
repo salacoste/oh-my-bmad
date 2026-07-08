@@ -4,7 +4,8 @@ Reads env vars with sensible defaults, constructs ``SystemClock``, calls
 ``build_app``, and runs via ``uvicorn.run`` (programmatic, not CLI subprocess).
 
 Environment variables:
-    REGISTRY_API_DB_URL:   SQLAlchemy async URL for the SQLite store.
+    REGISTRY_API_DB_URL:   SQLAlchemy async URL for the API state store.
+    REGISTRY_DATABASE_URL: Shared SQLAlchemy async URL fallback for API/state.
                            Default: sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3
     REGISTRY_API_LOG_DIR:  Root directory for JSONL event log files.
                            Default: /var/lib/oh-my-bmad/registry/events
@@ -40,9 +41,10 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import structlog
 import uvicorn
@@ -137,28 +139,40 @@ _DEFAULT_LOG_DIR = "/var/lib/oh-my-bmad/registry/events"
 _DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = "8080"
 
-# Match `scheme://user:password@host/db` and redact the password segment.
-# SQLite file URLs (``sqlite+aiosqlite:////path``) have no auth segment so
-# the regex simply doesn't match — the URL passes through unchanged.
-_URL_AUTH_RE = re.compile(r"(://[^:/@]+:)([^@]+)(@)")
+
+def resolve_registry_api_db_url(env: Mapping[str, str] = os.environ) -> str:
+    """Resolve registry-api DB URL.
+
+    Precedence: ``REGISTRY_DATABASE_URL`` > ``REGISTRY_API_DB_URL`` > local
+    SQLite default. The shared registry-state DSN is the strongest opt-in so
+    compose-provided API SQLite defaults cannot split API/state backends.
+    """
+    return env.get("REGISTRY_DATABASE_URL") or env.get("REGISTRY_API_DB_URL") or _DEFAULT_DB_URL
 
 
 def _redact_url(url: str) -> str:
-    """Redact the password segment in a SQLAlchemy URL for safe logging.
+    """Return coarse backend info only for safe logging.
 
-    Examples:
-        >>> _redact_url("postgresql://user:secret@host/db")
-        'postgresql://user:****@host/db'
-        >>> _redact_url("sqlite+aiosqlite:////var/lib/state.sqlite3")
-        'sqlite+aiosqlite:////var/lib/state.sqlite3'
+    The diagnostics contract forbids leaking DB credentials, userinfo, hostnames,
+    database names, secret/certificate query params, or SQLite filesystem paths.
+    Keep only the URL scheme so operators can distinguish backend families.
     """
-    return _URL_AUTH_RE.sub(r"\1****\3", url)
+    try:
+        parts = urlsplit(url)
+    except Exception:  # noqa: BLE001 — malformed input: fall back to no-leak string
+        return "[redacted-url]"
+
+    if not parts.scheme:
+        return "[redacted-url]"
+    if parts.scheme.startswith("sqlite"):
+        return f"{parts.scheme}://[redacted-path]"
+    return f"{parts.scheme}://[redacted]"
 
 
 def main() -> None:
     """Read configuration from env, build the app, and start uvicorn."""
     _configure_logging()
-    db_url = os.environ.get("REGISTRY_API_DB_URL", _DEFAULT_DB_URL)
+    db_url = resolve_registry_api_db_url()
     log_dir = Path(os.environ.get("REGISTRY_API_LOG_DIR", _DEFAULT_LOG_DIR))
     host = os.environ.get("REGISTRY_API_HOST", _DEFAULT_HOST)
     port = int(os.environ.get("REGISTRY_API_PORT", _DEFAULT_PORT))
