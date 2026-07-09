@@ -1,0 +1,179 @@
+{
+  "schema_version": "story-134.1/v1",
+  "phase": "51",
+  "epic": "134",
+  "story": "134.1",
+  "title": "Controlled activation evidence schema and preflight gate",
+  "mode": "static_status_contract_not_activation",
+  "activation_boundary": {
+    "activation_performed": false,
+    "summary": "This is not activation and supplies no live activation proof. It defines a future evidence package contract for operator-gated controlled activation stories only.",
+    "no_live_activation": true,
+    "operator_gated": true,
+    "future_evidence_only": true
+  },
+  "evidence_package_contract": {
+    "package_kind": "future_controlled_activation_evidence",
+    "required_fields": {
+      "operator_approval_ref": {
+        "required": true,
+        "value_kind": "reference_only",
+        "notes": "Approved operator change ticket or signed approval reference; no credentials or approval secrets."
+      },
+      "security_approval_ref": {
+        "required": true,
+        "value_kind": "reference_only",
+        "notes": "Security approval reference for target, risk, rollback, redaction, and emergency-disable scope."
+      },
+      "change_window_utc": {
+        "required": true,
+        "timezone": "UTC",
+        "fields": [
+          "starts_at_utc",
+          "ends_at_utc"
+        ]
+      },
+      "target_environment": {
+        "required": true,
+        "binding": "exact_environment_name"
+      },
+      "target_service": {
+        "required": true,
+        "binding": "exact_service_or_profile_name"
+      },
+      "target_version": {
+        "required": true,
+        "binding": "immutable_image_digest_or_git_sha"
+      },
+      "readiness_prerequisites": {
+        "required": true,
+        "semantics": "prerequisites_only_not_activation_proof",
+        "minimum_refs": [
+          "split_deployment_readiness",
+          "remote_postgres_readiness",
+          "db_mtls_readiness"
+        ]
+      },
+      "activation_intent": {
+        "required": true,
+        "semantics": "future_operator_intent_only_not_activation_proof",
+        "notes": "Plain-language future operator intent for the bounded activation story; not proof activation occurred."
+      },
+      "smoke_scope": {
+        "required": true,
+        "notes": "Exact smoke checks to run in future stories, expected results, bounded timeout, and stop conditions."
+      },
+      "rollback_owner": {
+        "required": true,
+        "value_kind": "person_or_role_ref"
+      },
+      "rollback_plan_ref": {
+        "required": true,
+        "value_kind": "reference_only"
+      },
+      "emergency_disable_owner": {
+        "required": true,
+        "value_kind": "person_or_role_ref"
+      },
+      "emergency_disable_plan_ref": {
+        "required": true,
+        "value_kind": "reference_only"
+      },
+      "evidence_retention": {
+        "required": true,
+        "value_kind": "retention_policy_ref_or_statement",
+        "notes": "Retention policy reference or statement for future activation evidence, including expiry/disposal expectations."
+      },
+      "generated_at_utc": {
+        "required": true,
+        "format": "RFC3339 UTC"
+      },
+      "expires_at_utc": {
+        "required": true,
+        "format": "RFC3339 UTC",
+        "after": "generated_at_utc"
+      },
+      "trace_correlation": {
+        "required": true,
+        "fields": [
+          "operation_id",
+          "trace_id",
+          "audit_event_refs"
+        ]
+      },
+      "redaction_report_ref": {
+        "required": true,
+        "value_kind": "reference_only"
+      },
+      "redaction_statement": {
+        "required": true,
+        "value_kind": "secret_free_redaction_statement",
+        "notes": "Statement that the future evidence package is redacted and contains no plaintext secrets, credential values, private key content, certificate material, token values, full DSNs, or production host secrets."
+      },
+      "independent_reviewer_ref": {
+        "required": true,
+        "value_kind": "non_leader_reviewer_ref",
+        "self_attestation": "rejected"
+      }
+    }
+  },
+  "staleness_policy": {
+    "outcome": "fail_closed",
+    "missing_generated_at": "reject",
+    "missing_expires_at": "reject",
+    "stale_evidence": "reject",
+    "timezone_policy": "UTC_only",
+    "notes": "Future activation evidence expires fail-closed; warnings or best-effort acceptance are not allowed."
+  },
+  "redaction_and_secret_hygiene": {
+    "policy": "no plaintext secrets, credentials, private key content, certificate material, token values, full DSNs, or production host secrets in evidence packages, checker output, docs, status, or artifacts",
+    "required_report": "redaction_report_ref",
+    "allowed_examples": [
+      "redacted reference IDs",
+      "ticket references",
+      "hashes or digests without secret material"
+    ],
+    "forbidden_material": [
+      "credential values",
+      "private key PEM",
+      "certificate material",
+      "plaintext secrets",
+      "token values",
+      "unredacted Postgres URLs"
+    ]
+  },
+  "fail_closed_checks": [
+    "missing_evidence_fails_closed",
+    "stale_evidence_fails_closed",
+    "malformed_evidence_fails_closed",
+    "self_attestation_rejected",
+    "secret_like_material_rejected",
+    "activation_overclaim_rejected",
+    "readiness_as_proof_rejected",
+    "plaintext_fallback_rejected",
+    "justfile_and_ci_wiring_required",
+    "status_docs_story_134_1_done_required",
+    "epic_134_in_progress_required"
+  ],
+  "non_goals": [
+    "No live activation or production activation proof.",
+    "No provisioning, production host mutation, migration execution, compose/profile production activation, credential handling, certificate material handling, plaintext fallback, dependency, lockfile, or runtime behavior change.",
+    "No acceptance of readiness prerequisites as proof activation occurred."
+  ],
+  "future_story_refs": [
+    "134.2",
+    "134.3",
+    "134.4",
+    "134.5",
+    "134.6"
+  ],
+  "docs_refs": [
+    "docs/feature-status.md#current-bmad-status",
+    "docs/project-overview.md#status",
+    "_bmad-output/implementation-artifacts/134-1-activation-evidence-schema-preflight-gate.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

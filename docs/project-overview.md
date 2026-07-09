@@ -4,12 +4,12 @@
 
 **oh-my-bmad** is a self-hosted personal autonomous-development platform. Telegram and a local console drive supervised CLI workers through a typed event spine, backed by an append-only JSONL event log and a single-writer materialized state store. The platform is designed so runtimes, MCP tools, browser automation, transports, and deployment hardening can evolve without breaking the spine.
 
-The current repository state is **Phase 50 complete / Phase 51 planning** as of 2026-07-08: Phase 50 / Epic 133 DB mTLS readiness is complete locally, and Phase 51 / Epic 134 controlled production activation evidence planning is open. The latest tagged release remains `v1.3.0`; this checkout contains later BMad work through Phase 51 planning.
+The current repository state is **Phase 50 complete / Phase 51 in progress** as of 2026-07-09: Phase 50 / Epic 133 DB mTLS readiness is complete locally, and Story 134.1 is complete locally inside Phase 51 / Epic 134 controlled production activation evidence planning. The latest tagged release remains `v1.3.0`; this checkout contains later BMad work through Phase 51 planning. No live activation is performed or claimed by Story 134.1.
 
 ## Status
 
-- **Current phase:** 51 planning — controlled production activation evidence planning for future/operator-gated split deployment, remote Postgres, and DB mTLS smoke evidence.
-- **Recently complete:** Phase 50 / Epic 133 — DB mTLS readiness complete locally; production activation remains operator-gated/deferred.
+- **Current phase:** 51 planning in progress — Story 134.1 complete locally for controlled production activation evidence schema/preflight validation; remaining split deployment, remote Postgres, and DB mTLS smoke evidence stays future/operator-gated with no live activation.
+- **Recently complete:** Story 134.1 — activation evidence schema/preflight gate complete locally as static docs/status/checker work; production activation remains operator-gated/deferred.
 - **Repository type:** monorepo (`uv` workspace, 24 Python members).
 - **Language:** Python 3.12 (locked).
 - **Deployment:** Docker Compose v2 with named volume (`oh-my-bmad-data`); optional profiles remain operator-gated and inactive until future approved activation evidence exists.
@@ -68,8 +68,8 @@ The current repository state is **Phase 50 complete / Phase 51 planning** as of 
 | 47 | Browser full selector composition |
 | 48 | Production-readiness portfolio: search/discovery, dashboard cleanup, lifecycle mutation, retention, production ops, split deployment, DB mTLS |
 | 49 | Production-readiness execution/reconciliation toward split deployment and remote Postgres readiness |
-| 50 | DB connection mTLS readiness complete locally; production activation remains operator-gated |
-| 51 | Controlled production activation evidence planning for future/operator-gated activation proof |
+| 50 | DB connection mTLS readiness local closure; production activation remains deferred/operator-gated |
+| 51 | Controlled production activation evidence planning; Story 134.1 static schema/preflight complete locally, later evidence remains future/operator-gated |
 
 ## Tech stack summary
 
@@ -111,7 +111,7 @@ The current member catalog is in [component-inventory.md](./component-inventory.
 
 ## Architecture in one paragraph
 
-A typed event spine connects operator surfaces to runtime workers and MCP tools. All durable task/session state derives from append-only event records. `registry-state` owns the materialized database projection and single-writer rules; `registry-api` exposes versioned HTTP read/write surfaces; MCP servers expose bounded tool/resource contracts to workers under capability tiers and approval gates. Replay packages reconstruct historical state from hot logs and validated archived segments referenced by `lifecycle-manifest.json`. Recent production-readiness work added bounded lifecycle mutation controls, object-storage retention readiness, production operations readiness, split-deployment/remote Postgres readiness, and Phase 50 DB mTLS readiness. Phase 51 is only controlled activation evidence planning: split deployment, remote Postgres, and DB mTLS smoke evidence remain future/operator-gated and are not proof activation occurred.
+A typed event spine connects operator surfaces to runtime workers and MCP tools. All durable task/session state derives from append-only event records. `registry-state` owns the materialized database projection and single-writer rules; `registry-api` exposes versioned HTTP read/write surfaces; MCP servers expose bounded tool/resource contracts to workers under capability tiers and approval gates. Replay packages reconstruct historical state from hot logs and validated archived segments referenced by `lifecycle-manifest.json`. Recent production-readiness work added bounded lifecycle mutation controls, object-storage retention readiness, production operations readiness, split-deployment/remote Postgres readiness, and Phase 50 DB mTLS readiness. Phase 51 is only controlled activation evidence planning: Story 134.1 supplies the local static schema/preflight gate, while split deployment, remote Postgres, and DB mTLS smoke evidence remain future/operator-gated and are not proof activation occurred.
 
 ## Where to start
 
@@ -119,7 +119,7 @@ A typed event spine connects operator surfaces to runtime workers and MCP tools.
 - **Developing on it?** → `_bmad-output/project-context.md`, [development-guide.md](./development-guide.md), and [testing-guide.md](./testing-guide.md).
 - **Understanding decisions?** → [adr/](./adr/), [architecture.md](./architecture.md), and `_bmad-output/planning-artifacts/`.
 - **Working on replay/lifecycle?** → [data-models.md](./data-models.md) §“Historical replay and event-log lifecycle” plus ADR-0025.
-- **Working on controlled activation planning?** → `_bmad-output/planning-artifacts/phase-51-prd-amendment.md`, `_bmad-output/planning-artifacts/phase-51-architecture-amendment.md`, and `_bmad-output/planning-artifacts/phase-51-controlled-activation-epics.md`.
+- **Working on controlled activation planning?** → `_bmad-output/planning-artifacts/phase-51-prd-amendment.md`, `_bmad-output/planning-artifacts/phase-51-architecture-amendment.md`, `_bmad-output/planning-artifacts/phase-51-controlled-activation-epics.md`, and Story 134.1 `docs/controlled-activation-evidence.json`.
 
 ## License
 
