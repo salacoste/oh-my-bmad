@@ -573,6 +573,22 @@ SAFE_CONTEXT_PATTERNS = {
             r"\bstory-134-2-split-deployment-activation-smoke-evidence-package-local-done\b",
             re.I,
         ),
+        re.compile(
+            r"\bStory 134\.3\b.*\bcomplete locally\b.*\bremote Postgres smoke/migration evidence package\b",
+            re.I,
+        ),
+        re.compile(
+            r"\bremote Postgres smoke/migration evidence package\b.*\b(?:docs/status|static[- ]checker|planning|contract)\b",
+            re.I,
+        ),
+        re.compile(
+            r"\b134-3-remote-postgres-activation-smoke-migration-evidence-package:\s*(?:done|closed)\b",
+            re.I,
+        ),
+        re.compile(
+            r"\bstory-134-3-remote-postgres-smoke-migration-evidence-package-local-(?:done|finished)\b",
+            re.I,
+        ),
         re.compile(r"\bactivation evidence schema/preflight (?:validation|gate)\b", re.I),
         re.compile(
             r"\bdocs/status/static[- ]checker\s+activation\s+evidence\s+schema\b.*\bno[- ]live[- ]activation\s+boundary\b",
@@ -738,6 +754,15 @@ def _is_safe_forbidden_context(kind: str, line: str, match: re.Match[str]) -> bo
             r"\b(?:production\s+activation(?!\s+evidence)|activation(?!\s+evidence))\b"
             r"\s+(?:(?:is|now)\s+)?(?:live|active|serving(?:\s+traffic)?)\b$",
             matched_text,
+            re.I,
+        ):
+            return False
+        if re.search(
+            r"\bremote\s+postgres\s+activation(?!\s+smoke)\b"
+            r"\s+(?:(?:is|was|has|have|had|been|now|successfully)\s+){0,6}"
+            r"(?:complete|completed|successful|succeeded|occurred|performed|"
+            r"executed|activated|enabled|shipped|live|active|done)\b",
+            clause,
             re.I,
         ):
             return False
@@ -1628,6 +1653,22 @@ def _self_test() -> int:
         )
         if not any("activation overclaim" in v.message for v in validate(root)):
             print("self-test failed: activation overclaim was not rejected", file=sys.stderr)
+            return 1
+        _copy_fixture(REPO_ROOT, root)
+        sprint_path = root / SPRINT_STATUS_PATH
+        sprint_path.write_text(
+            sprint_path.read_text(encoding="utf-8").replace(
+                "Docs/status/static-checker remote Postgres smoke/migration evidence package planning only;",
+                "Docs/status/static-checker remote Postgres smoke/migration evidence package planning only, "
+                "remote Postgres activation completed successfully;",
+            ),
+            encoding="utf-8",
+        )
+        if not any("activation overclaim" in v.message for v in validate(root)):
+            print(
+                "self-test failed: Story 134.3 comma-suffix activation overclaim was not rejected",
+                file=sys.stderr,
+            )
             return 1
         _copy_fixture(REPO_ROOT, root)
         data = _load_json(root, CONTRACT_PATH)
