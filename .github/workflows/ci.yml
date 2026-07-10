@@ -122,6 +122,9 @@ jobs:
       - name: Check remote Postgres activation smoke and migration evidence (Story 134.3)
         run: uv run python scripts/check_remote_postgres_activation_smoke_migration_evidence.py
 
+      - name: Check registry DB mTLS activation smoke and failure evidence (Story 134.4)
+        run: uv run python scripts/check_registry_db_mtls_activation_smoke_failure_evidence.py
+
       - name: Check-scripts self-tests
         run: |
           uv run python scripts/check_imports.py --self-test
@@ -150,6 +153,7 @@ jobs:
           uv run python scripts/check_controlled_activation_evidence.py --self-test
           uv run python scripts/check_split_deployment_activation_smoke_evidence.py --self-test
           uv run python scripts/check_remote_postgres_activation_smoke_migration_evidence.py --self-test
+          uv run python scripts/check_registry_db_mtls_activation_smoke_failure_evidence.py --self-test
 
       - name: Check secrets (full tree)
         run: git ls-files -z | xargs -0 uv run secret-hygiene-precommit

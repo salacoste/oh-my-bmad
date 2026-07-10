@@ -1016,8 +1016,19 @@ def _validate_status(root: Path) -> list[Violation]:
     if not epic_134 or epic_134.group("status") != "in-progress":
         violations.append(Violation(str(SPRINT_STATUS_PATH), "Epic 134 must remain in-progress"))
 
+    story_134_4 = re.search(
+        r"(?m)^\s*134-4-registry-db-mtls-activation-smoke-failure-evidence-package:\s*(?P<status>\S+)",
+        sprint,
+    )
+    if not story_134_4 or story_134_4.group("status") not in ALLOWED_PRIOR_STORY_STATUS:
+        violations.append(
+            Violation(
+                str(SPRINT_STATUS_PATH),
+                "Story 134.4 must remain done/closed once DB mTLS evidence planning lands",
+            )
+        )
+
     for story_key in (
-        "134-4-registry-db-mtls-activation-smoke-failure-evidence-package",
         "134-5-combined-split-remote-postgres-db-mtls-rehearsal",
         "134-6-controlled-activation-closure-go-no-go-evidence",
     ):
