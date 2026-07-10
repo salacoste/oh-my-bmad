@@ -1,0 +1,184 @@
+{
+  "schema_version": "story-134.2/v1",
+  "phase": "51",
+  "epic": "134",
+  "story": "134.2",
+  "title": "Split deployment activation smoke evidence package contract",
+  "mode": "static_split_deployment_activation_smoke_evidence_contract_not_activation",
+  "activation_boundary": {
+    "activation_performed": false,
+    "summary": "This is future/operator-gated evidence planning only. It is not proof activation occurred and performs no live split deployment activation, external load-balancer activation, host-port change, production host mutation, or compose/profile activation.",
+    "no_live_split_activation": true,
+    "operator_gated": true,
+    "future_evidence_only": true,
+    "readiness_prerequisites_are_not_activation_proof": true
+  },
+  "operator_gate": {
+    "required": true,
+    "fields": [
+      "operator_approval_ref",
+      "security_approval_ref",
+      "change_window_utc",
+      "target_environment",
+      "target_version",
+      "generated_at_utc",
+      "expires_at_utc",
+      "rollback_owner",
+      "rollback_plan_ref",
+      "emergency_disable_owner",
+      "emergency_disable_plan_ref",
+      "redaction_report_ref",
+      "independent_reviewer_ref"
+    ],
+    "required_statement": "Future split-deployment activation smoke evidence must be operator-gated, timestamped, redacted, reviewer-backed, rollback-bound, and tied to an explicit change window before any activation claim can be considered."
+  },
+  "readiness_prerequisites": {
+    "semantics": "prerequisites_only_not_activation_proof",
+    "minimum_refs": [
+      "docs/split-deployment-topology-readiness.json",
+      "docs/worker-mcp-event-bus-split-readiness.json",
+      "docs/operator-dashboard-split-readiness.json",
+      "docs/horizontal-scaling-readiness.json",
+      "docs/split-deployment-remote-postgres-closure-readiness.json"
+    ]
+  },
+  "future_smoke_evidence_contract": {
+    "package_kind": "future_split_deployment_activation_smoke_evidence",
+    "required_domains": {
+      "service_placement": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "registry_api placement identity",
+          "registry_state writer placement identity",
+          "worker_wrapper placement identity",
+          "orchestrator_adapter placement identity",
+          "telegram_gateway placement identity",
+          "clawhip_daemon placement identity"
+        ]
+      },
+      "network_boundaries": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "public ingress terminates before registry_api",
+          "internal service-to-service traffic uses approved private network identity",
+          "database or event-log reachability is limited to approved service roles",
+          "no undeclared host ports or hidden external host commands"
+        ]
+      },
+      "registry_state_single_writer_authority": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "exact registry_state writer authority",
+          "no multi-writer registry_state process",
+          "materialized state mutation path remains single-owner"
+        ]
+      },
+      "event_log_append_authority": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "append-only event-log owner identity",
+          "no event-log rewrite or fork",
+          "trace or audit references for smoke checks"
+        ]
+      },
+      "mcp_boundary": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "MCP service reachability scope",
+          "token or approval references by identifier only",
+          "stdio/local fallback remains documented when split transport is absent"
+        ]
+      },
+      "operator_dashboard_ingress_boundary": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "operator/dashboard ingress endpoint identity by reference only",
+          "no broad dashboard production-control surface",
+          "registry_api remains control boundary"
+        ]
+      },
+      "health_readiness": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "registry_api health/readiness result",
+          "registry_state health/readiness result",
+          "worker and MCP reachability result",
+          "bounded timeout and stop condition"
+        ]
+      },
+      "rollback": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "rollback owner",
+          "rollback plan reference",
+          "previous image or config reference",
+          "emergency-disable owner and plan reference",
+          "fail-closed or rollback-required status on incomplete smoke evidence"
+        ]
+      }
+    }
+  },
+  "fail_closed_checks": [
+    "missing_evidence_fails_closed",
+    "malformed_evidence_fails_closed",
+    "stale_evidence_fails_closed",
+    "self_attestation_rejected",
+    "secret_like_material_rejected",
+    "activation_overclaim_rejected",
+    "readiness_as_proof_rejected",
+    "split_deployment_domain_coverage_required",
+    "operator_gate_required",
+    "rollback_required",
+    "justfile_and_ci_wiring_required",
+    "status_docs_story_134_2_done_required",
+    "epic_134_in_progress_required"
+  ],
+  "redaction_and_secret_hygiene": {
+    "policy": "Evidence packages, docs, status, checker output, and artifacts must contain no plaintext secrets, credential values, token values, private key material, certificate material, unredacted DSNs, production host secrets, or full secret paths.",
+    "required_report": "redaction_report_ref",
+    "allowed_examples": [
+      "ticket references",
+      "redacted service identity labels",
+      "hashes or immutable image digests without secret material"
+    ],
+    "forbidden_material": [
+      "credential values",
+      "private key material",
+      "certificate material",
+      "plaintext secrets",
+      "token values",
+      "unredacted connection strings",
+      "production host secrets"
+    ]
+  },
+  "non_goals": [
+    "No live split deployment activation or production activation proof.",
+    "No external load-balancer activation, host-port change, production host mutation, compose/profile activation, provisioning, migration execution, credential handling, certificate material handling, plaintext fallback, runtime behavior change, deployment config change, dependency change, or lockfile change.",
+    "No acceptance of readiness prerequisites as proof activation occurred."
+  ],
+  "docs_refs": [
+    "docs/feature-status.md#current-bmad-status",
+    "docs/project-overview.md#status",
+    "_bmad-output/implementation-artifacts/134-2-split-deployment-activation-smoke-evidence-package.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

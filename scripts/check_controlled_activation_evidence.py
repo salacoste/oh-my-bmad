@@ -557,6 +557,22 @@ SAFE_CONTEXT_PATTERNS = {
             r"\bStory 134\.1\b.*\bcomplete locally\b.*\b(?:docs/status|static[- ]checker|schema/preflight)\b",
             re.I,
         ),
+        re.compile(
+            r"\bStory 134\.2\b.*\bcomplete locally\b.*\bsplit[- ]deployment activation smoke evidence package\b",
+            re.I,
+        ),
+        re.compile(
+            r"\bsplit[- ]deployment activation smoke evidence package\b.*\b(?:docs/status|static[- ]checker|planning|contract)\b",
+            re.I,
+        ),
+        re.compile(
+            r"\b134-2-split-deployment-activation-smoke-evidence-package:\s*(?:done|closed)\b",
+            re.I,
+        ),
+        re.compile(
+            r"\bstory-134-2-split-deployment-activation-smoke-evidence-package-local-done\b",
+            re.I,
+        ),
         re.compile(r"\bactivation evidence schema/preflight (?:validation|gate)\b", re.I),
         re.compile(
             r"\bdocs/status/static[- ]checker\s+activation\s+evidence\s+schema\b.*\bno[- ]live[- ]activation\s+boundary\b",
