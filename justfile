@@ -263,6 +263,7 @@ lint:
     uv run python scripts/check_split_deployment_remote_postgres_closure.py
     uv run python scripts/check_db_mtls_readiness.py
     uv run python scripts/check_controlled_activation_evidence.py
+    uv run python scripts/check_split_deployment_activation_smoke_evidence.py
     git ls-files -z | xargs -0 uv run secret-hygiene-precommit
 
 # Run the secret-hygiene scanner across every tracked file. Pre-commit hook
@@ -297,6 +298,7 @@ check-gates:
     uv run python scripts/check_split_deployment_remote_postgres_closure.py
     uv run python scripts/check_db_mtls_readiness.py
     uv run python scripts/check_controlled_activation_evidence.py
+    uv run python scripts/check_split_deployment_activation_smoke_evidence.py
     uv run python scripts/check_task_fsm_only.py
 
 # Run the architectural-gate self-tests — exercises the bundled fixture
@@ -326,6 +328,7 @@ check-gates-self-test:
     uv run python scripts/check_split_deployment_remote_postgres_closure.py --self-test
     uv run python scripts/check_db_mtls_readiness.py --self-test
     uv run python scripts/check_controlled_activation_evidence.py --self-test
+    uv run python scripts/check_split_deployment_activation_smoke_evidence.py --self-test
     uv run python scripts/check_task_fsm_only.py --self-test
 
 # Scenario harness (journey-level smoke tests) lands across Stories 2.11 /
