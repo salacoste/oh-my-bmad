@@ -231,6 +231,14 @@ _FUNC_ALLOWLIST: dict[str, dict[str, str]] = {
         # so this single key covers both.
         "main": "subprocess.run",
     },
+    _rel("scripts/check_split_deployment_remote_postgres_closure.py"): {
+        # Story 132.8 — static closure checker invokes documented subordinate
+        # static readiness gates in-process via the current Python executable.
+        # Discrete argv, cwd pinned to repo root, bounded timeout, captured
+        # output, and os.environ-derived trace context is preserved across the
+        # checker boundary alongside STORY_1328_CLOSURE_SUBORDINATE_GATE.
+        "_run_subordinate_gate": "subprocess.run",
+    },
 }
 
 
