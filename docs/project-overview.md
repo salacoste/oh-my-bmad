@@ -4,12 +4,12 @@
 
 **oh-my-bmad** is a self-hosted personal autonomous-development platform. Telegram and a local console drive supervised CLI workers through a typed event spine, backed by an append-only JSONL event log and a single-writer materialized state store. The platform is designed so runtimes, MCP tools, browser automation, transports, and deployment hardening can evolve without breaking the spine.
 
-The current repository state is **Phase 50 complete / Phase 51 in progress** as of 2026-07-09: Phase 50 / Epic 133 DB mTLS readiness is complete locally, and Story 134.1 is complete locally inside Phase 51 / Epic 134 controlled production activation evidence planning. The latest tagged release remains `v1.3.0`; this checkout contains later BMad work through Phase 51 planning. No live activation is performed or claimed by Story 134.1.
+The current repository state is **Phase 50 complete / Phase 51 in progress** as of 2026-07-09: Phase 50 / Epic 133 DB mTLS readiness is complete locally, and Story 134.1 is complete locally and merged via PR #124 inside Phase 51 / Epic 134 controlled production activation evidence planning. The latest tagged release remains `v1.3.0`; this checkout contains later BMad work through Phase 51 planning. No live activation is performed or claimed by Story 134.1.
 
 ## Status
 
-- **Current phase:** 51 planning in progress — Story 134.1 complete locally for controlled production activation evidence schema/preflight validation; remaining split deployment, remote Postgres, and DB mTLS smoke evidence stays future/operator-gated with no live activation.
-- **Recently complete:** Story 134.1 — activation evidence schema/preflight gate complete locally as static docs/status/checker work; production activation remains operator-gated/deferred.
+- **Current phase:** 51 planning in progress — Story 134.1 complete locally and merged via PR #124 for controlled production activation evidence schema/preflight validation; remaining split deployment, remote Postgres, and DB mTLS smoke evidence stays future/operator-gated with no live activation.
+- **Recently complete:** Story 134.1 — activation evidence schema/preflight gate complete locally and merged via PR #124 as static docs/status/checker work; production activation remains operator-gated/deferred.
 - **Repository type:** monorepo (`uv` workspace, 24 Python members).
 - **Language:** Python 3.12 (locked).
 - **Deployment:** Docker Compose v2 with named volume (`oh-my-bmad-data`); optional profiles remain operator-gated and inactive until future approved activation evidence exists.

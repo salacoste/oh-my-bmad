@@ -36,7 +36,7 @@
 
 generated: 2026-04-22
 last_updated: "2026-07-09T00:00:00+03:00"
-current_phase: 51  # Phase 50 / Epic 133 DB mTLS readiness is complete locally; Phase 51 / Epic 134 controlled activation evidence planning is in-progress with Story 134.1 done locally. Production activation, Postgres provisioning, production host mutation, real certificate material, and plaintext fallback remain fail-closed/deferred.
+current_phase: 51  # Phase 50 / Epic 133 DB mTLS readiness is complete locally; Phase 51 / Epic 134 controlled activation evidence planning is in-progress with Story 134.1 done locally and merged via PR #124. Production activation, Postgres provisioning, production host mutation, real certificate material, and plaintext fallback remain fail-closed/deferred.
 
 development_status:
   # =========================================================================
@@ -1160,7 +1160,7 @@ development_status:
   # =========================================================================
   # Epic 134: Controlled production activation evidence planning
   # =========================================================================
-  epic-134: in-progress  # Phase 51 / Epic 134 controlled activation evidence planning is in-progress for future/operator-gated activation evidence only; Story 134.1 is done locally and no live activation, provisioning, production host mutation, credentials, cert material, migration execution, compose/profile production activation, or plaintext fallback is authorized
+  epic-134: in-progress  # Phase 51 / Epic 134 controlled activation evidence planning is in-progress for future/operator-gated activation evidence only; Story 134.1 is done locally and merged via PR #124, and no live activation, provisioning, production host mutation, credentials, cert material, migration execution, compose/profile production activation, or plaintext fallback is authorized
   134-1-activation-evidence-schema-preflight-gate: done  # Docs/status/static-checker activation evidence schema and preflight gate for future/operator-gated approvals, target environment, change window, smoke scope, rollback owner, emergency-disable owner, redaction rules, and no-live-activation boundary
   134-2-split-deployment-activation-smoke-evidence-package: backlog  # Future/operator-gated split deployment activation smoke evidence package planning only; readiness artifacts are prerequisites, not proof activation occurred
   134-3-remote-postgres-activation-smoke-migration-evidence-package: backlog  # Future/operator-gated remote Postgres activation smoke and migration evidence package planning only; no provisioning, migration execution, credential value, host mutation, cutover, or plaintext fallback
@@ -1202,6 +1202,36 @@ audit_trail:
       Story 134.1 is complete locally as a docs/status/static-checker slice.
       Epic 134 remains in progress with Stories 134.2-134.6 still backlog for
       future/operator-gated activation evidence packages.
+
+  - date: "2026-07-10"
+    event: story-134-1-controlled-evidence-schema-preflight-gate-merged
+    from: done-local
+    to: merged-main
+    phase: 51
+    epic: epic-134
+    story: 134-1-activation-evidence-schema-preflight-gate
+    source: pr-124-merge
+    operation_id: story-134-1-controlled-evidence-schema-preflight-merged-pr-124
+    operation_class: controlled_activation_evidence_static_preflight_merge
+    target_environment: repo-main-docs-status-static-checker
+    target_repository_or_service: docs-controlled-activation-evidence
+    authority_source: https://github.com/salacoste/oh-my-bmad/pull/124
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      PR #124 merged Story 134.1's docs/status/static-checker activation
+      evidence schema and preflight gate to main. This merge records repository
+      readiness evidence only; it performs no live activation, provisioning,
+      production host mutation, migration execution, compose/profile production
+      activation, credentials, certs or cert material, or plaintext fallback.
+    rollback_ref: revert-pr-124-merge-commit-240cebc2
+    expiry_freshness: refresh-on-future-operator-gated-activation-story
+    status: done
+    summary: >-
+      Story 134.1 is complete locally and merged to main via PR #124 at merge
+      commit 240cebc2 after PR CI, Postgres service-container tests, GitGuardian,
+      and post-merge main CI/nightly completed successfully. Epic 134 remains in
+      progress with Stories 134.2-134.6 still backlog for future/operator-gated
+      activation evidence packages.
 
   - date: "2026-07-08"
     event: phase-51-epic-134-controlled-activation-evidence-planning-opened

@@ -2,7 +2,7 @@
 
 ## Summary
 
-Story 134.1 is complete locally as a docs/status/static-checker slice for Phase 51 / Epic 134. It adds `docs/controlled-activation-evidence.json` plus an executable static preflight checker for future controlled production activation evidence packages.
+Story 134.1 is complete locally and merged via PR #124 as a docs/status/static-checker slice for Phase 51 / Epic 134. It adds `docs/controlled-activation-evidence.json` plus an executable static preflight checker for future controlled production activation evidence packages.
 
 This story is not activation evidence, not activation proof, and not a production go/no-go decision. It defines the fail-closed evidence contract that later Stories 134.2-134.6 must satisfy before any future/operator-gated activation claim can be considered.
 
