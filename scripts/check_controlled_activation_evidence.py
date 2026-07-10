@@ -589,6 +589,22 @@ SAFE_CONTEXT_PATTERNS = {
             r"\bstory-134-3-remote-postgres-smoke-migration-evidence-package-local-(?:done|finished)\b",
             re.I,
         ),
+        re.compile(
+            r"\bStory 134\.4\b.*\bcomplete locally\b.*\bregistry DB mTLS (?:activation )?smoke/failure evidence\b.*\b(?:docs/status|static[- ]checker|planning|contract)\b",
+            re.I,
+        ),
+        re.compile(
+            r"\bregistry DB mTLS activation smoke/failure evidence\b.*\b(?:docs/status|static[- ]checker|planning|contract|future/operator-gated)\b",
+            re.I,
+        ),
+        re.compile(
+            r"\b134-4-registry-db-mtls-activation-smoke-failure-evidence-package:\s*(?:done|closed)\b",
+            re.I,
+        ),
+        re.compile(
+            r"\bstory-134-4-registry-db-mtls-activation-smoke-failure-evidence-package-local-(?:done|finished)\b",
+            re.I,
+        ),
         re.compile(r"\bactivation evidence schema/preflight (?:validation|gate)\b", re.I),
         re.compile(
             r"\bdocs/status/static[- ]checker\s+activation\s+evidence\s+schema\b.*\bno[- ]live[- ]activation\s+boundary\b",
