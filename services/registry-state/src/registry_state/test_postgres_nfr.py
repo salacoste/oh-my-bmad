@@ -15,6 +15,8 @@ Contracts asserted:
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from sqlalchemy.pool import AsyncAdaptedQueuePool, NullPool
 
@@ -89,10 +91,11 @@ def test_postgres_pool_has_bounded_defaults_for_worker_count() -> None:
 
     assert isinstance(engine.pool, AsyncAdaptedQueuePool)
     assert engine.pool._pool.maxsize == 11  # 5 + 2 * 3
-    assert engine.sync_engine.pool._max_overflow == 5
-    assert engine.sync_engine.pool._timeout == 30
-    assert engine.sync_engine.pool._recycle == 1800
-    assert engine.sync_engine.pool._pre_ping is True
+    sync_pool = cast(Any, engine.sync_engine.pool)
+    assert sync_pool._max_overflow == 5
+    assert sync_pool._timeout == 30
+    assert sync_pool._recycle == 1800
+    assert sync_pool._pre_ping is True
 
 
 @pytest.mark.parametrize("bad_worker_count", [True, False, 0, -1, 129, 1.5, "2", None])

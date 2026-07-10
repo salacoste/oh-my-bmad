@@ -525,7 +525,7 @@ class TestUPSERT:
         ("dialect_name", "dialect"),
         [
             ("sqlite", sqlite.dialect()),
-            ("postgresql", postgresql.dialect()),
+            ("postgresql", postgresql.dialect()),  # type: ignore[no-untyped-call]
         ],
     )
     def test_claim_insert_compiles_for_supported_dialects(
