@@ -1,0 +1,196 @@
+{
+  "schema_version": "story-134.3/v1",
+  "phase": "51",
+  "epic": "134",
+  "story": "134.3",
+  "title": "Remote Postgres activation smoke and migration evidence package contract",
+  "mode": "static_remote_postgres_activation_smoke_migration_evidence_contract_not_activation",
+  "activation_boundary": {
+    "activation_performed": false,
+    "summary": "This is future/operator-gated evidence planning only. It is not proof activation occurred and performs no remote Postgres activation, no migration execution, no live database cutover, no provisioning, no production host mutation, no compose/profile activation, and no plaintext fallback.",
+    "no_remote_postgres_activation": true,
+    "no_migration_execution": true,
+    "no_live_database_cutover": true,
+    "no_plaintext_fallback": true,
+    "operator_gated": true,
+    "future_evidence_only": true,
+    "readiness_prerequisites_are_not_activation_proof": true
+  },
+  "operator_gate": {
+    "required": true,
+    "fields": [
+      "operator_approval_ref",
+      "security_approval_ref",
+      "change_window_utc",
+      "target_environment",
+      "target_version",
+      "generated_at_utc",
+      "expires_at_utc",
+      "remote_postgres_endpoint_ref",
+      "migration_runner_ref",
+      "backup_restore_checkpoint_ref",
+      "rollback_owner",
+      "rollback_plan_ref",
+      "fix_forward_plan_ref",
+      "emergency_disable_owner",
+      "emergency_disable_plan_ref",
+      "redaction_report_ref",
+      "independent_reviewer_ref"
+    ],
+    "required_statement": "Future remote Postgres activation smoke and migration evidence must be operator-gated, timestamped, redacted, reviewer-backed, tied to an explicit change window, bound to a redacted remote postgres endpoint identity, single migration runner, backup/restore checkpoint, rollback plan, and fix-forward criteria before any activation claim can be considered."
+  },
+  "readiness_prerequisites": {
+    "semantics": "prerequisites_only_not_activation_proof",
+    "minimum_refs": [
+      "docs/remote-postgres-production-readiness.json",
+      "docs/registry-remote-postgres-profile-readiness.json",
+      "docs/split-deployment-remote-postgres-closure-readiness.json",
+      "docs/db-mtls-readiness.json",
+      "docs/controlled-activation-evidence.json",
+      "docs/split-deployment-activation-smoke-evidence.json",
+      "_bmad-output/implementation-artifacts/134-1-activation-evidence-schema-preflight-gate.md",
+      "_bmad-output/implementation-artifacts/134-2-split-deployment-activation-smoke-evidence-package.md"
+    ],
+    "required_statement": "Epic 132 remote Postgres readiness, Epic 133 DB mTLS readiness, Story 134.1 controlled activation evidence, and Story 134.2 split-deployment smoke evidence are prerequisites only and are not proof activation occurred."
+  },
+  "future_smoke_evidence_contract": {
+    "package_kind": "future_remote_postgres_activation_smoke_migration_evidence",
+    "required_domains": {
+      "migration_preconditions": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "Alembic current and head revision references before migration",
+          "operator approval and change-window references",
+          "remote Postgres profile/config reference without credential values",
+          "stop condition proving services do not auto-migrate on startup"
+        ]
+      },
+      "single_migration_runner": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "single migration runner identity by role/reference only",
+          "lock/election or maintenance-window evidence proving no parallel runners",
+          "registry-api and worker services excluded from migration runner authority"
+        ]
+      },
+      "backup_restore_checkpoint": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "pre-migration backup or managed snapshot reference",
+          "checksum or provider snapshot identity without secret material",
+          "restore checkpoint or restore-drill reference",
+          "backup retention/expiry reference"
+        ]
+      },
+      "bounded_pool_settings": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "pool size and overflow limits from the bounded pool contract",
+          "pool timeout/recycle/pre-ping settings",
+          "worker count or capacity assumption used for the bounded calculation"
+        ]
+      },
+      "writer_authority": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "registry-state materializer single-writer authority",
+          "registry-api read/write boundary remains non-migration-runner",
+          "no multi-writer materialized state process"
+        ]
+      },
+      "read_side_compatibility": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "registry-api read-side compatibility smoke scope",
+          "idempotency/read model uses the same approved backend reference",
+          "SQLite/local default compatibility remains documented when remote Postgres is absent"
+        ]
+      },
+      "redacted_database_endpoint_identity": {
+        "required": true,
+        "value_kind": "redacted_reference_only",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "database endpoint identity by redacted label or ticket reference only",
+          "no credential values or unredacted connection strings",
+          "no production hostname or certificate subject material"
+        ]
+      },
+      "rollback_fix_forward_criteria": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "rollback owner and rollback plan reference",
+          "fix-forward owner and criteria reference",
+          "database restore checkpoint selected before migration",
+          "fail-closed status if migration, smoke, backup, or redaction evidence is missing"
+        ]
+      }
+    }
+  },
+  "fail_closed_checks": [
+    "missing_evidence_fails_closed",
+    "malformed_evidence_fails_closed",
+    "stale_evidence_fails_closed",
+    "self_attestation_rejected",
+    "secret_like_material_rejected",
+    "unredacted_connection_string_rejected",
+    "activation_overclaim_rejected",
+    "migration_execution_overclaim_rejected",
+    "cutover_overclaim_rejected",
+    "readiness_as_proof_rejected",
+    "remote_postgres_domain_coverage_required",
+    "operator_gate_required",
+    "backup_restore_checkpoint_required",
+    "rollback_fix_forward_required",
+    "justfile_and_ci_wiring_required",
+    "status_docs_story_134_3_done_required",
+    "epic_134_in_progress_required"
+  ],
+  "redaction_and_secret_hygiene": {
+    "policy": "Evidence packages, docs, status, checker output, and artifacts must contain no plaintext secrets, credential values, token values, private key material, certificate material, unredacted connection strings, database endpoint identity beyond redacted reference labels, production host secrets, production hostnames, certificate subjects, or full secret paths.",
+    "required_report": "redaction_report_ref",
+    "allowed_examples": [
+      "ticket references",
+      "redacted database endpoint labels",
+      "hashes or immutable image digests without secret material"
+    ],
+    "forbidden_material": [
+      "credential values",
+      "private key material",
+      "certificate material",
+      "plaintext secrets",
+      "token values",
+      "unredacted connection strings",
+      "unredacted database endpoint identity",
+      "production host secrets"
+    ]
+  },
+  "non_goals": [
+    "No remote Postgres activation, no live activation, and no production activation proof.",
+    "No provisioning, migration execution, production host mutation, live database cutover, compose/profile activation, credential handling, certificate material handling, plaintext fallback, runtime behavior change, deployment config change, dependency change, lockfile change, or production-state change.",
+    "No acceptance of readiness prerequisites as proof activation occurred."
+  ],
+  "docs_refs": [
+    "docs/feature-status.md#current-bmad-status",
+    "docs/project-overview.md#status",
+    "_bmad-output/implementation-artifacts/134-3-remote-postgres-activation-smoke-migration-evidence-package.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

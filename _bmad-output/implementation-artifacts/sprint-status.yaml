@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-09T00:00:00+03:00"
+# last_updated: "2026-07-10T00:00:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-09T00:00:00+03:00"
-current_phase: 51  # Phase 50 / Epic 133 DB mTLS readiness is complete locally; Phase 51 / Epic 134 controlled activation evidence planning is in-progress with Stories 134.1-134.2 done locally; Story 134.1 is merged via PR #124. Production activation, Postgres provisioning, production host mutation, real certificate material, and plaintext fallback remain fail-closed/deferred.
+last_updated: "2026-07-10T00:00:00+03:00"
+current_phase: 51  # Phase 50 / Epic 133 DB mTLS readiness is complete locally; Phase 51 / Epic 134 controlled activation evidence planning is in-progress with Stories 134.1-134.3 done locally; Story 134.1 is merged via PR #124. Production activation, Postgres provisioning, production host mutation, real certificate material, and plaintext fallback remain fail-closed/deferred.
 
 development_status:
   # =========================================================================
@@ -1160,10 +1160,10 @@ development_status:
   # =========================================================================
   # Epic 134: Controlled production activation evidence planning
   # =========================================================================
-  epic-134: in-progress  # Phase 51 / Epic 134 controlled activation evidence planning is in-progress for future/operator-gated activation evidence only; Stories 134.1-134.2 are done locally, Story 134.1 is merged via PR #124, and no live activation, provisioning, production host mutation, credentials, cert material, migration execution, compose/profile production activation, or plaintext fallback is authorized
+  epic-134: in-progress  # Phase 51 / Epic 134 controlled activation evidence planning is in-progress for future/operator-gated activation evidence only; Stories 134.1-134.3 are done locally, Story 134.1 is merged via PR #124, and no live activation, provisioning, production host mutation, credentials, cert material, migration execution, compose/profile production activation, or plaintext fallback is authorized
   134-1-activation-evidence-schema-preflight-gate: done  # Docs/status/static-checker activation evidence schema and preflight gate for future/operator-gated approvals, target environment, change window, smoke scope, rollback owner, emergency-disable owner, redaction rules, and no-live-activation boundary
   134-2-split-deployment-activation-smoke-evidence-package: done  # Docs/status/static-checker split-deployment activation smoke evidence package planning only; requires future/operator-gated service placement, network boundary, single-writer, event-log append, MCP boundary, operator/dashboard ingress, health/readiness, rollback, and no-live-activation evidence; readiness artifacts are prerequisites, not proof activation occurred
-  134-3-remote-postgres-activation-smoke-migration-evidence-package: backlog  # Future/operator-gated remote Postgres activation smoke and migration evidence package planning only; no provisioning, migration execution, credential value, host mutation, cutover, or plaintext fallback
+  134-3-remote-postgres-activation-smoke-migration-evidence-package: done  # Docs/status/static-checker remote Postgres smoke/migration evidence package planning only; requires future/operator-gated migration preconditions, single migration runner, backup/restore checkpoint, bounded pool settings, writer authority, read-side compatibility, redacted database endpoint identity, rollback/fix-forward criteria, and no live activation, migration execution, live database cutover, provisioning, host mutation, credential values, or plaintext fallback
   134-4-registry-db-mtls-activation-smoke-failure-evidence-package: backlog  # Future/operator-gated registry DB mTLS activation smoke and failure evidence package planning only; no real certificate material, private key material, production activation, compose/profile activation, or plaintext fallback
   134-5-combined-split-remote-postgres-db-mtls-rehearsal: backlog  # Future combined split deployment, remote Postgres, and DB mTLS rehearsal evidence planning with fail-closed status, backup checkpoint, rollback owner, emergency-disable owner, and operator signoff before any activation attempt
   134-6-controlled-activation-closure-go-no-go-evidence: backlog  # Future controlled activation closure and go/no-go evidence reconciles docs/status language so Phase 51 remains planning until separate operator-gated activation evidence exists
@@ -1172,6 +1172,37 @@ development_status:
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-07-10"
+    event: story-134-3-remote-postgres-smoke-migration-evidence-package-local-finished
+    from: backlog
+    to: done
+    phase: 51
+    epic: epic-134
+    story: 134-3-remote-postgres-activation-smoke-migration-evidence-package
+    source: codex-story-134-3-static-evidence-contract
+    operation_id: story-134-3-remote-postgres-activation-smoke-migration-evidence
+    operation_class: controlled_activation_evidence_planning
+    target_environment: repo-docs-status-planning
+    target_repository_or_service: remote-postgres-activation-smoke-migration-evidence-contract
+    authority_source: .omx/plans/story-134-3-remote-postgres-evidence-plan.md
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 134.3 defines a docs/status/static-checker contract for future/operator-gated
+      remote Postgres activation smoke and migration evidence only. It performs no remote
+      Postgres activation, provisioning, migration execution, production host mutation,
+      live database cutover, compose/profile activation, credential handling, certificate
+      material handling, plaintext fallback, runtime behavior change, deployment config
+      change, dependency change, lockfile change, or production-state change.
+    rollback_ref: revert-story-134-3-static-evidence-contract
+    expiry_freshness: refresh-on-future-operator-gated-remote-postgres-activation-story
+    status: done
+    summary: >-
+      Story 134.3 is complete locally with its JSON contract, checker, tests,
+      docs/status/artifact updates, and just/CI wiring. Epic 132 remote Postgres
+      readiness, Epic 133 DB mTLS readiness, and Stories 134.1-134.2 evidence
+      contracts remain prerequisites only and are not proof activation occurred.
+      Epic 134 remains in progress with Stories 134.4-134.6 backlog.
+
   - date: "2026-07-10"
     event: story-134-2-split-deployment-activation-smoke-evidence-package-local-done
     from: backlog
@@ -1200,7 +1231,7 @@ audit_trail:
       Story 134.2 is complete locally with its JSON contract, checker, tests,
       docs/status/artifact updates, and just/CI wiring. Readiness artifacts remain
       prerequisites only and are not proof activation occurred. Epic 134 remains in
-      progress with Stories 134.3-134.6 backlog.
+      progress with Story 134.3 done locally and Stories 134.4-134.6 backlog.
 
 
   - date: "2026-07-09"

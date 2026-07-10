@@ -469,6 +469,56 @@ def test_story_134_sprint_status_line_overclaim_fails(tmp_path: Path) -> None:
     assert any("activation overclaim" in v.message for v in violations)
 
 
+def test_story_134_3_sprint_status_done_line_is_allowed(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    target = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    text = target.read_text(encoding="utf-8")
+    line_no = next(
+        idx
+        for idx, line in enumerate(text.splitlines(), start=1)
+        if "134-3-remote-postgres-activation-smoke-migration-evidence-package: done" in line
+    )
+    violations = mod._scan_text_for_forbidden(mod.SPRINT_STATUS_PATH, text)  # type: ignore[attr-defined]
+    assert not any(
+        v.location == f"{mod.SPRINT_STATUS_PATH}:{line_no}"  # type: ignore[attr-defined]
+        and "activation overclaim" in v.message
+        for v in violations
+    )
+
+
+def test_story_134_3_sprint_status_done_line_with_unsafe_overclaim_fails(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    target = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    text = target.read_text(encoding="utf-8").replace(
+        "Docs/status/static-checker remote Postgres smoke/migration evidence package planning only;",
+        "Docs/status/static-checker remote Postgres smoke/migration evidence package planning only; "
+        "production activation completed successfully;",
+    )
+    target.write_text(text, encoding="utf-8")
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("activation overclaim" in v.message for v in violations)
+
+
+def test_story_134_3_sprint_status_done_line_with_comma_remote_postgres_overclaim_fails(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    target = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    text = target.read_text(encoding="utf-8").replace(
+        "Docs/status/static-checker remote Postgres smoke/migration evidence package planning only;",
+        "Docs/status/static-checker remote Postgres smoke/migration evidence package planning only, "
+        "remote Postgres activation completed successfully;",
+    )
+    target.write_text(text, encoding="utf-8")
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("activation overclaim" in v.message for v in violations)
+
+
 def test_story_134_sprint_status_audit_event_overclaim_fails(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
