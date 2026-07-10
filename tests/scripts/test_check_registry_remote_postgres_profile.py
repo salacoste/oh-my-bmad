@@ -16,7 +16,9 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "check_registry_remote_postgres_profile.py
 
 
 def _load_module() -> object:
-    spec = importlib.util.spec_from_file_location("check_registry_remote_postgres_profile", SCRIPT_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "check_registry_remote_postgres_profile", SCRIPT_PATH
+    )
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules["check_registry_remote_postgres_profile"] = mod
@@ -164,7 +166,9 @@ def test_just_and_ci_wiring_required(tmp_path: Path) -> None:
     for rel in [mod.JUSTFILE_PATH, mod.CI_PATH]:  # type: ignore[attr-defined]
         target = tmp_path / rel
         target.write_text(
-            target.read_text(encoding="utf-8").replace(mod.CHECKER_COMMAND, "uv run python scripts/other.py"),  # type: ignore[attr-defined]
+            target.read_text(encoding="utf-8").replace(
+                mod.CHECKER_COMMAND, "uv run python scripts/other.py"
+            ),  # type: ignore[attr-defined]
             encoding="utf-8",
         )
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]

@@ -3217,7 +3217,7 @@ class TestEntryPoint:
         with (
             patch.dict(os.environ, env, clear=True),
             patch.object(main_module, "build_app", side_effect=fake_build_app),
-            patch.object(main_module.uvicorn, "run", return_value=None),
+            patch("registry_api.__main__.uvicorn.run", return_value=None),
         ):
             main_module.main()
 

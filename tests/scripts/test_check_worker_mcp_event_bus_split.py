@@ -114,7 +114,9 @@ def test_host_ports_forbidden(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
     overlay = tmp_path / mod.OVERLAY_PATH  # type: ignore[attr-defined]
-    overlay.write_text(overlay.read_text(encoding="utf-8") + "\nports:\n  - 8081:8081\n", encoding="utf-8")
+    overlay.write_text(
+        overlay.read_text(encoding="utf-8") + "\nports:\n  - 8081:8081\n", encoding="utf-8"
+    )
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("host ports" in v.message for v in violations)
 
@@ -124,6 +126,11 @@ def test_wiring_required_in_just_and_ci(tmp_path: Path) -> None:
     _copy_live_fixture(tmp_path, mod)
     for rel in [mod.JUSTFILE_PATH, mod.CI_PATH]:  # type: ignore[attr-defined]
         target = tmp_path / rel
-        target.write_text(target.read_text(encoding="utf-8").replace(mod.CHECKER_COMMAND, "uv run python scripts/other.py"), encoding="utf-8")  # type: ignore[attr-defined]
+        target.write_text(
+            target.read_text(encoding="utf-8").replace(
+                mod.CHECKER_COMMAND, "uv run python scripts/other.py"
+            ),
+            encoding="utf-8",
+        )  # type: ignore[attr-defined]
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("missing required reference" in v.message for v in violations)

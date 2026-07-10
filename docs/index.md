@@ -7,8 +7,8 @@
 - **Type:** monorepo (`uv` workspace, 24 Python members) — single backend platform plus optional MCP fleet.
 - **Primary language:** Python 3.12 (locked).
 - **Architecture:** event-sourced, append-only JSONL event log, single-writer materialization, capability-tier-gated MCP boundaries, and replayable state.
-- **Current repo state:** Phase 28 closed / Epic 107 done — Story 107.1 selected exact snapshot-create authorization scope, Story 107.2 implemented the visible JWT-authenticated `POST /v1/events/replay/snapshots` runtime boundary, and Story 107.3 recorded final closure after remote CI run [`28195545005`](https://github.com/salacoste/oh-my-bmad/actions/runs/28195545005) passed.
-- **Latest tagged release:** `v1.3.0`; the checked-out branch contains later BMad work through Phase 28. [`feature-status.md`](./feature-status.md) summarizes implemented, partial, and deferred features; sprint-status remains canonical.
+- **Current repo state:** Phase 50 complete / Phase 51 planning — Phase 50 / Epic 133 DB mTLS readiness is complete locally, and Phase 51 / Epic 134 controlled production activation evidence planning is open for future/operator-gated split deployment, remote Postgres, and DB mTLS smoke evidence.
+- **Latest tagged release:** `v1.3.0`; the checked-out branch contains later BMad work through Phase 51 planning. [`feature-status.md`](./feature-status.md) summarizes implemented, partial, and deferred features; sprint-status remains canonical.
 
 ## Quick Reference
 
@@ -75,7 +75,8 @@
 - [`../_bmad-output/planning-artifacts/prd.md`](../_bmad-output/planning-artifacts/prd.md)
 - [`../_bmad-output/planning-artifacts/architecture.md`](../_bmad-output/planning-artifacts/architecture.md)
 - [`../_bmad-output/planning-artifacts/epics.md`](../_bmad-output/planning-artifacts/epics.md)
-- Phase amendments: [`phase-10`](../_bmad-output/planning-artifacts/phase-10-prd-amendment.md), [`phase-11`](../_bmad-output/planning-artifacts/phase-11-prd-amendment.md), [`phase-12`](../_bmad-output/planning-artifacts/phase-12-prd-amendment.md), [`phase-13`](../_bmad-output/planning-artifacts/phase-13-prd-amendment.md), [`phase-14`](../_bmad-output/planning-artifacts/phase-14-prd-amendment.md), [`phase-15`](../_bmad-output/planning-artifacts/phase-15-prd-amendment.md), [`phase-16`](../_bmad-output/planning-artifacts/phase-16-prd-amendment.md), [`phase-23`](../_bmad-output/planning-artifacts/phase-23-prd-amendment.md).
+- Phase 51 planning: [`phase-51-prd-amendment.md`](../_bmad-output/planning-artifacts/phase-51-prd-amendment.md), [`phase-51-architecture-amendment.md`](../_bmad-output/planning-artifacts/phase-51-architecture-amendment.md), [`phase-51-controlled-activation-epics.md`](../_bmad-output/planning-artifacts/phase-51-controlled-activation-epics.md).
+- Phase amendments: [`phase-10`](../_bmad-output/planning-artifacts/phase-10-prd-amendment.md), [`phase-11`](../_bmad-output/planning-artifacts/phase-11-prd-amendment.md), [`phase-12`](../_bmad-output/planning-artifacts/phase-12-prd-amendment.md), [`phase-13`](../_bmad-output/planning-artifacts/phase-13-prd-amendment.md), [`phase-14`](../_bmad-output/planning-artifacts/phase-14-prd-amendment.md), [`phase-15`](../_bmad-output/planning-artifacts/phase-15-prd-amendment.md), [`phase-16`](../_bmad-output/planning-artifacts/phase-16-prd-amendment.md), [`phase-23`](../_bmad-output/planning-artifacts/phase-23-prd-amendment.md), [`phase-48`](../_bmad-output/planning-artifacts/phase-48-production-readiness-epics.md).
 - [`../_bmad-output/implementation-artifacts/sprint-status.yaml`](../_bmad-output/implementation-artifacts/sprint-status.yaml) — current state and audit trail.
 
 ## Getting Started
@@ -114,17 +115,40 @@ This table is a derivative summary. Use [`../_bmad-output/implementation-artifac
 | 20 | Dashboard live-read contracts and aggregate/session unavailable decision | Done |
 | 21 | Dashboard rendering readiness and live-read wiring decision gate | Done |
 | 22 | Health/readiness runtime boundary for `GET /v1/health` | Done |
-| 23 | Task-detail runtime boundary for `GET /v1/tasks/{task_id}` | Done: route selection, runtime boundary, and final closure recorded |
-| 24 | Phase 24 — Event timeline / transitions runtime boundary for exact `GET /v1/tasks/{task_id}/events` and `GET /v1/tasks/{task_id}/transitions` | Done |
-| 25 | Phase 25 — Trace correlation runtime boundary for exact `GET /v1/trace/{trace_id}` | Done |
-| 26 | Phase 26 — History / Replay runtime boundary for exact `GET /v1/tasks/{task_id}/history`, `GET /v1/events/replay`, and `GET /v1/events/replay/validate` with visible replay target query discipline | Done |
-| 27 | Phase 27 — Lifecycle / Snapshot runtime boundary for exact `GET /v1/events/replay/snapshots` plus passive lifecycle-readiness evidence display | Done: Story 106.3 records Phase 27 / Epic 106 final closure with remote CI run `28139358221` |
-| 28 | Phase 28 — Snapshot Creation authorization runtime boundary for exact JWT-authenticated `POST /v1/events/replay/snapshots` | Done: Story 107.3 records Phase 28 / Epic 107 final closure with remote CI run `28195545005` |
+| 23 | Task-detail runtime boundary for `GET /v1/tasks/{task_id}` | Done |
+| 24 | Event timeline / transitions runtime boundary | Done |
+| 25 | Trace correlation runtime boundary | Done |
+| 26 | History / Replay runtime boundary | Done |
+| 27 | Lifecycle / Snapshot listing plus passive lifecycle-readiness evidence display | Done |
+| 28 | Snapshot Creation authorization runtime boundary | Done |
+| 29 | Aggregate/session/digest route-selection | Done |
+| 30 | Aggregate task-list route-selection/runtime boundary | Done |
+| 31 | Session-list runtime boundary | Done |
+| 32 | Session-detail runtime boundary | Done |
+| 33 | Digest-stream route-selection/runtime boundary | Done |
+| 34 | Task status filter route-selection/runtime boundary | Done |
+| 35 | Task-list limit route-selection/runtime boundary | Done |
+| 36 | Task status+limit route-selection/runtime boundary | Done |
+| 37 | Task status+limit browser consumption | Done |
+| 38 | Task-list pagination / next-window API boundary | Done |
+| 39 | Task-list pagination browser consumption | Done |
+| 40 | Manual task-list pagination navigation | Done |
+| 41 | Task status+limit+offset API-local composition | Done |
+| 42 | Task status+limit+offset browser consumption | Done |
+| 43 | Task-list sort API-local boundary | Done |
+| 44 | Task-list sort browser controls | Done |
+| 45 | API-local finite task-list sort vocabulary | Done |
+| 46 | Browser sort vocabulary, API sort composition, search/discovery planning, dashboard wiring guard | Done |
+| 47 | Browser full selector composition | Done |
+| 48 | Production-readiness portfolio through Epics 127-133 | Done locally through Epic 133 readiness closure |
+| 49 | Production-readiness execution/reconciliation toward split deployment and remote Postgres readiness | Done locally / reconciled in sprint status |
+| 50 | DB connection mTLS readiness | Complete locally; production activation deferred/operator-gated |
+| 51 | Controlled production activation evidence planning | Open: Epic 134 backlog planning only |
 
 ## Scope of this refresh
 
-- **Mode:** documentation canonicalization after Phase 28 snapshot creation authorization boundary work.
-- **Date:** 2026-06-25.
+- **Mode:** documentation canonicalization after Phase 50 DB mTLS readiness closure and Phase 51 controlled activation evidence planning opening.
+- **Date:** 2026-07-08.
 - **Project type:** backend monorepo / autonomous development platform.
 - **State file:** [project-scan-report.json](./project-scan-report.json) may lag this index; use sprint-status as canonical.
-- **Deferred boundaries after Phase 28:** aggregate/session/digest, task-list/search/discovery, broad dashboard wiring beyond approved narrow route families, destructive lifecycle apply/prune/rollback, archive/manifest mutation, snapshot deletion/restore, object-storage lifecycle jobs, scheduled retention, additional mutation/control affordances, production operations, and services/MCP/dependencies/CI changes remain future separate-story work.
+- **Deferred boundaries after Phase 51 planning:** live production activation, provisioning, production host mutation, migration execution, compose/profile production activation, credential or certificate material, plaintext fallback, future split-deployment activation evidence, future remote Postgres activation evidence, future DB mTLS smoke evidence, production command activation, and production-state changes remain future/operator-gated separate-story work.

@@ -260,16 +260,16 @@ def test_feature_status_stale_current_phase_epic_130_fails(tmp_path: Path) -> No
     _copy_live_fixture(tmp_path, mod)
     target = tmp_path / mod.FEATURE_STATUS_PATH  # type: ignore[attr-defined]
     text = target.read_text(encoding="utf-8")
-    text = text.replace(
-        "- **Current phase:** Phase 50 / Epic 133 closure is the current local readiness "
-        "state. Epic 133 DB connection mTLS runtime-gated registry-state implementation is "
-        "executed and verified locally behind `REGISTRY_DB_MTLS_ENABLED` with closure "
-        "evidence; production activation, live Postgres provisioning, production host "
-        "mutation, real certificate material, compose/profile activation, and plaintext "
-        "fallback remain operator-gated/deferred/fail-closed.",
+    stale_phase = (
         "- **Current phase:** Phase 48 / Epic 130 is locally closed as the current "
-        "retention/object-storage lifecycle readiness track after Epic 131 readiness closure.",
+        "retention/object-storage lifecycle readiness track after Epic 131 readiness closure."
     )
+    lines = [
+        stale_phase if line.startswith("- **Current phase:**") else line
+        for line in text.splitlines()
+    ]
+    assert stale_phase in lines
+    text = "\n".join(lines) + "\n"
     target.write_text(text, encoding="utf-8")
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("Phase 50 / Epic 133" in v.message for v in violations)

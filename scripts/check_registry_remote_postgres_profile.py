@@ -243,7 +243,9 @@ def _validate_contract(root: Path) -> list[Violation]:
             "no_live_host_mutation",
         ):
             if profile.get(flag) is not True:
-                violations.append(Violation(str(CONTRACT_PATH), f"profile_artifact.{flag}=true required"))
+                violations.append(
+                    Violation(str(CONTRACT_PATH), f"profile_artifact.{flag}=true required")
+                )
 
     wiring = data.get("registry_service_wiring", {})
     if isinstance(wiring, Mapping):
@@ -251,7 +253,10 @@ def _validate_contract(root: Path) -> list[Violation]:
         missing_env = REQUIRED_DSN_ENV - required_env
         if missing_env:
             violations.append(
-                Violation(str(CONTRACT_PATH), f"registry service required_env missing {sorted(missing_env)}")
+                Violation(
+                    str(CONTRACT_PATH),
+                    f"registry service required_env missing {sorted(missing_env)}",
+                )
             )
         if wiring.get("idempotency_uses_same_remote_dsn") is not True:
             violations.append(
@@ -268,7 +273,9 @@ def _validate_contract(root: Path) -> list[Violation]:
             violations.append(
                 Violation(str(CONTRACT_PATH), "startup_schema_creation_disabled=true required")
             )
-        evidence = set(cast("Iterable[str]", migration.get("required_evidence_before_activation", [])))
+        evidence = set(
+            cast("Iterable[str]", migration.get("required_evidence_before_activation", []))
+        )
         for token in ("pre-migration backup", "single migration runner", "Alembic", "rollback"):
             if not any(token.lower() in item.lower() for item in evidence):
                 violations.append(
@@ -279,27 +286,38 @@ def _validate_contract(root: Path) -> list[Violation]:
     if isinstance(mtls, Mapping):
         if mtls.get("enabled_key") != "REGISTRY_DB_MTLS_ENABLED":
             violations.append(
-                Violation(str(CONTRACT_PATH), "DB mTLS composition must bind REGISTRY_DB_MTLS_ENABLED")
+                Violation(
+                    str(CONTRACT_PATH), "DB mTLS composition must bind REGISTRY_DB_MTLS_ENABLED"
+                )
             )
         required_mtls = set(cast("Iterable[str]", mtls.get("required_when_enabled", [])))
         mtls_text = "\n".join(required_mtls)
         missing_mtls = _missing_tokens(mtls_text, REQUIRED_MTLS_ENV - {"REGISTRY_DB_MTLS_ENABLED"})
         if missing_mtls:
             violations.append(
-                Violation(str(CONTRACT_PATH), f"DB mTLS required_when_enabled missing {sorted(missing_mtls)}")
+                Violation(
+                    str(CONTRACT_PATH),
+                    f"DB mTLS required_when_enabled missing {sorted(missing_mtls)}",
+                )
             )
         if "no plaintext fallback" not in " ".join(_walk_strings(mtls)).lower():
-            violations.append(Violation(str(CONTRACT_PATH), "DB mTLS must require no plaintext fallback"))
+            violations.append(
+                Violation(str(CONTRACT_PATH), "DB mTLS must require no plaintext fallback")
+            )
 
     non_goals = set(cast("Iterable[str]", data.get("non_goals", [])))
     missing_non_goals = REQUIRED_NON_GOALS - non_goals
     if missing_non_goals:
-        violations.append(Violation(str(CONTRACT_PATH), f"non_goals missing {sorted(missing_non_goals)}"))
+        violations.append(
+            Violation(str(CONTRACT_PATH), f"non_goals missing {sorted(missing_non_goals)}")
+        )
 
     docs_refs = set(cast("Iterable[str]", data.get("docs_refs", [])))
     missing_doc_refs = REQUIRED_DOC_REFS - docs_refs
     if missing_doc_refs:
-        violations.append(Violation(str(CONTRACT_PATH), f"docs_refs missing {sorted(missing_doc_refs)}"))
+        violations.append(
+            Violation(str(CONTRACT_PATH), f"docs_refs missing {sorted(missing_doc_refs)}")
+        )
     status_refs = set(cast("Iterable[str]", data.get("status_refs", [])))
     missing_status_refs = REQUIRED_STATUS_REFS - status_refs
     if missing_status_refs:
@@ -310,14 +328,16 @@ def _validate_contract(root: Path) -> list[Violation]:
     for string in _walk_strings(data):
         for match in POSTGRES_URL_PATTERN.finditer(string):
             if not _is_placeholder_postgres_url(match.group(0)):
-                violations.append(Violation(str(CONTRACT_PATH), "contract contains a non-placeholder DSN"))
+                violations.append(
+                    Violation(str(CONTRACT_PATH), "contract contains a non-placeholder DSN")
+                )
     return violations
 
 
 def _validate_overlay(root: Path) -> list[Violation]:
     text = _read(root, OVERLAY_PATH)
     violations: list[Violation] = []
-    if "profiles: [\"registry-remote-postgres\"]" not in text:
+    if 'profiles: ["registry-remote-postgres"]' not in text:
         violations.append(Violation(str(OVERLAY_PATH), "overlay must profile-gate services"))
     if text.count("${REGISTRY_DATABASE_URL:?") < 4:
         violations.append(
@@ -325,10 +345,14 @@ def _validate_overlay(root: Path) -> list[Violation]:
         )
     missing_dsn = _missing_tokens(text, REQUIRED_DSN_ENV)
     if missing_dsn:
-        violations.append(Violation(str(OVERLAY_PATH), f"overlay missing DSN env {sorted(missing_dsn)}"))
+        violations.append(
+            Violation(str(OVERLAY_PATH), f"overlay missing DSN env {sorted(missing_dsn)}")
+        )
     missing_mtls = _missing_tokens(text, REQUIRED_MTLS_ENV)
     if missing_mtls:
-        violations.append(Violation(str(OVERLAY_PATH), f"overlay missing DB mTLS env {sorted(missing_mtls)}"))
+        violations.append(
+            Violation(str(OVERLAY_PATH), f"overlay missing DB mTLS env {sorted(missing_mtls)}")
+        )
     for token in (
         "registry-state:",
         "registry-api:",
@@ -338,7 +362,9 @@ def _validate_overlay(root: Path) -> list[Violation]:
         "/run/secrets/:/certs/db/",
     ):
         if token not in text:
-            violations.append(Violation(str(OVERLAY_PATH), f"overlay missing required token {token}"))
+            violations.append(
+                Violation(str(OVERLAY_PATH), f"overlay missing required token {token}")
+            )
     for _match in POSTGRES_URL_PATTERN.finditer(text):
         violations.append(Violation(str(OVERLAY_PATH), "overlay must not embed any Postgres DSN"))
     return violations
@@ -355,11 +381,17 @@ def _validate_default_preservation(root: Path) -> list[Violation]:
     if "sqlite+aiosqlite:////var/lib/oh-my-bmad/registry/state.sqlite3" not in root_compose:
         violations.append(Violation(str(ROOT_COMPOSE_PATH), "root compose SQLite default missing"))
     if "REGISTRY_DB_PATH=/var/lib/oh-my-bmad/registry/state.sqlite3" not in env_example:
-        violations.append(Violation(str(ENV_EXAMPLE_PATH), "SQLite REGISTRY_DB_PATH default missing"))
+        violations.append(
+            Violation(str(ENV_EXAMPLE_PATH), "SQLite REGISTRY_DB_PATH default missing")
+        )
     if "REGISTRY_DATABASE_URL=" not in env_example:
-        violations.append(Violation(str(ENV_EXAMPLE_PATH), "REGISTRY_DATABASE_URL placeholder missing"))
+        violations.append(
+            Violation(str(ENV_EXAMPLE_PATH), "REGISTRY_DATABASE_URL placeholder missing")
+        )
     if re.search(r"(?m)^REGISTRY_DATABASE_URL=\S+", env_example):
-        violations.append(Violation(str(ENV_EXAMPLE_PATH), "REGISTRY_DATABASE_URL must be blank in .env.example"))
+        violations.append(
+            Violation(str(ENV_EXAMPLE_PATH), "REGISTRY_DATABASE_URL must be blank in .env.example")
+        )
     for token in REQUIRED_MTLS_ENV:
         if token not in env_example:
             violations.append(Violation(str(ENV_EXAMPLE_PATH), f".env.example missing {token}"))
@@ -373,18 +405,26 @@ def _validate_wiring(root: Path) -> list[Violation]:
     if CHECKER_COMMAND not in justfile:
         violations.append(Violation(str(JUSTFILE_PATH), "missing registry remote Postgres checker"))
     if CHECKER_SELF_TEST_COMMAND not in justfile:
-        violations.append(Violation(str(JUSTFILE_PATH), "missing registry remote Postgres checker self-test"))
+        violations.append(
+            Violation(str(JUSTFILE_PATH), "missing registry remote Postgres checker self-test")
+        )
     if CHECKER_COMMAND not in ci:
         violations.append(Violation(str(CI_PATH), "CI missing registry remote Postgres checker"))
     if CHECKER_SELF_TEST_COMMAND not in ci:
-        violations.append(Violation(str(CI_PATH), "CI missing registry remote Postgres checker self-test"))
+        violations.append(
+            Violation(str(CI_PATH), "CI missing registry remote Postgres checker self-test")
+        )
     return violations
 
 
 def _validate_docs_status(root: Path) -> list[Violation]:
     required_refs: dict[Path, Sequence[str]] = {
         OPERATOR_RUNBOOK_PATH: ["Story 132.3", CHECKER_COMMAND, str(OVERLAY_PATH)],
-        PRODUCTION_OPS_PATH: ["Story 132.3", CHECKER_COMMAND, "registry remote Postgres deployment profile"],
+        PRODUCTION_OPS_PATH: [
+            "Story 132.3",
+            CHECKER_COMMAND,
+            "registry remote Postgres deployment profile",
+        ],
         FEATURE_STATUS_PATH: ["Story 132.3", str(CONTRACT_PATH), str(OVERLAY_PATH)],
         ARTIFACT_PATH: ["Story 132.3", CHECKER_COMMAND, str(OVERLAY_PATH)],
         SPRINT_STATUS_PATH: ["132-3-registry-remote-postgres-deployment-profile: done"],
@@ -397,7 +437,9 @@ def _validate_docs_status(root: Path) -> list[Violation]:
                 violations.append(Violation(str(relpath), f"missing required reference {token}"))
     sprint = _read(root, SPRINT_STATUS_PATH)
     if "132-4-worker-mcp-event-bus-split-profile:" not in sprint:
-        violations.append(Violation(str(SPRINT_STATUS_PATH), "132.4 sprint status entry missing after 132.3"))
+        violations.append(
+            Violation(str(SPRINT_STATUS_PATH), "132.4 sprint status entry missing after 132.3")
+        )
     return violations
 
 
@@ -410,7 +452,9 @@ def _validate_secret_hygiene(root: Path) -> list[Violation]:
                 violations.append(Violation(str(relpath), "secret-like value is forbidden"))
         for match in POSTGRES_URL_PATTERN.finditer(text):
             if not _is_placeholder_postgres_url(match.group(0)):
-                violations.append(Violation(str(relpath), "non-placeholder Postgres DSN is forbidden"))
+                violations.append(
+                    Violation(str(relpath), "non-placeholder Postgres DSN is forbidden")
+                )
     return violations
 
 
@@ -423,7 +467,10 @@ def _validate_overclaims(root: Path) -> list[Violation]:
                 window = text[max(0, match.start() - 250) : min(len(text), match.end() + 250)]
                 if not NEGATION_PATTERN.search(window):
                     violations.append(
-                        Violation(str(relpath), "registry remote Postgres activation overclaim is forbidden")
+                        Violation(
+                            str(relpath),
+                            "registry remote Postgres activation overclaim is forbidden",
+                        )
                     )
     return violations
 
@@ -443,7 +490,9 @@ def validate(root: Path = REPO_ROOT) -> list[Violation]:
         CI_PATH,
     )
     violations = [
-        Violation(str(relpath), "required file missing") for relpath in required_files if not (root / relpath).exists()
+        Violation(str(relpath), "required file missing")
+        for relpath in required_files
+        if not (root / relpath).exists()
     ]
     if violations:
         return violations
@@ -494,7 +543,9 @@ def _self_test() -> int:
 
         overlay = root / OVERLAY_PATH
         original_overlay = overlay.read_text(encoding="utf-8")
-        overlay.write_text(original_overlay.replace("${REGISTRY_DATABASE_URL:?", "${OTHER_URL:?"), encoding="utf-8")
+        overlay.write_text(
+            original_overlay.replace("${REGISTRY_DATABASE_URL:?", "${OTHER_URL:?"), encoding="utf-8"
+        )
         if not any("REGISTRY_DATABASE_URL" in item.message for item in validate(root)):
             print("self-test expected missing REGISTRY_DATABASE_URL violation", file=sys.stderr)
             return 1
@@ -502,17 +553,24 @@ def _self_test() -> int:
 
         env_example = root / ENV_EXAMPLE_PATH
         env_example.write_text(
-            env_example.read_text(encoding="utf-8").replace("REGISTRY_DATABASE_URL=", "REGISTRY_DATABASE_URL=postgresql+asyncpg://app:password@example.invalid/db"),
+            env_example.read_text(encoding="utf-8").replace(
+                "REGISTRY_DATABASE_URL=",
+                "REGISTRY_DATABASE_URL=postgresql+asyncpg://app:password@example.invalid/db",
+            ),
             encoding="utf-8",
         )
-        if not any("REGISTRY_DATABASE_URL must be blank" in item.message for item in validate(root)):
+        if not any(
+            "REGISTRY_DATABASE_URL must be blank" in item.message for item in validate(root)
+        ):
             print("self-test expected non-blank env placeholder violation", file=sys.stderr)
             return 1
         _copy_live_fixture(root)
 
         justfile = root / JUSTFILE_PATH
         justfile.write_text(
-            justfile.read_text(encoding="utf-8").replace(CHECKER_COMMAND, "uv run python scripts/other.py"),
+            justfile.read_text(encoding="utf-8").replace(
+                CHECKER_COMMAND, "uv run python scripts/other.py"
+            ),
             encoding="utf-8",
         )
         if not any("checker" in item.message for item in validate(root)):

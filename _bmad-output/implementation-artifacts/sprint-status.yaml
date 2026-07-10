@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-07T00:00:00+03:00"
+# last_updated: "2026-07-09T00:00:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-07T00:00:00+03:00"
-current_phase: 50  # Phase 50 / Epic 133 DB connection mTLS runtime-gated readiness; registry-state DB mTLS code is gated by REGISTRY_DB_MTLS_ENABLED while production activation, Postgres provisioning, production host mutation, real certificate material, and plaintext fallback remain fail-closed/deferred
+last_updated: "2026-07-09T00:00:00+03:00"
+current_phase: 51  # Phase 50 / Epic 133 DB mTLS readiness is complete locally; Phase 51 / Epic 134 controlled activation evidence planning is in-progress with Story 134.1 done locally. Production activation, Postgres provisioning, production host mutation, real certificate material, and plaintext fallback remain fail-closed/deferred.
 
 development_status:
   # =========================================================================
@@ -905,7 +905,7 @@ development_status:
   # =========================================================================
   # Epic 107: Snapshot creation authorization planning
   # =========================================================================
-  epic-107: done  # Phase 28 closed; snapshot creation authorization boundary complete with Story 107.3 evidence consolidation and remote CI run 28195545005
+  epic-107: done  # Phase 28 closure recorded; snapshot creation authorization boundary complete with Story 107.3 evidence consolidation and remote CI run 28195545005
   107-1-snapshot-creation-authorization-planning: done  # Phase 28 PRD/architecture/epics/status opening; selects future POST snapshot creation authorization boundary only
   107-2-snapshot-creation-authorization-runtime-boundary: done  # route-local JWT-authenticated POST boundary + visible dashboard affordance; code-review/UltraQA/local CI passed; pushed in e8bb1e4; remote CI run 28195545005 green; no destructive lifecycle/broad dashboard/discovery/search/aggregate/session/digest
   107-3-phase-28-epic-107-final-closure: done  # docs/status final closure after Story 107.2 review/QA/push/remote-CI evidence; deferred surfaces remain fail-closed
@@ -1157,10 +1157,109 @@ development_status:
   133-4-failure-mode-observability-tests: done  # Local sanitized failure diagnostics, bounded retry metadata, canonical failure classes, no-plaintext-fallback URL policy, registry/Alembic wiring, and checker tests are implemented; scanner/code-review/UltraQA evidence is recorded by Story 133.5 closure
   133-5-db-mtls-closure-evidence: done  # Closure artifact records targeted pytest 75 passed, checker/self-test passed, Ruff/mypy/format passed, just gates passed, isolated mtls import ok, secret scan exit 0 with scancode warning only, code-review cycle 3 APPROVE/CLEAR, and UltraQA closure/status/checker rework evidence
 
+  # =========================================================================
+  # Epic 134: Controlled production activation evidence planning
+  # =========================================================================
+  epic-134: in-progress  # Phase 51 / Epic 134 controlled activation evidence planning is in-progress for future/operator-gated activation evidence only; Story 134.1 is done locally and no live activation, provisioning, production host mutation, credentials, cert material, migration execution, compose/profile production activation, or plaintext fallback is authorized
+  134-1-activation-evidence-schema-preflight-gate: done  # Docs/status/static-checker activation evidence schema and preflight gate for future/operator-gated approvals, target environment, change window, smoke scope, rollback owner, emergency-disable owner, redaction rules, and no-live-activation boundary
+  134-2-split-deployment-activation-smoke-evidence-package: backlog  # Future/operator-gated split deployment activation smoke evidence package planning only; readiness artifacts are prerequisites, not proof activation occurred
+  134-3-remote-postgres-activation-smoke-migration-evidence-package: backlog  # Future/operator-gated remote Postgres activation smoke and migration evidence package planning only; no provisioning, migration execution, credential value, host mutation, cutover, or plaintext fallback
+  134-4-registry-db-mtls-activation-smoke-failure-evidence-package: backlog  # Future/operator-gated registry DB mTLS activation smoke and failure evidence package planning only; no real certificate material, private key material, production activation, compose/profile activation, or plaintext fallback
+  134-5-combined-split-remote-postgres-db-mtls-rehearsal: backlog  # Future combined split deployment, remote Postgres, and DB mTLS rehearsal evidence planning with fail-closed status, backup checkpoint, rollback owner, emergency-disable owner, and operator signoff before any activation attempt
+  134-6-controlled-activation-closure-go-no-go-evidence: backlog  # Future controlled activation closure and go/no-go evidence reconciles docs/status language so Phase 51 remains planning until separate operator-gated activation evidence exists
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+
+
+  - date: "2026-07-09"
+    event: story-134-1-controlled-evidence-schema-preflight-gate-local-finished
+    from: backlog
+    to: done
+    phase: 51
+    epic: epic-134
+    story: 134-1-activation-evidence-schema-preflight-gate
+    source: story-134-1-static-checker-status-wiring
+    operation_id: story-134-1-controlled-evidence-schema-preflight-local-finished
+    operation_class: controlled_activation_evidence_static_preflight
+    target_environment: repo-docs-status-static-checker
+    target_repository_or_service: docs-controlled-activation-evidence
+    authority_source: .omx/specs/story-134-1-activation-evidence-schema-preflight-plan.md
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 134.1 defines the local future/operator-gated activation evidence
+      schema and static preflight gate only. It performs no live activation,
+      provisioning, production host mutation, migration execution,
+      compose/profile production activation, credentials, certs or cert
+      material, or plaintext fallback; readiness artifacts remain prerequisites
+      only and are not proof activation occurred.
+    rollback_ref: revert-story-134-1-static-checker-status-wiring
+    expiry_freshness: refresh-on-future-operator-gated-activation-story
+    status: done
+    summary: >-
+      Story 134.1 is complete locally as a docs/status/static-checker slice.
+      Epic 134 remains in progress with Stories 134.2-134.6 still backlog for
+      future/operator-gated activation evidence packages.
+
+  - date: "2026-07-08"
+    event: phase-51-epic-134-controlled-activation-evidence-planning-opened
+    from: phase-50-local-readiness-complete
+    to: phase-51-planning-open
+    phase: 51
+    epic: epic-134
+    story: 134-1-activation-evidence-schema-preflight-gate
+    source: phase-51-docs-status-planning-patch
+    operation_id: phase-51-epic-134-open
+    operation_class: controlled_activation_evidence_planning
+    target_environment: repo-docs-status-planning
+    target_repository_or_service: phase-51-planning-artifacts
+    authority_source: _bmad-output/planning-artifacts/phase-51-controlled-activation-epics.md
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Phase 51 opens Epic 134 as future/operator-gated controlled activation
+      evidence planning only. It plans evidence for split deployment, remote
+      Postgres, and DB mTLS smoke checks without performing live activation,
+      provisioning, production host mutation, migration execution, compose/profile
+      production activation, credentials, certs or cert material, or plaintext
+      fallback; explicitly, there are no credentials, no certs or cert material,
+      and no plaintext fallback.
+    rollback_ref: revert-phase-51-docs-status-planning-patch
+    expiry_freshness: refresh-on-future-operator-gated-activation-story
+    status: backlog
+    summary: >-
+      Epic 134 is open as backlog planning for future activation evidence.
+      Readiness artifacts remain prerequisites only and are not proof activation
+      occurred.
+
+  - date: "2026-07-08"
+    event: phase-50-epic-133-db-mtls-readiness-reconciled-complete-local
+    from: local-readiness-complete
+    to: readiness-complete-activation-deferred
+    phase: 50
+    epic: epic-133
+    story: 133-5-db-mtls-closure-evidence
+    source: phase-51-docs-status-planning-patch
+    operation_id: phase-50-epic-133-readiness-reconciliation
+    operation_class: db_mtls_readiness_reconciliation
+    target_environment: repo-docs-status-planning
+    target_repository_or_service: registry-state-db-mtls-readiness
+    authority_source: _bmad-output/implementation-artifacts/133-5-db-mtls-closure-evidence.md
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Phase 50 / Epic 133 DB mTLS readiness is complete locally with runtime-gated
+      registry-state support and closure evidence. This reconciliation explicitly
+      does not claim live activation, provisioning, production host mutation,
+      migration execution, compose/profile production activation, credentials,
+      certs or cert material, or plaintext fallback; explicitly, there are no
+      credentials, no certs or cert material, and no plaintext fallback.
+    rollback_ref: revert-phase-51-docs-status-planning-patch
+    expiry_freshness: refresh-on-future-db-mtls-production-activation-evidence
+    status: done
+    summary: >-
+      Epic 133 remains complete locally as readiness. Production activation and
+      DB mTLS smoke evidence remain future/operator-gated under Phase 51 planning.
 
   - date: "2026-07-07"
     event: story-133-1-db-mtls-static-readiness-contract-local-done

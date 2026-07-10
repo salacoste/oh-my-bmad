@@ -113,6 +113,9 @@ jobs:
       - name: Check DB mTLS readiness (Epic 133)
         run: uv run python scripts/check_db_mtls_readiness.py
 
+      - name: Check controlled activation evidence (Story 134.1)
+        run: uv run python scripts/check_controlled_activation_evidence.py
+
       - name: Check-scripts self-tests
         run: |
           uv run python scripts/check_imports.py --self-test
@@ -138,6 +141,7 @@ jobs:
           uv run python scripts/check_failure_load_backup_restore_readiness.py --self-test
           uv run python scripts/check_split_deployment_remote_postgres_closure.py --self-test
           uv run python scripts/check_db_mtls_readiness.py --self-test
+          uv run python scripts/check_controlled_activation_evidence.py --self-test
 
       - name: Check secrets (full tree)
         run: git ls-files -z | xargs -0 uv run secret-hygiene-precommit
