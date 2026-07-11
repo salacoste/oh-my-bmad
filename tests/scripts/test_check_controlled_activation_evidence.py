@@ -84,6 +84,20 @@ def test_self_test_passes() -> None:
     assert mod._self_test() == 0  # type: ignore[attr-defined]
 
 
+def test_copy_fixture_includes_optional_story_134_6_closure_artifact(tmp_path: Path) -> None:
+    mod = _load_module()
+    src = tmp_path / "src"
+    dest = tmp_path / "dest"
+    _copy_live_fixture(src, mod)
+    _write_story_134_6_closure_fixture(src, mod)
+
+    mod._copy_fixture(src, dest)  # type: ignore[attr-defined]
+
+    closure = dest / mod.CLOSURE_ARTIFACT_PATH  # type: ignore[attr-defined]
+    assert closure.exists()
+    assert "planning-only/docs-status" in closure.read_text(encoding="utf-8")
+
+
 def test_live_contract_is_clean() -> None:
     mod = _load_module()
     assert mod.main([]) == 0  # type: ignore[attr-defined]
@@ -198,6 +212,206 @@ def test_missing_story_134_1_done_status_fails(tmp_path: Path) -> None:
     target.write_text(text, encoding="utf-8")
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("Story 134.1" in v.message and "done/closed" in v.message for v in violations)
+
+
+def _write_story_134_6_closure_fixture(tmp_path: Path, mod: object) -> None:
+    closure_path = tmp_path / mod.CLOSURE_ARTIFACT_PATH  # type: ignore[attr-defined]
+    closure_path.parent.mkdir(parents=True, exist_ok=True)
+    closure_path.write_text(
+        "# Story 134.6 Controlled Activation Closure and Go/No-Go Evidence\n\n"
+        "Story 134.6 closes Phase 51 / Epic 134 as planning-only/docs-status "
+        "evidence, not activation. Split deployment, remote Postgres, and DB "
+        "mTLS smoke evidence remain future/operator-gated.\n",
+        encoding="utf-8",
+    )
+
+
+def test_story_134_6_planning_closure_status_is_allowed(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    _write_story_134_6_closure_fixture(tmp_path, mod)
+
+    sprint = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    sprint_text = sprint.read_text(encoding="utf-8")
+    sprint_text = sprint_text.replace(
+        "epic-134: in-progress",
+        "epic-134: done  # Phase 51 / Epic 134 controlled activation evidence planning is closed as planning-only/docs-status evidence; no live activation occurred",
+    )
+    sprint_text = sprint_text.replace(
+        "134-6-controlled-activation-closure-go-no-go-evidence: backlog",
+        "134-6-controlled-activation-closure-go-no-go-evidence: done  # Story 134.6 docs/status-only closure, not activation",
+    )
+    sprint_text += (
+        '\n  - date: "2026-07-11"\n'
+        "    event: story-134-6-controlled-activation-closure-go-no-go-evidence-done\n"
+        "    summary: >-\n"
+        "      Story 134.6 is complete as docs/status-only closure evidence. Epic 134 is\n"
+        "      marked done for planning-only evidence closure; no split deployment activation,\n"
+        "      no remote Postgres activation, no DB mTLS production activation, no live rehearsal,\n"
+        "      and no production-state change occurred.\n"
+    )
+    sprint.write_text(sprint_text, encoding="utf-8")
+
+    feature = tmp_path / mod.FEATURE_STATUS_PATH  # type: ignore[attr-defined]
+    feature.write_text(
+        feature.read_text(encoding="utf-8")
+        + (
+            "\nEpic 134 controlled production activation evidence planning is done as "
+            "planning-only/docs-status closure, not activation. Story 134.6 records "
+            "docs/status-only closure, and split deployment, remote Postgres, and DB "
+            "mTLS smoke evidence remain future/operator-gated. This is not proof "
+            "activation occurred. No live activation.\n"
+        ),
+        encoding="utf-8",
+    )
+
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert not violations
+
+
+def test_story_134_6_done_without_closure_artifact_fails(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    sprint = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    sprint.write_text(
+        sprint.read_text(encoding="utf-8").replace(
+            "epic-134: in-progress",
+            "epic-134: done",
+        ),
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("Story 134.6 planning-only closure evidence exists" in v.message for v in violations)
+
+
+def test_story_134_6_closure_still_rejects_activation_overclaim(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    _write_story_134_6_closure_fixture(tmp_path, mod)
+    feature = tmp_path / mod.FEATURE_STATUS_PATH  # type: ignore[attr-defined]
+    feature.write_text(
+        feature.read_text(encoding="utf-8")
+        + "\nNo live activation; production activation completed successfully.\n",
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("activation overclaim" in v.message for v in violations)
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        ", production activation completed successfully",
+        " and activation completed successfully",
+        " activation completed successfully",
+    ],
+)
+def test_story_134_6_status_line_suffix_overclaim_still_fails(tmp_path: Path, suffix: str) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    _write_story_134_6_closure_fixture(tmp_path, mod)
+    sprint = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    sprint.write_text(
+        sprint.read_text(encoding="utf-8").replace(
+            "134-6-controlled-activation-closure-go-no-go-evidence: backlog",
+            "134-6-controlled-activation-closure-go-no-go-evidence: done  # "
+            f"Story 134.6 docs/status-only closure, not activation{suffix}",
+        ),
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("activation overclaim" in v.message for v in violations)
+
+
+def test_story_134_6_slug_does_not_sanitize_activation_overclaim(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    target = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    target.write_text(
+        target.read_text(encoding="utf-8")
+        + (
+            "\nevent: story-134-6-controlled-activation-closure-go-no-go-evidence-done; "
+            "production activation completed successfully\n"
+            "epic: epic-134\n"
+        ),
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("activation overclaim" in v.message for v in violations)
+
+
+def test_story_134_6_closure_artifact_is_scanned_for_overclaims(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    _write_story_134_6_closure_fixture(tmp_path, mod)
+    closure = tmp_path / mod.CLOSURE_ARTIFACT_PATH  # type: ignore[attr-defined]
+    closure.write_text(
+        closure.read_text(encoding="utf-8") + "\nProduction activation completed successfully.\n",
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("activation overclaim" in v.message for v in violations)
+
+
+def test_story_134_6_closure_artifact_is_scanned_for_secret_values(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    _write_story_134_6_closure_fixture(tmp_path, mod)
+    closure = tmp_path / mod.CLOSURE_ARTIFACT_PATH  # type: ignore[attr-defined]
+    closure.write_text(
+        closure.read_text(encoding="utf-8") + "\nSECRET_KEY=abcdefghijklmnopqrstuvwxyz123456\n",
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("secret-like" in v.message for v in violations)
+
+
+def test_story_134_6_done_requires_story_status_done_when_artifact_exists(
+    tmp_path: Path,
+) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    _write_story_134_6_closure_fixture(tmp_path, mod)
+    sprint = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    sprint.write_text(
+        sprint.read_text(encoding="utf-8").replace(
+            "epic-134: in-progress",
+            "epic-134: done",
+        ),
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("Story 134.6 closure status must be done/closed" in v.message for v in violations)
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "no remote Postgres activation, remote Postgres activation completed successfully",
+        "no remote Postgres activation, activation completed successfully",
+        "no DB mTLS production activation, production activation completed successfully",
+        "no DB mTLS production activation, activation completed successfully",
+    ],
+)
+def test_story_134_6_scoped_negation_does_not_sanitize_same_clause_overclaim(
+    tmp_path: Path, unsafe_text: str
+) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    target = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    target.write_text(
+        target.read_text(encoding="utf-8")
+        + (
+            '\n  - date: "2026-07-11"\n'
+            "    event: story-134-6-regression\n"
+            "    epic: epic-134\n"
+            "    summary: >-\n"
+            f"      {unsafe_text}\n"
+        ),
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert any("activation overclaim" in v.message for v in violations)
 
 
 def test_self_attestation_acceptance_fails(tmp_path: Path) -> None:
