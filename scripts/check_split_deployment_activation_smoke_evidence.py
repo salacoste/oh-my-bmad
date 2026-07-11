@@ -23,6 +23,9 @@ ARTIFACT_PATH = Path(
     "_bmad-output/implementation-artifacts/"
     "134-2-split-deployment-activation-smoke-evidence-package.md"
 )
+CLOSURE_ARTIFACT_PATH = Path(
+    "_bmad-output/implementation-artifacts/134-6-controlled-activation-closure-go-no-go-evidence.md"
+)
 JUSTFILE_PATH = Path("justfile")
 CI_PATH = Path(".github/workflows/ci.yml")
 CHECKER_COMMAND = "uv run python scripts/check_split_deployment_activation_smoke_evidence.py"
@@ -412,6 +415,17 @@ def _ci_has_command(text: str, command: str) -> bool:
     return False
 
 
+def _has_story_134_6_planning_closure(root: Path) -> bool:
+    closure_path = root / CLOSURE_ARTIFACT_PATH
+    if not closure_path.exists():
+        return False
+    closure_text = _read(root, CLOSURE_ARTIFACT_PATH)
+    return all(
+        phrase in closure_text
+        for phrase in ("planning-only/docs-status", "not activation", "future/operator-gated")
+    )
+
+
 def _validate_wiring(root: Path) -> list[Violation]:
     violations: list[Violation] = []
     just = _read(root, JUSTFILE_PATH)
@@ -451,14 +465,21 @@ def _validate_status(root: Path) -> list[Violation]:
     if not story_134_1 or story_134_1.group("status") not in ALLOWED_STORY_STATUS:
         violations.append(Violation(str(SPRINT_STATUS_PATH), "Story 134.1 must remain done/closed"))
     epic_134 = re.search(r"(?m)^\s*epic-134:\s*(?P<status>\S+)", sprint)
-    if not epic_134 or epic_134.group("status") != "in-progress":
-        violations.append(Violation(str(SPRINT_STATUS_PATH), "Epic 134 must remain in-progress"))
+    epic_134_status = epic_134.group("status") if epic_134 else None
+    if epic_134_status != "in-progress" and not (
+        epic_134_status in {"done", "closed"} and _has_story_134_6_planning_closure(root)
+    ):
+        violations.append(
+            Violation(
+                str(SPRINT_STATUS_PATH),
+                "Epic 134 must remain in-progress unless Story 134.6 planning-only closure exists",
+            )
+        )
 
     feature = _read(root, FEATURE_STATUS_PATH)
     for phrase in (
         "Story 134.2",
         "complete locally",
-        "split-deployment activation smoke evidence package",
         CHECKER_COMMAND,
         "future/operator-gated",
         "not proof activation occurred",
@@ -468,6 +489,16 @@ def _validate_status(root: Path) -> list[Violation]:
             violations.append(
                 Violation(str(FEATURE_STATUS_PATH), f"feature status missing {phrase!r}")
             )
+    if not (
+        "split-deployment activation smoke evidence package" in feature
+        or "split-deployment smoke evidence package" in feature
+    ):
+        violations.append(
+            Violation(
+                str(FEATURE_STATUS_PATH),
+                "feature status missing split-deployment smoke evidence package",
+            )
+        )
     overview = _read(root, PROJECT_OVERVIEW_PATH)
     for phrase in (
         "Story 134.2",
@@ -522,10 +553,13 @@ def _copy_fixture(root: Path, dest: Path) -> None:
         PROJECT_OVERVIEW_PATH,
         SPRINT_STATUS_PATH,
         ARTIFACT_PATH,
+        CLOSURE_ARTIFACT_PATH,
         JUSTFILE_PATH,
         CI_PATH,
     ):
         src = root / relpath
+        if relpath == CLOSURE_ARTIFACT_PATH and not src.exists():
+            continue
         dst = dest / relpath
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)

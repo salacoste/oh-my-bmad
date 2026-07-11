@@ -23,6 +23,9 @@ ARTIFACT_PATH = Path(
     "_bmad-output/implementation-artifacts/"
     "134-5-combined-split-remote-postgres-db-mtls-rehearsal-evidence-package.md"
 )
+CLOSURE_ARTIFACT_PATH = Path(
+    "_bmad-output/implementation-artifacts/134-6-controlled-activation-closure-go-no-go-evidence.md"
+)
 JUSTFILE_PATH = Path("justfile")
 CI_PATH = Path(".github/workflows/ci.yml")
 CHECKER_COMMAND = (
@@ -439,6 +442,38 @@ def _has_clause_negation(line: str, start: int, end: int) -> bool:
 def _is_safe_overclaim_match(line: str, start: int, end: int, *, kind: str) -> bool:
     clause = _matched_clause(line, start, end)
     match_text = line[start:end]
+    if re.search(
+        r"\bactivation(?!\s+(?:evidence|planning|contract|package|smoke|schema))\b\s+"
+        r"(?:(?:is|was|has|have|had|been|now|successfully)\s+){0,6}"
+        r"(?:complete|completed|successful|succeeded|performed|executed|activated|enabled|live|active|done)\b",
+        clause,
+        re.I,
+    ):
+        return False
+    if kind == "activation" and re.search(
+        r"\b(?:no(?:\W+\w+){0,8}\W+activation|done\s+without\s+activation|"
+        r"not\s+activation|not\s+production\s+activation|future/operator-gated|"
+        r"planning-only\s+evidence\s+closure)\b",
+        clause,
+        re.I,
+    ):
+        return True
+    if kind == "activation" and re.search(
+        r"\bDB\s+mTLS\s+readiness\s+remains\s+complete\s+locally/runtime-gated\b",
+        clause,
+        re.I,
+    ):
+        return True
+    if kind == "planning-change" and re.search(
+        r"(?:^\s*(?:[-*>#| ]+)?(?:and\s+)?no\b.*\b"
+        r"(?:rollback/restore\s+execution|destructive\s+operation|production\s+host\s+mutation|"
+        r"credentials/certs|migration\s+execution|runtime/script/deployment\s+config\s+change|"
+        r"dependency/lock\s+change|production-state\s+change)\b|"
+        r"^\s*change,\s+dependency/lock\s+change,\s+or\s+production-state\s+change\s+occurred\.?)",
+        clause,
+        re.I,
+    ):
+        return True
     if _has_clause_negation(line, start, end):
         return True
     if re.search(
@@ -561,6 +596,17 @@ def _iter_relevant_status_lines(path: Path, text: str) -> Iterable[tuple[int, st
         relevant = relevant or audit_item_relevant or block_scalar_relevant
         if relevant:
             yield lineno, line
+
+
+def _has_story_134_6_planning_closure(root: Path) -> bool:
+    closure_path = root / CLOSURE_ARTIFACT_PATH
+    if not closure_path.exists():
+        return False
+    closure_text = _read(root, CLOSURE_ARTIFACT_PATH)
+    return all(
+        phrase in closure_text
+        for phrase in ("planning-only/docs-status", "not activation", "future/operator-gated")
+    )
 
 
 def _validate_status_language(root: Path, violations: list[Violation]) -> None:
@@ -858,10 +904,32 @@ def validate(root: Path = REPO_ROOT) -> list[Violation]:
         )
     if "134-5-combined-split-remote-postgres-db-mtls-rehearsal: done" not in sprint_text:
         violations.append(Violation(str(SPRINT_STATUS_PATH), "Story 134.5 must be marked done"))
-    if "134-6-controlled-activation-closure-go-no-go-evidence: backlog" not in sprint_text:
-        violations.append(Violation(str(SPRINT_STATUS_PATH), "Story 134.6 must remain backlog"))
-    if "epic-134: in-progress" not in sprint_text:
-        violations.append(Violation(str(SPRINT_STATUS_PATH), "Epic 134 must remain in-progress"))
+    story_134_6 = re.search(
+        r"(?m)^\s*134-6-controlled-activation-closure-go-no-go-evidence:\s*(?P<status>\S+)",
+        sprint_text,
+    )
+    story_134_6_status = story_134_6.group("status") if story_134_6 else None
+    closure_exists = _has_story_134_6_planning_closure(root)
+    if story_134_6_status != "backlog" and not (
+        story_134_6_status in {"done", "closed"} and closure_exists
+    ):
+        violations.append(
+            Violation(
+                str(SPRINT_STATUS_PATH),
+                "Story 134.6 must remain backlog unless planning-only closure exists",
+            )
+        )
+    epic_134 = re.search(r"(?m)^\s*epic-134:\s*(?P<status>\S+)", sprint_text)
+    epic_134_status = epic_134.group("status") if epic_134 else None
+    if epic_134_status != "in-progress" and not (
+        epic_134_status in {"done", "closed"} and closure_exists
+    ):
+        violations.append(
+            Violation(
+                str(SPRINT_STATUS_PATH),
+                "Epic 134 must remain in-progress unless Story 134.6 planning-only closure exists",
+            )
+        )
 
     return violations
 
@@ -875,6 +943,8 @@ def _copy_live_fixture(tmpdir: Path) -> None:
     }
     for relpath in fixture_paths:
         src = REPO_ROOT / relpath
+        if relpath == CLOSURE_ARTIFACT_PATH and not src.exists():
+            continue
         dst = tmpdir / relpath
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)

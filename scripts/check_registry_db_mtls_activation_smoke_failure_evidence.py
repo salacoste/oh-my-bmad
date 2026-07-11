@@ -23,6 +23,9 @@ ARTIFACT_PATH = Path(
     "_bmad-output/implementation-artifacts/"
     "134-4-registry-db-mtls-activation-smoke-failure-evidence-package.md"
 )
+CLOSURE_ARTIFACT_PATH = Path(
+    "_bmad-output/implementation-artifacts/134-6-controlled-activation-closure-go-no-go-evidence.md"
+)
 JUSTFILE_PATH = Path("justfile")
 CI_PATH = Path(".github/workflows/ci.yml")
 CHECKER_COMMAND = (
@@ -346,6 +349,17 @@ def _iter_relevant_status_lines(path: Path, text: str) -> Iterable[tuple[int, st
             yield lineno, line
 
 
+def _has_story_134_6_planning_closure(root: Path) -> bool:
+    closure_path = root / CLOSURE_ARTIFACT_PATH
+    if not closure_path.exists():
+        return False
+    closure_text = _read(root, CLOSURE_ARTIFACT_PATH)
+    return all(
+        phrase in closure_text
+        for phrase in ("planning-only/docs-status", "not activation", "future/operator-gated")
+    )
+
+
 def _validate_status_language(root: Path, violations: list[Violation]) -> None:
     for relpath in STATUS_SCAN_PATHS:
         text = _read(root, relpath)
@@ -591,8 +605,17 @@ def validate(root: Path = REPO_ROOT) -> list[Violation]:
         )
     if "134-4-registry-db-mtls-activation-smoke-failure-evidence-package: done" not in sprint_text:
         violations.append(Violation(str(SPRINT_STATUS_PATH), "Story 134.4 must be marked done"))
-    if "epic-134: in-progress" not in sprint_text:
-        violations.append(Violation(str(SPRINT_STATUS_PATH), "Epic 134 must remain in-progress"))
+    epic_134 = re.search(r"(?m)^\s*epic-134:\s*(?P<status>\S+)", sprint_text)
+    epic_134_status = epic_134.group("status") if epic_134 else None
+    if epic_134_status != "in-progress" and not (
+        epic_134_status in {"done", "closed"} and _has_story_134_6_planning_closure(root)
+    ):
+        violations.append(
+            Violation(
+                str(SPRINT_STATUS_PATH),
+                "Epic 134 must remain in-progress unless Story 134.6 planning-only closure exists",
+            )
+        )
     if (
         "story-134-4-registry-db-mtls-activation-smoke-failure-evidence-package-local-finished"
         not in sprint_text
@@ -613,6 +636,8 @@ def _copy_live_fixture(tmpdir: Path) -> None:
     }
     for relpath in fixture_paths:
         src = REPO_ROOT / relpath
+        if relpath == CLOSURE_ARTIFACT_PATH and not src.exists():
+            continue
         dst = tmpdir / relpath
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
