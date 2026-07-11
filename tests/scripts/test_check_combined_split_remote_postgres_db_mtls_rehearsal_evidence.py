@@ -35,12 +35,15 @@ def _copy_live_fixture(tmp_path: Path, mod: object) -> None:
         mod.PROJECT_OVERVIEW_PATH,  # type: ignore[attr-defined]
         mod.SPRINT_STATUS_PATH,  # type: ignore[attr-defined]
         mod.ARTIFACT_PATH,  # type: ignore[attr-defined]
+        mod.CLOSURE_ARTIFACT_PATH,  # type: ignore[attr-defined]
         mod.JUSTFILE_PATH,  # type: ignore[attr-defined]
         mod.CI_PATH,  # type: ignore[attr-defined]
         *(Path(ref) for ref in mod.REQUIRED_READINESS_REFS),  # type: ignore[attr-defined]
     }
     for rel in fixture_paths:
         src = REPO_ROOT / rel
+        if rel == mod.CLOSURE_ARTIFACT_PATH and not src.exists():  # type: ignore[attr-defined]
+            continue
         dst = tmp_path / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
