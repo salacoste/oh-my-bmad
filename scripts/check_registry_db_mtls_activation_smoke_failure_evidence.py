@@ -630,6 +630,7 @@ def validate(root: Path = REPO_ROOT) -> list[Violation]:
 def _copy_live_fixture(tmpdir: Path) -> None:
     fixture_paths = {
         *STATUS_SCAN_PATHS,
+        CLOSURE_ARTIFACT_PATH,
         JUSTFILE_PATH,
         CI_PATH,
         *(Path(ref) for ref in REQUIRED_READINESS_REFS),
