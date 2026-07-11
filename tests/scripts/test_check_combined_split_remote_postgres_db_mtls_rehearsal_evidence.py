@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -543,16 +544,20 @@ def test_status_134_5_not_done_fails(tmp_path: Path) -> None:
     assert any("Story 134.5 must be marked done" in v.message for v in violations)
 
 
-def test_story_134_6_not_backlog_fails(tmp_path: Path) -> None:
+def test_story_134_6_not_backlog_fails_without_closure(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
+    closure_path = tmp_path / mod.CLOSURE_ARTIFACT_PATH  # type: ignore[attr-defined]
+    if closure_path.exists():
+        closure_path.unlink()
     sprint_path = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
-    sprint_path.write_text(
-        sprint_path.read_text(encoding="utf-8").replace(
-            "134-6-controlled-activation-closure-go-no-go-evidence: backlog",
-            "134-6-controlled-activation-closure-go-no-go-evidence: done",
-        ),
-        encoding="utf-8",
+    text = sprint_path.read_text(encoding="utf-8")
+    text = re.sub(r"(?m)^(\s*epic-134:\s*)\S+.*$", r"\1in-progress", text)
+    text = re.sub(
+        r"(?m)^(\s*134-6-controlled-activation-closure-go-no-go-evidence:\s*)\S+.*$",
+        r"\1done",
+        text,
     )
+    sprint_path.write_text(text, encoding="utf-8")
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("Story 134.6 must remain backlog" in v.message for v in violations)
