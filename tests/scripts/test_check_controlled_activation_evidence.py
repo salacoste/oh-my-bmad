@@ -537,7 +537,7 @@ def test_sprint_status_current_phase_overclaim_fails(tmp_path: Path) -> None:
     _copy_live_fixture(tmp_path, mod)
     target = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
     text = target.read_text(encoding="utf-8").replace(
-        "Production activation, Postgres provisioning, production host mutation, real certificate material, and plaintext fallback remain fail-closed/deferred.",
+        "production activation, live rehearsal, Postgres provisioning, production host mutation, credentials/certs, migration execution, operator/deployment/rollback/restore/migration/activation/production script change, production-state change, real certificate material, and plaintext fallback remain fail-closed/deferred.",
         "Production activation completed successfully.",
     )
     target.write_text(text, encoding="utf-8")

@@ -1,0 +1,235 @@
+{
+  "schema_version": "story-134.5/v1",
+  "phase": "51",
+  "epic": "134",
+  "story": "134.5",
+  "title": "Combined split deployment, remote Postgres, and DB mTLS rehearsal evidence package contract",
+  "mode": "static_combined_split_remote_postgres_db_mtls_rehearsal_evidence_contract_not_activation",
+  "activation_boundary": {
+    "activation_performed": false,
+    "rehearsal_performed": false,
+    "summary": "This is future/operator-gated combined rehearsal evidence planning only. It is not proof activation occurred and performs no live rehearsal, no split deployment activation, no remote Postgres activation, no DB mTLS production activation, no migration execution, no live database cutover, no real certificate material handling, no private key handling, no provisioning, no production host mutation, no compose/profile activation, no operator/deployment/rollback/restore/migration/activation/production script change, and no plaintext fallback. Static checker/test/CI gate wiring is local validation only and does not execute activation or rehearsal scripts.",
+    "no_live_rehearsal": true,
+    "no_split_deployment_activation": true,
+    "no_remote_postgres_activation": true,
+    "no_db_mtls_activation": true,
+    "no_migration_execution": true,
+    "no_live_database_cutover": true,
+    "no_real_certificate_material": true,
+    "no_private_key_material": true,
+    "no_plaintext_fallback": true,
+    "operator_gated": true,
+    "future_evidence_only": true,
+    "readiness_prerequisites_are_not_activation_proof": true,
+    "no_production_script_change": true,
+    "allowed_local_validation_wiring_only": true
+  },
+  "operator_gate": {
+    "required": true,
+    "fields": [
+      "operator_approval_ref",
+      "security_approval_ref",
+      "change_window_utc",
+      "target_environment",
+      "target_version",
+      "generated_at_utc",
+      "expires_at_utc",
+      "split_deployment_profile_ref",
+      "remote_postgres_profile_ref",
+      "db_mtls_profile_ref",
+      "combined_rehearsal_trace_ref",
+      "backup_checkpoint_ref",
+      "failure_injection_report_ref",
+      "rollback_owner",
+      "rollback_plan_ref",
+      "emergency_disable_owner",
+      "emergency_disable_plan_ref",
+      "redaction_report_ref",
+      "independent_reviewer_ref",
+      "go_no_go_signoff_ref"
+    ],
+    "required_statement": "Future combined split deployment, remote Postgres, and DB mTLS rehearsal evidence must be operator-gated, timestamped, redacted, reviewer-backed, tied to an explicit change window, and bound to split-service placement, remote Postgres endpoint/migration preconditions, DB mTLS server and client-certificate enforcement, combined smoke traces, backup/restore checkpoint references, sanitized failure-injection diagnostics, rollback or fail-closed criteria, emergency-disable ownership, and explicit go/no-go signoff before any activation or rehearsal claim can be considered."
+  },
+  "readiness_prerequisites": {
+    "semantics": "prerequisites_only_not_activation_or_rehearsal_proof",
+    "minimum_refs": [
+      "docs/split-deployment-remote-postgres-closure-readiness.json",
+      "docs/db-mtls-readiness.json",
+      "docs/controlled-activation-evidence.json",
+      "docs/split-deployment-activation-smoke-evidence.json",
+      "docs/remote-postgres-activation-smoke-migration-evidence.json",
+      "docs/registry-db-mtls-activation-smoke-failure-evidence.json",
+      "_bmad-output/implementation-artifacts/132-8-closure-evidence.md",
+      "_bmad-output/implementation-artifacts/133-5-db-mtls-closure-evidence.md",
+      "_bmad-output/implementation-artifacts/134-1-activation-evidence-schema-preflight-gate.md",
+      "_bmad-output/implementation-artifacts/134-2-split-deployment-activation-smoke-evidence-package.md",
+      "_bmad-output/implementation-artifacts/134-3-remote-postgres-activation-smoke-migration-evidence-package.md",
+      "_bmad-output/implementation-artifacts/134-4-registry-db-mtls-activation-smoke-failure-evidence-package.md"
+    ],
+    "required_statement": "Epic 132 split deployment/remote Postgres closure readiness, Epic 133 DB mTLS readiness, and Stories 134.1-134.4 evidence contracts are prerequisites only and are not proof activation or a combined rehearsal occurred."
+  },
+  "future_rehearsal_evidence_contract": {
+    "package_kind": "future_combined_split_remote_postgres_db_mtls_rehearsal_evidence",
+    "required_domains": {
+      "explicit_operator_gate_enablement": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "operator approval and change-window references",
+          "target environment and version references",
+          "evidence expiry timestamp and independent reviewer reference"
+        ]
+      },
+      "split_deployment_service_placement": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "registry-state, registry-api, worker, MCP, event-bus, and dashboard placement references",
+          "single-writer and network-boundary evidence by reference only",
+          "health/readiness evidence for split services without production host disclosure"
+        ]
+      },
+      "remote_postgres_endpoint_and_migration_preconditions": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "redacted remote Postgres endpoint identity reference without DSN values",
+          "single migration runner and migration precondition references",
+          "read-side compatibility and writer-authority evidence by reference only"
+        ]
+      },
+      "db_mtls_server_and_client_certificate_enforcement": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "server-side TLS enforcement reference",
+          "client certificate enforcement reference",
+          "certificate expiry, revocation, and hostname verification metadata by redacted reference"
+        ]
+      },
+      "combined_rehearsal_smoke_trace": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "end-to-end smoke trace linking split services to remote Postgres over DB mTLS",
+          "operator/dashboard ingress and MCP boundary smoke references",
+          "append-only event log and registry projection consistency references"
+        ]
+      },
+      "backup_restore_checkpoint": {
+        "required": true,
+        "value_kind": "redacted_identifier_only",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "backup checkpoint reference before any future rehearsal attempt",
+          "restore validation reference by identifier only",
+          "fix-forward and rollback checkpoint references tied to the change window"
+        ]
+      },
+      "no_plaintext_fallback_behavior": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "plaintext database connection attempt rejection evidence",
+          "no fallback to non-mTLS remote Postgres when DB mTLS evidence is required",
+          "fail-closed status if plaintext fallback evidence is requested or observed"
+        ]
+      },
+      "bounded_sanitized_failure_injection": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "bounded failure classes for split service isolation, remote Postgres rejection, missing certificate, invalid certificate, hostname mismatch, migration precondition failure, and backup checkpoint failure",
+          "sanitized diagnostics without DSNs, tokens, private keys, certificate bodies, production hostnames, certificate subjects, or full secret paths",
+          "traceable failure metadata tied to rollback, emergency-disable, and fail-closed criteria"
+        ]
+      },
+      "rollback_emergency_disable_fail_closed_signoff": {
+        "required": true,
+        "value_kind": "redacted_timestamped_future_proof",
+        "not_activation_proof_by_itself": true,
+        "minimum_evidence": [
+          "rollback owner and rollback plan reference",
+          "emergency-disable owner and plan reference",
+          "fail-closed status if smoke, backup checkpoint, failure diagnostics, redaction, reviewer, or go/no-go evidence is missing"
+        ]
+      }
+    }
+  },
+  "fail_closed_checks": [
+    "missing_evidence_fails_closed",
+    "malformed_evidence_fails_closed",
+    "stale_evidence_fails_closed",
+    "self_attestation_rejected",
+    "secret_like_material_rejected",
+    "private_key_material_rejected",
+    "certificate_material_rejected",
+    "credential_value_rejected",
+    "dsn_value_rejected",
+    "activation_overclaim_rejected",
+    "rehearsal_overclaim_rejected",
+    "plaintext_fallback_overclaim_rejected",
+    "readiness_as_proof_rejected",
+    "combined_rehearsal_domain_coverage_required",
+    "operator_gate_required",
+    "split_deployment_placement_required",
+    "remote_postgres_preconditions_required",
+    "db_mtls_enforcement_required",
+    "backup_checkpoint_required",
+    "bounded_failure_injection_required",
+    "rollback_emergency_disable_fail_closed_signoff_required",
+    "planning_story_forbidden_change_overclaim_rejected",
+    "justfile_and_ci_wiring_required",
+    "status_docs_story_134_5_done_required",
+    "story_134_6_backlog_required",
+    "epic_134_in_progress_required",
+    "production_script_change_rejected",
+    "local_static_checker_test_ci_wiring_only"
+  ],
+  "redaction_and_secret_hygiene": {
+    "policy": "Evidence packages, docs, status, checker output, and artifacts must contain no plaintext secrets, credential values, token values, private key material, certificate bodies, unredacted connection strings, production host secrets, production hostnames, certificate subjects, full secret paths, or plaintext fallback evidence.",
+    "required_report": "redaction_report_ref",
+    "allowed_examples": [
+      "ticket references",
+      "approved inventory identifiers",
+      "redacted endpoint identity references",
+      "redacted certificate metadata references",
+      "hashes or immutable image digests without secret material"
+    ],
+    "forbidden_material": [
+      "credential values",
+      "DSN values",
+      "private key material",
+      "certificate bodies",
+      "plaintext secrets",
+      "token values",
+      "unredacted connection strings",
+      "production hostnames",
+      "certificate subjects",
+      "full secret paths",
+      "plaintext fallback evidence"
+    ]
+  },
+  "non_goals": [
+    "No live combined rehearsal, no split deployment activation, no remote Postgres activation, no DB mTLS production activation, and no production activation proof.",
+    "No migration execution, live database cutover, real certificate material, private key material, credential values, provisioning, production host mutation, compose/profile activation, plaintext fallback, runtime behavior change, deployment config change, operator/deployment/rollback/restore/migration/activation/production script change, dependency change, lockfile change, or production-state change.",
+    "Static checker/test/CI gate wiring is local validation only; no operator/deployment/rollback/restore/migration/activation/production script change occurs in this planning story.",
+    "No acceptance of readiness prerequisites as proof activation or a combined rehearsal occurred."
+  ],
+  "docs_refs": [
+    "docs/feature-status.md#current-bmad-status",
+    "docs/project-overview.md#status",
+    "_bmad-output/implementation-artifacts/134-5-combined-split-remote-postgres-db-mtls-rehearsal-evidence-package.md#summary"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

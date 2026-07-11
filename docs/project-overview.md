@@ -4,7 +4,7 @@
 
 **oh-my-bmad** is a self-hosted personal autonomous-development platform. Telegram and a local console drive supervised CLI workers through a typed event spine, backed by an append-only JSONL event log and a single-writer materialized state store. The platform is designed so runtimes, MCP tools, browser automation, transports, and deployment hardening can evolve without breaking the spine.
 
-The current repository state is **Phase 50 complete / Phase 51 in progress** as of 2026-07-11: Phase 50 / Epic 133 DB mTLS readiness is complete locally, Story 134.1 is complete locally and merged via PR #124, Story 134.2 is complete locally and merged via PR #125, Story 134.3 is complete locally and merged via PR #126, and Story 134.4 is complete locally inside Phase 51 / Epic 134 controlled production activation evidence planning. The latest tagged release remains `v1.3.0`; this checkout contains later BMad work through Phase 51 planning. No live activation is performed or claimed by Stories 134.1-134.4; no live database cutover, remote Postgres activation, registry DB mTLS production activation, migration execution, provisioning, production host mutation, real certificate material, private key material, or plaintext fallback is performed.
+The current repository state is **Phase 50 complete / Phase 51 in progress** as of 2026-07-11: Phase 50 / Epic 133 DB mTLS readiness is complete locally, Story 134.1 is complete locally and merged via PR #124, Story 134.2 is complete locally and merged via PR #125, Story 134.3 is complete locally and merged via PR #126, Story 134.4 is complete locally and merged via PR #127, and Story 134.5 is complete locally inside Phase 51 / Epic 134 controlled production activation evidence planning. The latest tagged release remains `v1.3.0`; this checkout contains later BMad work through Phase 51 planning. No live activation is performed or claimed by Stories 134.1-134.5; no live rehearsal, live database cutover, remote Postgres activation, registry DB mTLS production activation, rollback/restore execution, destructive operation, migration execution, provisioning, production host mutation, credentials/certs, real certificate material, private key material, plaintext fallback, operator/deployment/rollback/restore/migration/activation/production script change, or production-state change is performed.
 
 ## Status
 
@@ -12,9 +12,11 @@ The current repository state is **Phase 50 complete / Phase 51 in progress** as 
   Story 134.1 is complete locally and merged via PR #124 for controlled production activation evidence schema/preflight validation.
   Story 134.2 is complete locally and merged via PR #125 as future/operator-gated split-deployment activation smoke evidence planning.
   Story 134.3 is complete locally and merged via PR #126 as future/operator-gated remote Postgres activation smoke and migration evidence planning.
-  Story 134.4 is complete locally as future/operator-gated registry DB mTLS activation smoke/failure evidence planning.
-  Remaining combined rehearsal and go/no-go closure evidence stays future/operator-gated with no live activation and no live database cutover.
-- **Recently complete:** Story 134.4 is complete locally as static docs/status/checker work for registry DB mTLS smoke/failure evidence; production activation, DB mTLS production use, real certificate material, private key material, plaintext fallback, migration execution, and live database cutover remain operator-gated/deferred.
+  Story 134.4 is complete locally and merged via PR #127 as future/operator-gated registry DB mTLS activation smoke/failure evidence planning.
+  Story 134.5 is complete locally as future/operator-gated combined split deployment, remote Postgres, and DB mTLS rehearsal evidence planning.
+  Story 134.6 go/no-go closure evidence stays backlog/future-operator-gated with no live activation and no live database cutover.
+  These local packages are not proof activation occurred.
+- **Recently complete:** Story 134.5 is complete locally as static docs/status/checker work for combined rehearsal evidence planning; no live activation, live rehearsal, rollback/restore execution, destructive operation, production host mutation, credentials/certs, migration execution, operator/deployment/rollback/restore/migration/activation/production script change, or production-state change is performed.
 - **Repository type:** monorepo (`uv` workspace, 24 Python members).
 - **Language:** Python 3.12 (locked).
 - **Deployment:** Docker Compose v2 with named volume (`oh-my-bmad-data`); optional profiles remain operator-gated and inactive until future approved activation evidence exists.
@@ -74,7 +76,7 @@ The current repository state is **Phase 50 complete / Phase 51 in progress** as 
 | 48 | Production-readiness portfolio: search/discovery, dashboard cleanup, lifecycle mutation, retention, production ops, split deployment, DB mTLS |
 | 49 | Production-readiness execution/reconciliation toward split deployment and remote Postgres readiness |
 | 50 | DB connection mTLS readiness local closure; production activation remains deferred/operator-gated |
-| 51 | Controlled production activation evidence planning; Stories 134.1-134.4 static evidence contracts complete locally, later combined rehearsal and closure evidence remains future/operator-gated |
+| 51 | Controlled production activation evidence planning; Stories 134.1-134.5 static evidence contracts complete locally, Story 134.6 go/no-go closure evidence remains future/operator-gated/backlog |
 
 ## Tech stack summary
 
@@ -116,7 +118,7 @@ The current member catalog is in [component-inventory.md](./component-inventory.
 
 ## Architecture in one paragraph
 
-A typed event spine connects operator surfaces to runtime workers and MCP tools. All durable task/session state derives from append-only event records. `registry-state` owns the materialized database projection and single-writer rules; `registry-api` exposes versioned HTTP read/write surfaces; MCP servers expose bounded tool/resource contracts to workers under capability tiers and approval gates. Replay packages reconstruct historical state from hot logs and validated archived segments referenced by `lifecycle-manifest.json`. Recent production-readiness work added bounded lifecycle mutation controls, object-storage retention readiness, production operations readiness, split-deployment/remote Postgres readiness, and Phase 50 DB mTLS readiness. Phase 51 is only controlled activation evidence planning: Story 134.1 supplies the local static schema/preflight gate, Story 134.2 supplies the local split-deployment activation smoke evidence package contract, Story 134.3 supplies the local remote Postgres activation smoke and migration evidence package contract, and Story 134.4 supplies the local registry DB mTLS activation smoke/failure evidence package contract, while combined rehearsal and go/no-go evidence remain future/operator-gated and are not proof activation occurred.
+A typed event spine connects operator surfaces to runtime workers and MCP tools. All durable task/session state derives from append-only event records. `registry-state` owns the materialized database projection and single-writer rules; `registry-api` exposes versioned HTTP read/write surfaces; MCP servers expose bounded tool/resource contracts to workers under capability tiers and approval gates. Replay packages reconstruct historical state from hot logs and validated archived segments referenced by `lifecycle-manifest.json`. Recent production-readiness work added bounded lifecycle mutation controls, object-storage retention readiness, production operations readiness, split-deployment/remote Postgres readiness, and Phase 50 DB mTLS readiness. Phase 51 is only controlled activation evidence planning: Story 134.1 supplies the local static schema/preflight gate, Story 134.2 supplies the local split-deployment activation smoke evidence package contract, Story 134.3 supplies future/operator-gated evidence planning only for remote Postgres smoke/migration, Story 134.4 supplies future/operator-gated evidence planning only for registry DB mTLS smoke/failure diagnostics, and Story 134.5 supplies future/operator-gated evidence planning only for combined split deployment, remote Postgres, and DB mTLS rehearsal; Story 134.6 go/no-go evidence remains backlog; no live activation, no live database cutover, and these packages remain planning-only evidence.
 
 ## Where to start
 
@@ -124,7 +126,7 @@ A typed event spine connects operator surfaces to runtime workers and MCP tools.
 - **Developing on it?** → `_bmad-output/project-context.md`, [development-guide.md](./development-guide.md), and [testing-guide.md](./testing-guide.md).
 - **Understanding decisions?** → [adr/](./adr/), [architecture.md](./architecture.md), and `_bmad-output/planning-artifacts/`.
 - **Working on replay/lifecycle?** → [data-models.md](./data-models.md) §“Historical replay and event-log lifecycle” plus ADR-0025.
-- **Working on controlled activation planning?** → `_bmad-output/planning-artifacts/phase-51-prd-amendment.md`, `_bmad-output/planning-artifacts/phase-51-architecture-amendment.md`, `_bmad-output/planning-artifacts/phase-51-controlled-activation-epics.md`, Story 134.1 `docs/controlled-activation-evidence.json`, Story 134.2 `docs/split-deployment-activation-smoke-evidence.json`, Story 134.3 `docs/remote-postgres-activation-smoke-migration-evidence.json`, and Story 134.4 `docs/registry-db-mtls-activation-smoke-failure-evidence.json`.
+- **Working on controlled activation planning?** → `_bmad-output/planning-artifacts/phase-51-prd-amendment.md`, `_bmad-output/planning-artifacts/phase-51-architecture-amendment.md`, `_bmad-output/planning-artifacts/phase-51-controlled-activation-epics.md`, Story 134.1 `docs/controlled-activation-evidence.json`, Story 134.2 `docs/split-deployment-activation-smoke-evidence.json`, Story 134.3 `docs/remote-postgres-activation-smoke-migration-evidence.json`, Story 134.4 `docs/registry-db-mtls-activation-smoke-failure-evidence.json`, and Story 134.5 `docs/combined-split-remote-postgres-db-mtls-rehearsal-evidence.json`.
 
 ## License
 
