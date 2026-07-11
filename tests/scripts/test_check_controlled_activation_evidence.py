@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import sys
 from datetime import UTC, datetime, timedelta
@@ -273,13 +274,14 @@ def test_story_134_6_done_without_closure_artifact_fails(tmp_path: Path) -> None
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
     sprint = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
-    sprint.write_text(
-        sprint.read_text(encoding="utf-8").replace(
-            "epic-134: in-progress",
-            "epic-134: done",
-        ),
-        encoding="utf-8",
+    text = sprint.read_text(encoding="utf-8")
+    text = re.sub(r"(?m)^(\s*epic-134:\s*)\S+.*$", r"\1done", text)
+    text = re.sub(
+        r"(?m)^(\s*134-6-controlled-activation-closure-go-no-go-evidence:\s*)\S+.*$",
+        r"\1backlog",
+        text,
     )
+    sprint.write_text(text, encoding="utf-8")
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("Story 134.6 planning-only closure evidence exists" in v.message for v in violations)
 
@@ -311,14 +313,16 @@ def test_story_134_6_status_line_suffix_overclaim_still_fails(tmp_path: Path, su
     _copy_live_fixture(tmp_path, mod)
     _write_story_134_6_closure_fixture(tmp_path, mod)
     sprint = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
-    sprint.write_text(
-        sprint.read_text(encoding="utf-8").replace(
-            "134-6-controlled-activation-closure-go-no-go-evidence: backlog",
-            "134-6-controlled-activation-closure-go-no-go-evidence: done  # "
-            f"Story 134.6 docs/status-only closure, not activation{suffix}",
+    text = sprint.read_text(encoding="utf-8")
+    updated = re.sub(
+        r"(?m)^(\s*134-6-controlled-activation-closure-go-no-go-evidence:\s*)\S+.*$",
+        lambda match: (
+            f"{match.group(1)}done  # Story 134.6 docs/status-only closure, not activation{suffix}"
         ),
-        encoding="utf-8",
+        text,
     )
+    assert updated != text
+    sprint.write_text(updated, encoding="utf-8")
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("activation overclaim" in v.message for v in violations)
 
@@ -373,13 +377,14 @@ def test_story_134_6_done_requires_story_status_done_when_artifact_exists(
     _copy_live_fixture(tmp_path, mod)
     _write_story_134_6_closure_fixture(tmp_path, mod)
     sprint = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
-    sprint.write_text(
-        sprint.read_text(encoding="utf-8").replace(
-            "epic-134: in-progress",
-            "epic-134: done",
-        ),
-        encoding="utf-8",
+    text = sprint.read_text(encoding="utf-8")
+    text = re.sub(r"(?m)^(\s*epic-134:\s*)\S+.*$", r"\1done", text)
+    text = re.sub(
+        r"(?m)^(\s*134-6-controlled-activation-closure-go-no-go-evidence:\s*)\S+.*$",
+        r"\1backlog",
+        text,
     )
+    sprint.write_text(text, encoding="utf-8")
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("Story 134.6 closure status must be done/closed" in v.message for v in violations)
 
@@ -750,11 +755,14 @@ def test_sprint_status_current_phase_overclaim_fails(tmp_path: Path) -> None:
     mod = _load_module()
     _copy_live_fixture(tmp_path, mod)
     target = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
-    text = target.read_text(encoding="utf-8").replace(
-        "production activation, live rehearsal, Postgres provisioning, production host mutation, credentials/certs, migration execution, operator/deployment/rollback/restore/migration/activation/production script change, production-state change, real certificate material, and plaintext fallback remain fail-closed/deferred.",
-        "Production activation completed successfully.",
+    text = target.read_text(encoding="utf-8")
+    updated = re.sub(
+        r"(?m)^current_phase:.*$",
+        "current_phase: 51  # Production activation completed successfully.",
+        text,
     )
-    target.write_text(text, encoding="utf-8")
+    assert updated != text
+    target.write_text(updated, encoding="utf-8")
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("activation overclaim" in v.message for v in violations)
 
