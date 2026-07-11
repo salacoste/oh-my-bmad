@@ -23,6 +23,9 @@ SPRINT_STATUS_PATH = Path("_bmad-output/implementation-artifacts/sprint-status.y
 ARTIFACT_PATH = Path(
     "_bmad-output/implementation-artifacts/134-1-activation-evidence-schema-preflight-gate.md"
 )
+CLOSURE_ARTIFACT_PATH = Path(
+    "_bmad-output/implementation-artifacts/134-6-controlled-activation-closure-go-no-go-evidence.md"
+)
 JUSTFILE_PATH = Path("justfile")
 CI_PATH = Path(".github/workflows/ci.yml")
 CHECKER_COMMAND = "uv run python scripts/check_controlled_activation_evidence.py"
@@ -97,7 +100,13 @@ REQUIRED_DOC_REFS = frozenset(
 REQUIRED_STATUS_REFS = frozenset(
     {f"{SPRINT_STATUS_PATH}#development_status", f"{FEATURE_STATUS_PATH}#current-bmad-status"}
 )
-STATUS_SCAN_PATHS = (FEATURE_STATUS_PATH, PROJECT_OVERVIEW_PATH, SPRINT_STATUS_PATH, ARTIFACT_PATH)
+STATUS_SCAN_PATHS = (
+    FEATURE_STATUS_PATH,
+    PROJECT_OVERVIEW_PATH,
+    SPRINT_STATUS_PATH,
+    ARTIFACT_PATH,
+    CLOSURE_ARTIFACT_PATH,
+)
 SECRET_SCAN_PATHS = (CONTRACT_PATH, *STATUS_SCAN_PATHS)
 POSTGRES_URL_PATTERN = re.compile(r"""(?i)\bpostgres(?:ql)?(?:\+[-A-Za-z0-9_]+)?://[^\s'\"<>]+""")
 SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -538,8 +547,12 @@ def _scoped_status_lines(relpath: Path, text: str) -> list[tuple[int, str]]:
 SAFE_CONTEXT_PATTERNS = {
     "activation overclaim": (
         re.compile(r"\bnot\s+(?:proof\s+)?activation\s+(?:occurred|proof)\b", re.I),
+        re.compile(r"\bdone\s+without\s+activation\b", re.I),
+        re.compile(r"\bnot\s+production\s+activation\b", re.I),
+        re.compile(r"\bneither\s+is\s+proof\s+activation\s+occurred\b", re.I),
         re.compile(r"\bnot\s+activation\b", re.I),
         re.compile(r"\bno\s+live\s+activation\b", re.I),
+        re.compile(r"\bactivation\b.*\boperator[- ]gated\s*/\s*not\s+performed\b", re.I),
         re.compile(
             r"\bactivation\s+remains\s+(?:operator[- ]gated|deferred|future|fail[- ]closed)\b", re.I
         ),
@@ -575,6 +588,27 @@ SAFE_CONTEXT_PATTERNS = {
         ),
         re.compile(
             r"\bStory 134\.3\b.*\bcomplete locally\b.*\bremote Postgres smoke/migration evidence package\b",
+            re.I,
+        ),
+        re.compile(
+            r"\b(?:controlled\s+production\s+)?activation\s+evidence\s+planning\s+is\s+"
+            r"(?:closed|done)\s+as\s+planning[-/ ]only(?:/docs-status)?",
+            re.I,
+        ),
+        re.compile(
+            r"\bStory 134\.6\b.*\bdocs/status[- ]only\b.*\bclosure\b",
+            re.I,
+        ),
+        re.compile(
+            r"\bstory-134-6-controlled-activation-closure-go-no-go-evidence-done\b",
+            re.I,
+        ),
+        re.compile(
+            r"\bno\s+remote\s+Postgres\s+activation\b",
+            re.I,
+        ),
+        re.compile(
+            r"\bno\s+DB\s+mTLS\s+production\s+activation\b",
             re.I,
         ),
         re.compile(
@@ -673,6 +707,20 @@ SAFE_CONTEXT_PATTERNS = {
 
 MIXED_ACTIVATION_OVERCLAIM_PATTERNS = (
     re.compile(
+        r"\bno\s+remote\s+Postgres\s+activation\b.{0,120}"
+        r"\b(?:remote\s+Postgres\s+)?activation(?![-_/])(?!\s+evidence)\b\s+"
+        r"(?:(?:is|was|has|have|had|been|now|successfully)\s+){0,6}"
+        r"(?:complete|completed|successful|succeeded|performed|executed|activated|enabled|shipped|live|active|done)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\bno\s+DB\s+mTLS\s+production\s+activation\b.{0,120}"
+        r"\b(?:(?:DB\s+mTLS\s+)?production\s+)?activation(?![-_/])(?!\s+evidence)\b\s+"
+        r"(?:(?:is|was|has|have|had|been|now|successfully)\s+){0,6}"
+        r"(?:complete|completed|successful|succeeded|performed|executed|activated|enabled|shipped|live|active|done)\b",
+        re.I,
+    ),
+    re.compile(
         r"\b(?:no\s+live\s+activation|does\s+not\s+perform\s+live\s+activation|"
         r"without\s+performing\s+live\s+activation)\b.{0,160}"
         r"\bactivation(?!\s+evidence)\b(?:\W+\w+){0,4}\W+"
@@ -714,14 +762,23 @@ def _contains_mixed_activation_overclaim(line: str) -> bool:
         match = pattern.search(line)
         if not match:
             continue
-        if idx in (0, 1) and re.search(
-            r"\bactivation(?!\s+(?:evidence|proof|stories?|schema|planning|smoke))\b\s+"
+        if idx in (0, 1):
+            return True
+        if idx in (2, 3) and re.search(
+            r"\bactivation(?![-_/])(?!\s+(?:evidence|proof|stories?|schema|planning|smoke))\b\s+"
             r"(?:(?:is\s+)?(?:live|active)|complete|completed|successful|succeeded|occurred|performed|executed|done)\b",
             line,
             re.I,
         ):
+            if _is_safe_forbidden_context("activation overclaim", line, match) and not re.search(
+                r"\bactivation\s+"
+                r"(?:complete|completed|successful|succeeded|performed|executed|activated|enabled|shipped|live|active|done)\b",
+                match.group(0),
+                re.I,
+            ):
+                continue
             return True
-        if idx in (2, 3):
+        if idx in (4, 5):
             return True
         if not _is_safe_forbidden_context("activation overclaim", line, match):
             return True
@@ -746,6 +803,32 @@ def _is_safe_forbidden_context(kind: str, line: str, match: re.Match[str]) -> bo
     clause = _clause_for_match(line, match)
     if kind == "activation overclaim":
         matched_text = match.group(0)
+        if re.search(r"\bdone\s+without\s+activation\b", matched_text, re.I):
+            return True
+        if re.search(
+            r"\bdoes\s+not\s+mean\b.*\b(?:controlled\s+)?production\s+activation\s+is\s+done\b",
+            clause,
+            re.I,
+        ):
+            return True
+        if re.search(
+            r"\bNo\b.*\b(?:split\s+deployment\s+activation|remote\s+Postgres\s+activation|registry\s+DB\s+mTLS\s+production\s+activation|live\s+activation)\s+occurred\b",
+            clause,
+            re.I,
+        ):
+            return True
+        if re.search(
+            r"\bcomplete\s+locally/runtime-gated,\s+not\s+production\s+activation\b",
+            matched_text,
+            re.I,
+        ):
+            return True
+        if re.search(
+            r"\bno\s+live\s+activation\s+(?:is\s+)?(?:performed|claimed)\b",
+            clause,
+            re.I,
+        ):
+            return True
         if re.search(
             r"\b(?:production\s+activation(?!\s+evidence)|(?:controlled\s+)?production\s+cutover|cutover|go[- ]live)\b"
             r".{0,120}\b"
@@ -754,7 +837,9 @@ def _is_safe_forbidden_context(kind: str, line: str, match: re.Match[str]) -> bo
             re.I,
         ):
             return False
-        if not re.search(r"\b(?:complete|done)\s+locally\b", matched_text, re.I) and re.search(
+        if not re.search(
+            r"\b(?:complete|done)\s+locally(?:/runtime-gated)?\b", matched_text, re.I
+        ) and re.search(
             r"\b(?:complete|completed|successful|succeeded|occurred|performed|executed|activated|enabled|shipped|done)\b"
             r".{0,120}\b(?:production\s+activation(?!\s+evidence)|(?:controlled\s+)?production\s+cutover|cutover|go[- ]live)\b",
             matched_text,
@@ -773,6 +858,21 @@ def _is_safe_forbidden_context(kind: str, line: str, match: re.Match[str]) -> bo
             re.I,
         ):
             return False
+        if re.search(
+            r"\bactivation(?!\s+(?:evidence|proof|stories?|schema|planning|smoke))\b\s+"
+            r"(?:(?:is|was|has|have|had|been|now|successfully)\s+){0,6}"
+            r"(?:complete|completed|successful|succeeded|performed|executed|activated|enabled|shipped|live|active|done)\b",
+            clause,
+            re.I,
+        ):
+            return False
+        if re.search(
+            r"^\s*134-6-controlled-activation-closure-go-no-go-evidence:\s*"
+            r"(?:done|closed)\b.*\bStory 134\.6\s+docs/status[- ]only\s+closure,\s+not\s+activation\b",
+            line,
+            re.I,
+        ):
+            return True
         if re.search(
             r"\bremote\s+postgres\s+activation(?!\s+smoke)\b"
             r"\s+(?:(?:is|was|has|have|had|been|now|successfully)\s+){0,6}"
@@ -1003,6 +1103,19 @@ def _validate_wiring(root: Path) -> list[Violation]:
     return violations
 
 
+def _has_story_134_6_planning_closure(root: Path) -> bool:
+    closure_path = root / CLOSURE_ARTIFACT_PATH
+    if not closure_path.exists():
+        return False
+    closure = closure_path.read_text(encoding="utf-8")
+    required_phrases = (
+        "planning-only/docs-status",
+        "not activation",
+        "future/operator-gated",
+    )
+    return all(phrase in closure for phrase in required_phrases)
+
+
 def _validate_status(root: Path) -> list[Violation]:
     violations: list[Violation] = []
     sprint = _read(root, SPRINT_STATUS_PATH)
@@ -1017,10 +1130,35 @@ def _validate_status(root: Path) -> list[Violation]:
                 "Story 134.1 activation evidence schema/preflight gate must be done/closed",
             )
         )
+    story_134_6_closed = _has_story_134_6_planning_closure(root)
+    story_134_6_match = re.search(
+        r"(?m)^\s*134-6-controlled-activation-closure-go-no-go-evidence:\s*(?P<status>\S+)",
+        sprint,
+    )
+    story_134_6_status = story_134_6_match.group("status") if story_134_6_match else ""
     epic_match = re.search(r"(?m)^\s*epic-134:\s*(?P<status>\S+)", sprint)
-    if not epic_match or epic_match.group("status") != "in-progress":
+    epic_status = epic_match.group("status") if epic_match else ""
+    if story_134_6_closed:
+        if epic_status in {"done", "closed"} and story_134_6_status not in {"done", "closed"}:
+            violations.append(
+                Violation(
+                    str(SPRINT_STATUS_PATH),
+                    "Story 134.6 closure status must be done/closed when Epic 134 is done/closed",
+                )
+            )
+        if epic_status not in {"in-progress", "done", "closed"}:
+            violations.append(
+                Violation(
+                    str(SPRINT_STATUS_PATH),
+                    "Epic 134 closure status must remain in-progress/done/closed for planning-only evidence",
+                )
+            )
+    elif epic_status != "in-progress":
         violations.append(
-            Violation(str(SPRINT_STATUS_PATH), "Epic 134 must be in-progress after Story 134.1")
+            Violation(
+                str(SPRINT_STATUS_PATH),
+                "Epic 134 must be in-progress after Story 134.1 unless Story 134.6 planning-only closure evidence exists",
+            )
         )
 
     feature = _read(root, FEATURE_STATUS_PATH)
@@ -1030,9 +1168,19 @@ def _validate_status(root: Path) -> list[Violation]:
                 str(FEATURE_STATUS_PATH), "feature status must mark Story 134.1 complete locally"
             )
         )
-    if "Epic 134" not in feature or "in progress" not in feature:
+    feature_marks_in_progress = "Epic 134" in feature and "in progress" in feature
+    feature_marks_closure = (
+        "Epic 134" in feature
+        and "Story 134.6" in feature
+        and "planning-only/docs-status" in feature
+        and "not activation" in feature
+    )
+    if not feature_marks_in_progress and not (story_134_6_closed and feature_marks_closure):
         violations.append(
-            Violation(str(FEATURE_STATUS_PATH), "feature status must mark Epic 134 in progress")
+            Violation(
+                str(FEATURE_STATUS_PATH),
+                "feature status must mark Epic 134 in progress or Story 134.6 planning-only closure",
+            )
         )
     for required in (
         "future/operator-gated",
@@ -1612,6 +1760,8 @@ def validate(root: Path = REPO_ROOT) -> list[Violation]:
             Violation(str(CONTRACT_PATH), "structured JSON secret-like value is not allowed")
         )
     for relpath in SECRET_SCAN_PATHS:
+        if relpath == CLOSURE_ARTIFACT_PATH and not (root / relpath).exists():
+            continue
         try:
             violations.extend(_scan_text_for_forbidden(relpath, _read(root, relpath)))
         except OSError as exc:
@@ -1628,10 +1778,13 @@ def _copy_fixture(root: Path, dest: Path) -> None:
         PROJECT_OVERVIEW_PATH,
         SPRINT_STATUS_PATH,
         ARTIFACT_PATH,
+        CLOSURE_ARTIFACT_PATH,
         JUSTFILE_PATH,
         CI_PATH,
     ):
         src = root / relpath
+        if relpath == CLOSURE_ARTIFACT_PATH and not src.exists():
+            continue
         dst = dest / relpath
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
