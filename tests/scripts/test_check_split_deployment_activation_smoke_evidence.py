@@ -42,6 +42,18 @@ def _copy_live_fixture(tmp_path: Path, mod: object) -> None:
         shutil.copy2(src, dst)
 
 
+def _write_story_134_6_closure_fixture(tmp_path: Path, mod: object) -> None:
+    closure_path = tmp_path / mod.CLOSURE_ARTIFACT_PATH  # type: ignore[attr-defined]
+    closure_path.parent.mkdir(parents=True, exist_ok=True)
+    closure_path.write_text(
+        "# Story 134.6 Controlled Activation Closure and Go/No-Go Evidence\n\n"
+        "Story 134.6 closes Phase 51 / Epic 134 as planning-only/docs-status "
+        "evidence, not activation. Split deployment, remote Postgres, and DB "
+        "mTLS smoke evidence remain future/operator-gated.\n",
+        encoding="utf-8",
+    )
+
+
 def _load_contract(tmp_path: Path, mod: object) -> dict[str, object]:
     raw: object = json.loads((tmp_path / mod.CONTRACT_PATH).read_text(encoding="utf-8"))  # type: ignore[attr-defined]
     assert isinstance(raw, dict)
@@ -144,6 +156,35 @@ def test_story_status_backlog_fails(tmp_path: Path) -> None:
     )
     violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
     assert any("Story 134.2 must be done/closed" in v.message for v in violations)
+
+
+def test_story_134_6_planning_closure_status_is_allowed(tmp_path: Path) -> None:
+    mod = _load_module()
+    _copy_live_fixture(tmp_path, mod)
+    _write_story_134_6_closure_fixture(tmp_path, mod)
+    status = tmp_path / mod.SPRINT_STATUS_PATH  # type: ignore[attr-defined]
+    status.write_text(
+        status.read_text(encoding="utf-8")
+        .replace(
+            "epic-134: in-progress",
+            "epic-134: done  # Story 134.6 planning-only/docs-status closure, not activation",
+        )
+        .replace(
+            "134-6-controlled-activation-closure-go-no-go-evidence: backlog",
+            "134-6-controlled-activation-closure-go-no-go-evidence: done  # Story 134.6 docs/status-only closure, not activation",
+        ),
+        encoding="utf-8",
+    )
+    feature = tmp_path / mod.FEATURE_STATUS_PATH  # type: ignore[attr-defined]
+    feature.write_text(
+        feature.read_text(encoding="utf-8").replace(
+            "split-deployment activation smoke evidence package",
+            "split-deployment smoke evidence package",
+        ),
+        encoding="utf-8",
+    )
+    violations = mod.validate(tmp_path)  # type: ignore[attr-defined]
+    assert not violations
 
 
 def test_secret_like_contract_material_fails(tmp_path: Path) -> None:

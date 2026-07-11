@@ -23,6 +23,9 @@ ARTIFACT_PATH = Path(
     "_bmad-output/implementation-artifacts/"
     "134-3-remote-postgres-activation-smoke-migration-evidence-package.md"
 )
+CLOSURE_ARTIFACT_PATH = Path(
+    "_bmad-output/implementation-artifacts/134-6-controlled-activation-closure-go-no-go-evidence.md"
+)
 JUSTFILE_PATH = Path("justfile")
 CI_PATH = Path(".github/workflows/ci.yml")
 CHECKER_COMMAND = (
@@ -301,6 +304,10 @@ SAFE_CONTEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.I,
     ),
     re.compile(
+        r"\bneither\s+is\s+proof\s+activation\s+occurred\b",
+        re.I,
+    ),
+    re.compile(
         r"\bno\s+acceptance\s+of\s+readiness\s+(?:artifacts?|evidence|prerequisites)\s+as\s+"
         r"proof\s+activation\s+occurred\b",
         re.I,
@@ -317,7 +324,7 @@ SAFE_CONTEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
         re.I,
     ),
     re.compile(
-        r"\b(?:activation|migration|cutover|smoke|evidence)\b.*\b(?:planning\s+only|"
+        r"\b(?:activation|migration|cutover|smoke|evidence)\b.*\b(?:planning[-/ ]only|"
         r"evidence\s+planning|future/operator-gated\s+evidence\s+only)\b",
         re.I,
     ),
@@ -968,6 +975,17 @@ def _ci_has_command(text: str, command: str) -> bool:
     return False
 
 
+def _has_story_134_6_planning_closure(root: Path) -> bool:
+    closure_path = root / CLOSURE_ARTIFACT_PATH
+    if not closure_path.exists():
+        return False
+    closure_text = _read(root, CLOSURE_ARTIFACT_PATH)
+    return all(
+        phrase in closure_text
+        for phrase in ("planning-only/docs-status", "not activation", "future/operator-gated")
+    )
+
+
 def _validate_wiring(root: Path) -> list[Violation]:
     violations: list[Violation] = []
     just = _read(root, JUSTFILE_PATH)
@@ -1013,8 +1031,17 @@ def _validate_status(root: Path) -> list[Violation]:
     if not story_134_2 or story_134_2.group("status") not in ALLOWED_PRIOR_STORY_STATUS:
         violations.append(Violation(str(SPRINT_STATUS_PATH), "Story 134.2 must remain done/closed"))
     epic_134 = re.search(r"(?m)^\s*epic-134:\s*(?P<status>\S+)", sprint)
-    if not epic_134 or epic_134.group("status") != "in-progress":
-        violations.append(Violation(str(SPRINT_STATUS_PATH), "Epic 134 must remain in-progress"))
+    epic_134_status = epic_134.group("status") if epic_134 else None
+    closure_exists = _has_story_134_6_planning_closure(root)
+    if epic_134_status != "in-progress" and not (
+        epic_134_status in {"done", "closed"} and closure_exists
+    ):
+        violations.append(
+            Violation(
+                str(SPRINT_STATUS_PATH),
+                "Epic 134 must remain in-progress unless Story 134.6 planning-only closure exists",
+            )
+        )
 
     story_134_4 = re.search(
         r"(?m)^\s*134-4-registry-db-mtls-activation-smoke-failure-evidence-package:\s*(?P<status>\S+)",
@@ -1044,11 +1071,14 @@ def _validate_status(root: Path) -> list[Violation]:
         r"(?m)^\s*134-6-controlled-activation-closure-go-no-go-evidence:\s*(?P<status>\S+)",
         sprint,
     )
-    if not story_134_6 or story_134_6.group("status") != "backlog":
+    story_134_6_status = story_134_6.group("status") if story_134_6 else None
+    if story_134_6_status != "backlog" and not (
+        story_134_6_status in {"done", "closed"} and closure_exists
+    ):
         violations.append(
             Violation(
                 str(SPRINT_STATUS_PATH),
-                "134-6-controlled-activation-closure-go-no-go-evidence must remain backlog",
+                "134-6-controlled-activation-closure-go-no-go-evidence must remain backlog unless planning-only closure exists",
             )
         )
 
@@ -1056,7 +1086,6 @@ def _validate_status(root: Path) -> list[Violation]:
     for phrase in (
         "Story 134.3",
         "complete locally",
-        "remote Postgres activation smoke and migration evidence package",
         CHECKER_COMMAND,
         "future/operator-gated",
         "not proof activation occurred",
@@ -1068,6 +1097,16 @@ def _validate_status(root: Path) -> list[Violation]:
             violations.append(
                 Violation(str(FEATURE_STATUS_PATH), f"feature status missing {phrase!r}")
             )
+    if not (
+        "remote Postgres activation smoke and migration evidence package" in feature
+        or "remote Postgres smoke/migration evidence" in feature
+    ):
+        violations.append(
+            Violation(
+                str(FEATURE_STATUS_PATH),
+                "feature status missing remote Postgres smoke/migration evidence package",
+            )
+        )
     overview = _read(root, PROJECT_OVERVIEW_PATH)
     for phrase in (
         "Story 134.3",
@@ -1123,10 +1162,13 @@ def _copy_fixture(root: Path, dest: Path) -> None:
         PROJECT_OVERVIEW_PATH,
         SPRINT_STATUS_PATH,
         ARTIFACT_PATH,
+        CLOSURE_ARTIFACT_PATH,
         JUSTFILE_PATH,
         CI_PATH,
     ):
         src = root / relpath
+        if relpath == CLOSURE_ARTIFACT_PATH and not src.exists():
+            continue
         dst = dest / relpath
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
