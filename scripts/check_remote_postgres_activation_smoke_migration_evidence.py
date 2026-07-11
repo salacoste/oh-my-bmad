@@ -1028,15 +1028,29 @@ def _validate_status(root: Path) -> list[Violation]:
             )
         )
 
-    for story_key in (
-        "134-5-combined-split-remote-postgres-db-mtls-rehearsal",
-        "134-6-controlled-activation-closure-go-no-go-evidence",
-    ):
-        match = re.search(rf"(?m)^\s*{re.escape(story_key)}:\s*(?P<status>\S+)", sprint)
-        if not match or match.group("status") != "backlog":
-            violations.append(
-                Violation(str(SPRINT_STATUS_PATH), f"{story_key} must remain backlog")
+    story_134_5 = re.search(
+        r"(?m)^\s*134-5-combined-split-remote-postgres-db-mtls-rehearsal:\s*(?P<status>\S+)",
+        sprint,
+    )
+    if not story_134_5 or story_134_5.group("status") not in ALLOWED_PRIOR_STORY_STATUS:
+        violations.append(
+            Violation(
+                str(SPRINT_STATUS_PATH),
+                "Story 134.5 must remain done/closed once combined rehearsal evidence planning lands",
             )
+        )
+
+    story_134_6 = re.search(
+        r"(?m)^\s*134-6-controlled-activation-closure-go-no-go-evidence:\s*(?P<status>\S+)",
+        sprint,
+    )
+    if not story_134_6 or story_134_6.group("status") != "backlog":
+        violations.append(
+            Violation(
+                str(SPRINT_STATUS_PATH),
+                "134-6-controlled-activation-closure-go-no-go-evidence must remain backlog",
+            )
+        )
 
     feature = _read(root, FEATURE_STATUS_PATH)
     for phrase in (
