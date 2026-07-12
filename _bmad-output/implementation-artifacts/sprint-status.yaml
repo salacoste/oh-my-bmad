@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-11T00:00:00+03:00"
+# last_updated: "2026-07-12T00:00:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-11T00:00:00+03:00"
-current_phase: 51  # Phase 50 / Epic 133 DB mTLS readiness is complete locally/runtime-gated, not production activation; Phase 51 / Epic 134 controlled activation evidence planning is closed as planning-only/docs-status evidence with Stories 134.1-134.6 done locally, Stories 134.1-134.5 merged via PRs #124-#128, and no live activation, live rehearsal, split deployment activation, remote Postgres activation, DB mTLS production activation, Postgres provisioning, production host mutation, credentials/certs, migration execution, runtime/script/deployment config change, dependency/lock change, production-state change, real certificate material, or plaintext fallback occurred.
+last_updated: "2026-07-12T00:00:00+03:00"
+current_phase: 52  # Phase 52 / Epic 135 opens Story 135.1 as a ready-for-dev operator-gated activation-smoke work item only. Phase 51 / Epic 134 remains closed as planning-only/docs-status evidence, not activation; no live activation, live rehearsal, split deployment activation, remote Postgres activation, DB mTLS production activation, Postgres provisioning, production host mutation, credentials/certs, migration execution, runtime/script/deployment config change, dependency/lock change, production-state change, real certificate material, or plaintext fallback occurred from opening Story 135.1.
 
 development_status:
   # =========================================================================
@@ -1168,10 +1168,47 @@ development_status:
   134-5-combined-split-remote-postgres-db-mtls-rehearsal: done  # Docs/status/static-checker combined split deployment, remote Postgres, and DB mTLS rehearsal evidence planning only; requires future/operator-gated fail-closed status, backup checkpoint, rollback owner, emergency-disable owner, operator signoff, and no live activation, no live rehearsal, no rollback/restore execution, no destructive operation, no production host mutation, no credentials/certs, no migration execution, no operator/deployment/rollback/restore/migration/activation/production script change, or production-state change
   134-6-controlled-activation-closure-go-no-go-evidence: done  # Docs/status-only go/no-go closure reconciles Phase 51 / Epic 134 as planning-only evidence closure, not activation; split deployment, remote Postgres, and DB mTLS smoke evidence remain future/operator-gated, Phase 50 / Epic 133 DB mTLS readiness remains complete locally/runtime-gated, and no live activation/provisioning/migration execution/credentials/certs/runtime-script-deployment-config/dependency-lock/production-state change occurred
 
+  # =========================================================================
+  # Epic 135: Operator-gated split deployment / remote Postgres / DB mTLS activation smoke
+  # =========================================================================
+  epic-135: in-progress  # Phase 52 opens the separate operator-gated activation-smoke work item required after Phase 51 closure; this status means story context is opened only, not activation proof, and no live activation/provisioning/migration execution/credential handling/deployment mutation/dependency-lock/production-state change occurred
+  135-1-operator-gated-split-remote-postgres-db-mtls-activation-smoke: ready-for-dev  # Story file is created for future dev-story execution under explicit operator approval, security approval, target environment/version, change window, rollback owner/plan, emergency-disable owner/plan, independent review, and redacted evidence boundaries; if those gates are absent the story must fail closed with no live activation claim
+
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-07-12"
+    event: story-135-1-operator-gated-activation-smoke-opened
+    from: backlog
+    to: ready-for-dev
+    phase: 52
+    epic: epic-135
+    story: 135-1-operator-gated-split-remote-postgres-db-mtls-activation-smoke
+    source: story-135-1-create-story
+    operation_id: story-135-1-operator-gated-split-remote-postgres-db-mtls-activation-smoke-opened
+    operation_class: operator_gated_activation_story_opening
+    target_environment: repo-docs-status-planning
+    target_repository_or_service: phase-52-epic-135-story-context
+    authority_source: _bmad-output/planning-artifacts/phase-52-operator-gated-activation-epics.md
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 135.1 is opened as a ready-for-dev operator-gated activation-smoke
+      work item only. It requires explicit operator approval, security approval,
+      target environment/version, change window, rollback owner/plan,
+      emergency-disable owner/plan, independent review, and redacted evidence
+      boundaries before any future live-smoke activity. Opening the story performs
+      no live activation, live rehearsal, provisioning, migration execution,
+      credential/certificate handling, runtime/script/deployment config change,
+      dependency/lock change, plaintext fallback, or production-state change.
+    rollback_ref: revert-story-135-1-create-story-docs-status
+    expiry_freshness: refresh-on-dev-story-or-operator-gate-evidence
+    status: ready-for-dev
+    summary: >-
+      Phase 52 / Epic 135 is in progress with Story 135.1 ready-for-dev. This
+      story context opens the separate operator-gated split deployment, remote
+      Postgres, and DB mTLS activation-smoke work item required after Phase 51
+      closure. No activation is claimed or performed by this story opening.
   - date: "2026-07-11"
     event: story-134-6-controlled-activation-closure-go-no-go-evidence-done
     from: backlog
