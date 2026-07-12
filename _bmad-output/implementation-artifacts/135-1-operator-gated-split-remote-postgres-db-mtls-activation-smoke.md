@@ -1,6 +1,6 @@
 # Story 135.1: Operator-Gated Split Deployment / Remote Postgres / DB mTLS Activation Smoke
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -12,7 +12,7 @@ so that real activation evidence is collected only under an approved change wind
 
 This story is an implementation-ready work item, not evidence that activation occurred. It may proceed to live smoke activity only after explicit operator approval, security approval, target environment/version, change window, rollback owner/plan, emergency-disable owner/plan, independent reviewer, redaction plan, and credential/certificate reference boundaries are supplied outside the repository.
 
-If those prerequisites are absent, stale, or incomplete, implementation must fail closed and record a blocked/no-go or repo-local gate outcome. No live split deployment activation, remote Postgres activation, DB mTLS production activation, live database cutover, migration execution, provisioning, production host mutation, credential/certificate handling, runtime/deployment config change, dependency/lock change, plaintext fallback, or production-state change is authorized by merely opening this story.
+Those prerequisites are absent for this local pass, so Story 135.1 records a repo-local blocked/no-go/fail-closed outcome only. No live split deployment activation, remote Postgres activation, DB mTLS production activation, live database cutover, migration execution, provisioning, production host mutation, credential/certificate handling, activation runtime/deployment config change, dependency/lock change, plaintext fallback, or production-state change was authorized or performed.
 
 ## Acceptance Criteria
 
@@ -29,31 +29,31 @@ If those prerequisites are absent, stale, or incomplete, implementation must fai
 
 ## Tasks / Subtasks
 
-- [ ] Validate operator gate inputs before any live-smoke step. (AC: 1, 3, 7)
-  - [ ] Record operator approval reference, security approval reference, target environment and version, and change window.
-  - [ ] Record rollback owner/plan, emergency-disable owner/plan, independent reviewer, and evidence retention/freshness rules.
-  - [ ] Confirm redaction plan and approved secret/certificate reference boundaries; do not write secret values to repo artifacts.
-- [ ] Reconcile prerequisite readiness/planning evidence. (AC: 2)
-  - [ ] Confirm Phase 51 controlled activation evidence artifacts exist and are prerequisites only.
-  - [ ] Confirm Epic 132 split-deployment/remote Postgres readiness artifacts exist and are prerequisites only.
-  - [ ] Confirm Epic 133 DB mTLS readiness artifacts exist and are prerequisites only.
-- [ ] Implement or collect fail-closed preflight evidence. (AC: 1, 3, 7, 10)
-  - [ ] If operator inputs are missing, record blocked/no-go/fail-closed evidence without live smoke activity.
-  - [ ] If operator inputs are present, verify every required field before allowing the bounded smoke path.
-- [ ] Collect split deployment smoke evidence under the gate. (AC: 4, 7, 9)
-  - [ ] Capture sanitized service placement, network boundary, authority, ingress, health/readiness, rollback trigger, and post-smoke decision evidence.
-- [ ] Collect remote Postgres smoke/migration evidence under the gate. (AC: 5, 7, 9)
-  - [ ] Capture sanitized backup checkpoint, single migration runner, bounded pool, writer/read-side, endpoint identity, and rollback/fix-forward evidence.
-- [ ] Collect DB mTLS smoke/failure evidence under the gate. (AC: 6, 7, 9)
-  - [ ] Capture sanitized TLS/client-cert enforcement, gate state, certificate metadata references, no-plaintext fallback, and bounded failure diagnostics.
-- [ ] Update story/status evidence without overclaiming. (AC: 8, 9, 10)
-  - [ ] Update `docs/feature-status.md` and `_bmad-output/implementation-artifacts/sprint-status.yaml` to reflect the actual Story 135.1 outcome.
-  - [ ] Run existing activation/readiness checkers and any new focused checks introduced by the story.
+- [x] Validate operator gate inputs before any live-smoke step. (AC: 1, 3, 7)
+  - [x] Record missing operator approval reference, security approval reference, target environment/version, and change window as blocked/no-go.
+  - [x] Record missing rollback owner/plan, emergency-disable owner/plan, independent reviewer, and evidence retention/freshness rules as blocked/no-go.
+  - [x] Confirm redaction plan and approved secret/certificate reference boundaries are absent; no secret values are written to repo artifacts.
+- [x] Reconcile prerequisite readiness/planning evidence. (AC: 2)
+  - [x] Confirm Phase 51 controlled activation evidence artifacts exist and are prerequisites only.
+  - [x] Confirm Epic 132 split-deployment/remote Postgres readiness artifacts exist and are prerequisites only.
+  - [x] Confirm Epic 133 DB mTLS readiness artifacts exist and are prerequisites only.
+- [x] Implement fail-closed preflight evidence. (AC: 1, 3, 7, 10)
+  - [x] Missing operator inputs record blocked/no-go/fail-closed evidence without live smoke activity.
+  - [x] The checker requires every operator-gate field before live smoke could be considered.
+- [x] Record blocked split deployment smoke evidence outcome under the gate. (AC: 4, 7, 9)
+  - [x] Service placement, network boundary, authority, ingress, health/readiness, rollback trigger, and post-smoke decision domains are present as blocked/not-run until operator gate.
+- [x] Record blocked remote Postgres smoke/migration evidence outcome under the gate. (AC: 5, 7, 9)
+  - [x] Backup checkpoint, single migration runner, bounded pool, writer/read-side, endpoint identity, rollback/fix-forward, and no-plaintext-fallback domains are present as blocked/not-run until operator gate.
+- [x] Record blocked DB mTLS smoke/failure evidence outcome under the gate. (AC: 6, 7, 9)
+  - [x] TLS/client-cert enforcement, gate state, certificate metadata, no-plaintext fallback, and bounded failure diagnostics domains are present as blocked/not-run until operator gate.
+- [x] Update story/status evidence without overclaiming. (AC: 8, 9, 10)
+  - [x] Update `docs/feature-status.md` and `_bmad-output/implementation-artifacts/sprint-status.yaml` to reflect the Story 135.1 blocked/no-go/fail-closed outcome.
+  - [x] Add and run the Story 135.1 checker plus existing relevant activation/readiness checkers.
 
 ## Dev Notes
 
 - Treat this as the separate activation story required by Story 134.6. Do not perform live activation unless the operator gate exists and is explicit.
-- A blocked/no-go/fail-closed result is acceptable if operator approval, target details, credentials/certs, or redaction-safe evidence are unavailable.
+- A blocked/no-go/fail-closed result is the correct local outcome because operator approval, target details, credentials/certs, and redaction-safe evidence are unavailable.
 - Do not commit credential values, token values, private key material, certificate bodies, unredacted DSNs, production host secrets, or full secret paths.
 - Preserve local SQLite/default behavior and existing opt-in profile boundaries.
 - Prefer extending the existing evidence/checker contracts before adding new mechanisms.
@@ -63,8 +63,9 @@ If those prerequisites are absent, stale, or incomplete, implementation must fai
 
 - Planning source: `_bmad-output/planning-artifacts/phase-52-operator-gated-activation-epics.md`.
 - Story artifact: `_bmad-output/implementation-artifacts/135-1-operator-gated-split-remote-postgres-db-mtls-activation-smoke.md`.
+- New fail-closed contract: `docs/operator-gated-activation-smoke-evidence.json`.
+- New local gate: `scripts/check_operator_gated_activation_smoke.py`.
 - Status files: `_bmad-output/implementation-artifacts/sprint-status.yaml`, `docs/feature-status.md`.
-- Existing evidence schemas/checkers should remain the first reuse target before creating new artifacts.
 
 ### References
 
@@ -82,10 +83,45 @@ If those prerequisites are absent, stale, or incomplete, implementation must fai
 
 ### Agent Model Used
 
-TBD by dev-story
+Codex / GPT-5.5 via Autopilot (deep-interview -> ralplan -> ultragoal -> code-review -> ultraqa).
 
 ### Debug Log References
 
+- Deep-interview handoff: `.omx/interviews/story-135-1-deep-interview-handoff.md`.
+- Ralplan plan: `.omx/specs/story-135-1-operator-gated-activation-smoke-plan.md`.
+- Architect consensus: `.omx/specs/story-135-1-architect-review.md`.
+- Critic consensus: `.omx/specs/story-135-1-critic-review.md`.
+- Code review: `.omx/artifacts/code-review/story-135-1-code-review.md` (APPROVE/CLEAR).
+- UltraQA: `.omx/artifacts/ultraqa/story-135-1-ultraqa.md` (PASS).
+
 ### Completion Notes List
 
+- Added `docs/operator-gated-activation-smoke-evidence.json` to record the Story 135.1 blocked/no-go/fail-closed evidence contract.
+- Added `scripts/check_operator_gated_activation_smoke.py` and wired it into `justfile` and CI check/self-test surfaces.
+- Updated `docs/feature-status.md` and sprint status to mark only the scoped repo-local fail-closed/no-go outcome done.
+- Actual split deployment / remote Postgres / DB mTLS smoke remains blocked pending operator approval, security approval, target environment/version, change window, rollback and emergency-disable ownership, independent review, redaction plan, and sanitized credential/certificate references.
+
+### Verification Evidence
+
+- `uv run ruff format scripts/check_operator_gated_activation_smoke.py` — passed; checker formatted.
+- `uv run ruff check scripts/check_operator_gated_activation_smoke.py` — passed.
+- `python3 -m py_compile scripts/check_operator_gated_activation_smoke.py` — passed.
+- `uv run python scripts/check_operator_gated_activation_smoke.py` — passed; Story 135.1 fail-closed evidence OK.
+- `uv run python scripts/check_operator_gated_activation_smoke.py --self-test` — passed; adversarial fixtures reject overclaims, mixed safe/unsafe punctuation-clause bypasses, trailing-disclaimer overclaims, secret-like material, missing required gate/domain fields, and false activation-boundary flags.
+- Existing prerequisite/status gates passed: `scripts/check_controlled_activation_evidence.py`, `scripts/check_split_deployment_activation_smoke_evidence.py`, `scripts/check_remote_postgres_activation_smoke_migration_evidence.py`, `scripts/check_registry_db_mtls_activation_smoke_failure_evidence.py`, `scripts/check_combined_split_remote_postgres_db_mtls_rehearsal_evidence.py`, `scripts/check_split_deployment_remote_postgres_closure.py`, and `scripts/check_db_mtls_readiness.py`.
+- `just check-gates` — passed, including the new Story 135.1 checker.
+- `just check-gates-self-test` — passed, including the new Story 135.1 checker self-test.
+- `uv run secret-hygiene-precommit docs/operator-gated-activation-smoke-evidence.json scripts/check_operator_gated_activation_smoke.py` — passed for new untracked files; emitted existing `scancode-toolkit not installed; license scan skipped` warnings and exited successfully.
+- `just lint` — passed; ruff, mypy, status/readiness gates, and full tracked-file secret hygiene completed. Secret-hygiene emitted existing `scancode-toolkit not installed; license scan skipped` warnings but exited successfully.
+- `git diff --check` — passed.
+- No live activation, deployment, provisioning, migration execution, credential/certificate handling, activation runtime/deployment config change, dependency/lockfile change, compose profile activation, plaintext fallback, or production-state change was run during verification.
+
 ### File List
+
+- `docs/operator-gated-activation-smoke-evidence.json`
+- `scripts/check_operator_gated_activation_smoke.py`
+- `justfile`
+- `.github/workflows/ci.yml`
+- `docs/feature-status.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/135-1-operator-gated-split-remote-postgres-db-mtls-activation-smoke.md`

@@ -128,6 +128,9 @@ jobs:
       - name: Check combined split/remote Postgres/DB mTLS rehearsal evidence (Story 134.5)
         run: uv run python scripts/check_combined_split_remote_postgres_db_mtls_rehearsal_evidence.py
 
+      - name: Check operator-gated activation-smoke fail-closed evidence (Story 135.1)
+        run: uv run python scripts/check_operator_gated_activation_smoke.py
+
       - name: Check-scripts self-tests
         run: |
           uv run python scripts/check_imports.py --self-test
@@ -158,6 +161,7 @@ jobs:
           uv run python scripts/check_remote_postgres_activation_smoke_migration_evidence.py --self-test
           uv run python scripts/check_registry_db_mtls_activation_smoke_failure_evidence.py --self-test
           uv run python scripts/check_combined_split_remote_postgres_db_mtls_rehearsal_evidence.py --self-test
+          uv run python scripts/check_operator_gated_activation_smoke.py --self-test
 
       - name: Check secrets (full tree)
         run: git ls-files -z | xargs -0 uv run secret-hygiene-precommit

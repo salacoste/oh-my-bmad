@@ -1,0 +1,152 @@
+{
+  "schema_version": "story-135.1/v1",
+  "phase": "52",
+  "epic": "135",
+  "story": "135.1",
+  "title": "Operator-gated split deployment, remote Postgres, and DB mTLS activation-smoke fail-closed evidence",
+  "mode": "repo_local_fail_closed_no_go_not_activation",
+  "activation_boundary": {
+    "activation_attempted": false,
+    "activation_performed": false,
+    "split_deployment_smoke_performed": false,
+    "remote_postgres_smoke_performed": false,
+    "db_mtls_smoke_performed": false,
+    "migration_execution_performed": false,
+    "provisioning_performed": false,
+    "production_state_changed": false,
+    "runtime_or_deployment_config_changed": false,
+    "dependency_or_lockfile_changed": false,
+    "credential_or_certificate_handling_performed": false,
+    "compose_profile_activation_performed": false,
+    "plaintext_fallback_allowed": false,
+    "operator_gated": true,
+    "outcome": "blocked_no_go_fail_closed",
+    "summary": "Story 135.1 records the repo-local fail-closed/no-go outcome for the operator-gated split deployment, remote Postgres, and DB mTLS activation-smoke story. The required operator/security approvals, target environment/version, change window, rollback and emergency-disable ownership, independent review, redaction plan, and sanitized credential/certificate references are unavailable, so no live smoke activity is attempted or claimed."
+  },
+  "operator_gate": {
+    "required": true,
+    "status": "missing_blocked_no_go_fail_closed",
+    "fields": [
+      "operator_approval_ref",
+      "security_approval_ref",
+      "target_environment",
+      "target_version",
+      "change_window_utc",
+      "rollback_owner",
+      "rollback_plan_ref",
+      "emergency_disable_owner",
+      "emergency_disable_plan_ref",
+      "independent_reviewer_ref",
+      "evidence_retention",
+      "evidence_freshness",
+      "redaction_statement",
+      "redaction_report_ref",
+      "approved_secret_location_refs",
+      "approved_certificate_location_refs"
+    ],
+    "missing_gate_outcome": "do_not_attempt_live_smoke_record_blocked_no_go",
+    "required_statement": "Actual split deployment, remote Postgres, and DB mTLS smoke remains blocked until operator-supplied approval, security approval, target environment/version, change window, rollback owner/plan, emergency-disable owner/plan, independent reviewer, evidence retention/freshness, redaction statement, and sanitized credential/certificate references exist outside the repository."
+  },
+  "readiness_prerequisites": {
+    "semantics": "prerequisites_only_not_activation_proof",
+    "minimum_refs": [
+      "_bmad-output/planning-artifacts/phase-51-controlled-activation-epics.md",
+      "_bmad-output/implementation-artifacts/134-6-controlled-activation-closure-go-no-go-evidence.md",
+      "docs/controlled-activation-evidence.json",
+      "docs/split-deployment-activation-smoke-evidence.json",
+      "docs/remote-postgres-activation-smoke-migration-evidence.json",
+      "docs/registry-db-mtls-activation-smoke-failure-evidence.json",
+      "docs/combined-split-remote-postgres-db-mtls-rehearsal-evidence.json",
+      "docs/split-deployment-remote-postgres-closure-readiness.json",
+      "docs/db-mtls-readiness.json"
+    ],
+    "required_statement": "Phase 51 controlled activation evidence, Epic 132 split-deployment and remote Postgres readiness, and Epic 133 DB mTLS readiness are prerequisites only and are not proof activation occurred."
+  },
+  "blocked_smoke_evidence_contract": {
+    "package_kind": "story_135_1_blocked_no_go_activation_smoke_evidence",
+    "split_deployment_domains": {
+      "service_placement": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "network_boundary": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "registry_state_single_writer_authority": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "event_log_append_authority": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "mcp_boundary": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "operator_dashboard_ingress": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "health_readiness": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "rollback_trigger": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "post_smoke_go_no_go_decision": {"required": true, "status": "blocked_not_run_until_operator_gate"}
+    },
+    "remote_postgres_domains": {
+      "backup_checkpoint": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "single_migration_runner": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "bounded_pool_settings": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "migration_rollback_fix_forward_decision_points": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "read_side_compatibility": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "writer_authority": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "redacted_endpoint_identity": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "no_plaintext_fallback": {"required": true, "status": "blocked_not_run_until_operator_gate"}
+    },
+    "db_mtls_domains": {
+      "registry_db_mtls_enabled_gate_state": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "server_side_tls_enforcement": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "client_certificate_enforcement": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "approved_secret_references_by_identifier_only": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "certificate_expiry_revocation_hostname_metadata": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "bounded_failure_diagnostics": {"required": true, "status": "blocked_not_run_until_operator_gate"},
+      "no_plaintext_fallback": {"required": true, "status": "blocked_not_run_until_operator_gate"}
+    }
+  },
+  "redaction_and_secret_hygiene": {
+    "policy": "Saved Story 135.1 artifacts contain no credential values, token values, private key material, certificate bodies, unredacted DSNs, production host secrets, or full secret paths.",
+    "allowed_reference_kinds": [
+      "ticket_or_change_reference",
+      "inventory_identifier_without_path_or_value",
+      "redacted endpoint label",
+      "hash or digest without secret material"
+    ],
+    "forbidden_material": [
+      "credential values",
+      "token values",
+      "private key material",
+      "certificate bodies",
+      "unredacted DSNs",
+      "production host secrets",
+      "full secret paths"
+    ]
+  },
+  "fail_closed_checks": [
+    "operator_gate_missing_records_blocked_no_go",
+    "missing_evidence_fails_closed",
+    "stale_or_ambiguous_evidence_fails_closed",
+    "unredacted_evidence_rejected",
+    "self_attestation_rejected",
+    "secret_like_material_rejected",
+    "activation_overclaim_rejected",
+    "readiness_as_proof_rejected",
+    "migration_execution_overclaim_rejected",
+    "plaintext_fallback_rejected",
+    "split_deployment_domain_coverage_required",
+    "remote_postgres_domain_coverage_required",
+    "db_mtls_domain_coverage_required",
+    "status_docs_story_135_1_done_fail_closed_required",
+    "epic_135_done_fail_closed_required",
+    "justfile_and_ci_wiring_required"
+  ],
+  "non_goals": [
+    "No live activation, live smoke activity, production activation proof, or production-state change.",
+    "No split deployment activation, remote Postgres activation, DB mTLS production activation, live database cutover, migration execution, provisioning, production host mutation, compose/profile activation, runtime/deployment config change, dependency/lock change, credential/certificate handling, real certificate material, private key material, or plaintext fallback.",
+    "No inference that readiness prerequisites prove activation occurred."
+  ],
+  "status_semantics": {
+    "story_done_means": "repo_local_fail_closed_no_go_evidence_recorded_only",
+    "story_done_does_not_mean": "activation_performed_or_smoke_completed",
+    "next_real_activation_requirement": "operator_supplied_approval_target_change_window_rollback_emergency_disable_review_redaction_and_sanitized_credential_certificate_refs"
+  },
+  "docs_refs": [
+    "docs/feature-status.md#current-bmad-status",
+    "_bmad-output/implementation-artifacts/135-1-operator-gated-split-remote-postgres-db-mtls-activation-smoke.md#dev-agent-record"
+  ],
+  "status_refs": [
+    "_bmad-output/implementation-artifacts/sprint-status.yaml#development_status",
+    "docs/feature-status.md#current-bmad-status"
+  ]
+}

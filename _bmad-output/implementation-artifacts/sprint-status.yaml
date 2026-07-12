@@ -1,5 +1,5 @@
 # generated: 2026-04-22
-# last_updated: "2026-07-12T00:00:00+03:00"
+# last_updated: "2026-07-12T04:10:00+03:00"
 # project: oh-my-bmad
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,8 +35,8 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-22
-last_updated: "2026-07-12T00:00:00+03:00"
-current_phase: 52  # Phase 52 / Epic 135 opens Story 135.1 as a ready-for-dev operator-gated activation-smoke work item only. Phase 51 / Epic 134 remains closed as planning-only/docs-status evidence, not activation; no live activation, live rehearsal, split deployment activation, remote Postgres activation, DB mTLS production activation, Postgres provisioning, production host mutation, credentials/certs, migration execution, runtime/script/deployment config change, dependency/lock change, production-state change, real certificate material, or plaintext fallback occurred from opening Story 135.1.
+last_updated: "2026-07-12T04:10:00+03:00"
+current_phase: 52  # Phase 52 / Epic 135 Story 135.1 is done only as repo-local fail-closed/no-go evidence. Actual split deployment / remote Postgres / DB mTLS smoke remains blocked until operator approval, security approval, target environment/version, change window, rollback and emergency-disable ownership, independent review, redaction plan, and sanitized credential/certificate references exist; no live activation, live rehearsal, provisioning, migration execution, credential/certificate handling, activation runtime/deployment config change, dependency/lock change, production-state change, real certificate material, or plaintext fallback occurred.
 
 development_status:
   # =========================================================================
@@ -1160,7 +1160,7 @@ development_status:
   # =========================================================================
   # Epic 134: Controlled production activation evidence planning
   # =========================================================================
-  epic-134: done  # Phase 51 / Epic 134 controlled activation evidence planning is closed as planning-only/docs-status evidence, not activation; Stories 134.1-134.6 are done locally, Stories 134.1-134.5 are planning/evidence contracts only and merged via PRs #124-#128, split deployment, remote Postgres, and DB mTLS smoke evidence remain future/operator-gated, and no live activation, live rehearsal, rollback/restore execution, destructive operation, provisioning, production host mutation, credentials/certs, migration execution, compose/profile production activation, runtime/script/deployment config change, dependency/lock change, plaintext fallback, operator/deployment/rollback/restore/migration/activation/production script change, or production-state change occurred
+  epic-134: done  # Phase 51 / Epic 134 controlled activation evidence planning is closed as planning-only/docs-status evidence, not activation; Stories 134.1-134.6 are done locally, Stories 134.1-134.5 are planning/evidence contracts only and merged via PRs #124-#128, split deployment, remote Postgres, and DB mTLS smoke evidence remain future/operator-gated, and no live activation, live rehearsal, rollback/restore execution, destructive operation, provisioning, production host mutation, credentials/certs, migration execution, compose/profile production activation, activation runtime/deployment config change, dependency/lock change, plaintext fallback, operator/deployment/rollback/restore/migration/activation/production script change, or production-state change occurred
   134-1-activation-evidence-schema-preflight-gate: done  # Docs/status/static-checker activation evidence schema and preflight gate for future/operator-gated approvals, target environment, change window, smoke scope, rollback owner, emergency-disable owner, redaction rules, and no-live-activation boundary
   134-2-split-deployment-activation-smoke-evidence-package: done  # Docs/status/static-checker split-deployment activation smoke evidence package planning only; requires future/operator-gated service placement, network boundary, single-writer, event-log append, MCP boundary, operator/dashboard ingress, health/readiness, rollback, and no-live-activation evidence; readiness artifacts are prerequisites, not proof activation occurred
   134-3-remote-postgres-activation-smoke-migration-evidence-package: done  # Docs/status/static-checker remote Postgres smoke/migration evidence package planning only; requires future/operator-gated migration preconditions, single migration runner, backup/restore checkpoint, bounded pool settings, writer authority, read-side compatibility, redacted database endpoint identity, rollback/fix-forward criteria, and no live activation, migration execution, live database cutover, provisioning, host mutation, credential values, or plaintext fallback
@@ -1171,13 +1171,43 @@ development_status:
   # =========================================================================
   # Epic 135: Operator-gated split deployment / remote Postgres / DB mTLS activation smoke
   # =========================================================================
-  epic-135: in-progress  # Phase 52 opens the separate operator-gated activation-smoke work item required after Phase 51 closure; this status means story context is opened only, not activation proof, and no live activation/provisioning/migration execution/credential handling/deployment mutation/dependency-lock/production-state change occurred
-  135-1-operator-gated-split-remote-postgres-db-mtls-activation-smoke: ready-for-dev  # Story file is created for future dev-story execution under explicit operator approval, security approval, target environment/version, change window, rollback owner/plan, emergency-disable owner/plan, independent review, and redacted evidence boundaries; if those gates are absent the story must fail closed with no live activation claim
+  epic-135: done  # Phase 52 / Epic 135 is complete only as repo-local fail-closed/no-go Story 135.1 evidence; actual split deployment / remote Postgres / DB mTLS smoke remains blocked pending operator/security approvals, target/change-window, rollback/emergency-disable ownership, independent review, redaction plan, and sanitized credential/certificate references; no live activation, provisioning, migration execution, credential handling, deployment mutation, dependency-lock, or production-state change occurred
+  135-1-operator-gated-split-remote-postgres-db-mtls-activation-smoke: done  # Repo-local fail-closed/no-go evidence recorded with docs/operator-gated-activation-smoke-evidence.json and scripts/check_operator_gated_activation_smoke.py; operator/security approvals, target environment/version, change window, rollback owner/plan, emergency-disable owner/plan, independent review, redaction plan, and sanitized credential/certificate references remain absent, so no live smoke activity or activation claim occurred
 
 # ===========================================================================
 # Audit trail — story/epic status transitions (TM-B13 Story 9.7 pass-2)
 # ===========================================================================
 audit_trail:
+  - date: "2026-07-12"
+    event: story-135-1-operator-gated-activation-smoke-fail-closed-done
+    from: ready-for-dev
+    to: done
+    phase: 52
+    epic: epic-135
+    story: 135-1-operator-gated-split-remote-postgres-db-mtls-activation-smoke
+    source: story-135-1-autopilot-fail-closed-implementation
+    operation_id: story-135-1-operator-gated-activation-smoke-fail-closed
+    operation_class: repo_local_fail_closed_no_go_activation_smoke_evidence
+    target_environment: repo-local-static-evidence
+    target_repository_or_service: docs-status-checker-only
+    authority_source: _bmad-output/implementation-artifacts/135-1-operator-gated-split-remote-postgres-db-mtls-activation-smoke.md
+    actor: codex-autonomous-coding-agent
+    risk_summary: >-
+      Story 135.1 records only the repo-local fail-closed/no-go outcome because
+      operator approval, security approval, target environment/version, change
+      window, rollback owner/plan, emergency-disable owner/plan, independent
+      review, redaction plan, and sanitized credential/certificate references
+      are not supplied. No live activation, live smoke, provisioning, migration
+      execution, credential/certificate handling, activation runtime/deployment config
+      change, dependency/lock change, plaintext fallback, or production-state
+      change occurred.
+    rollback_ref: revert-story-135-1-fail-closed-docs-status-checker
+    expiry_freshness: refresh-on-operator-gate-evidence-before-any-live-smoke
+    status: done_fail_closed_no_go
+    summary: >-
+      Epic 135 is done for the scoped local Story 135.1 outcome only: fail-closed
+      evidence and checker/status wiring exist, and real split deployment / remote
+      Postgres / DB mTLS smoke remains blocked pending external operator gate inputs.
   - date: "2026-07-12"
     event: story-135-1-operator-gated-activation-smoke-opened
     from: backlog
@@ -1199,7 +1229,7 @@ audit_trail:
       emergency-disable owner/plan, independent review, and redacted evidence
       boundaries before any future live-smoke activity. Opening the story performs
       no live activation, live rehearsal, provisioning, migration execution,
-      credential/certificate handling, runtime/script/deployment config change,
+      credential/certificate handling, activation runtime/deployment config change,
       dependency/lock change, plaintext fallback, or production-state change.
     rollback_ref: revert-story-135-1-create-story-docs-status
     expiry_freshness: refresh-on-dev-story-or-operator-gate-evidence
@@ -1230,7 +1260,7 @@ audit_trail:
       readiness remains complete locally/runtime-gated, not production activation.
       Split deployment, remote Postgres, and DB mTLS smoke evidence remain
       future/operator-gated. This closure performs no live activation, provisioning,
-      migration execution, credentials/certs handling, runtime/script/deployment config
+      migration execution, credentials/certs handling, activation runtime/deployment config
       change, dependency/lock change, or production-state change.
     rollback_ref: revert-story-134-6-docs-status-closure
     expiry_freshness: refresh-on-future-separate-operator-gated-activation-story
@@ -1240,7 +1270,7 @@ audit_trail:
       marked done for planning-only evidence closure; no split deployment activation,
       no remote Postgres activation, no DB mTLS production activation, no live rehearsal,
       rollback/restore execution, destructive operation, provisioning, production host
-      mutation, credentials/certs, migration execution, runtime/script/deployment config
+      mutation, credentials/certs, migration execution, activation runtime/deployment config
       change, dependency/lock change, or production-state change occurred.
   - date: "2026-07-11"
     event: story-134-5-combined-split-remote-postgres-db-mtls-rehearsal-local-finished
